@@ -52,7 +52,9 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig) {
 	// 查看归档页面
 	r.GET("/view/:id", handler.ViewPage)
 	r.GET("/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
+	r.HEAD("/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
 
 	// 直接资源访问（CSS 中引用的资源路径格式: /archive/resources/xx/yy/hash.ext）
 	r.GET("/archive/resources/*filepath", handler.ServeLocalResource)
+	r.HEAD("/archive/resources/*filepath", handler.ServeLocalResource)
 }

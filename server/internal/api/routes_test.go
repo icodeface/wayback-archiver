@@ -110,3 +110,41 @@ func stringContains(s, substr string) bool {
 	}
 	return false
 }
+
+func TestRoutes_HEAD_ProxyResource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+
+	// Register a simple handler that returns 200 for HEAD requests
+	r.HEAD("/archive/:page_id/:timestamp/*resource_path", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("HEAD", "/archive/123/20240309150405mp_/https://example.com/style.css", nil)
+	r.ServeHTTP(w, req)
+
+	// Should not be 404 (route should exist)
+	if w.Code == http.StatusNotFound {
+		t.Errorf("HEAD /archive/:page_id/:timestamp/*resource_path route not registered, got 404")
+	}
+}
+
+func TestRoutes_HEAD_ServeLocalResource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+
+	// Register a simple handler that returns 200 for HEAD requests
+	r.HEAD("/archive/resources/*filepath", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("HEAD", "/archive/resources/ab/cd/hash.css", nil)
+	r.ServeHTTP(w, req)
+
+	// Should not be 404 (route should exist)
+	if w.Code == http.StatusNotFound {
+		t.Errorf("HEAD /archive/resources/*filepath route not registered, got 404")
+	}
+}
