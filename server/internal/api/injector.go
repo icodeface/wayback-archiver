@@ -108,8 +108,9 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		min-height: 100%% !important;
 		overflow: visible !important;
 	}
-	/* 修复 flex 容器 height:100%% 截断内容 */
-	#app > div, #root > div, #__next > div, #__nuxt > div {
+	/* 修复 flex 容器 height:100%% 截断内容（:has 排除空容器，避免撑开广告占位） */
+	#app > div:has(> *:not(a):not(br):not(hr)), #root > div:has(> *:not(a):not(br):not(hr)),
+	#__next > div:has(> *:not(a):not(br):not(hr)), #__nuxt > div:has(> *:not(a):not(br):not(hr)) {
 		height: auto !important;
 		min-height: 100%% !important;
 	}
