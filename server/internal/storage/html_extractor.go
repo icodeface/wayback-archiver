@@ -249,16 +249,23 @@ func (e *HTMLResourceExtractor) isExternalURL(url string) bool {
 	return true
 }
 
-// resolveURL 将相对URL转换为绝对URL
+// resolveURL 将相对URL转换为绝对URL，并规范化路径（处理 ../ 等）
 func (e *HTMLResourceExtractor) resolveURL(rawURL, baseURL string) string {
-	// 如果已经是完整URL，直接返回
-	if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") {
-		return rawURL
-	}
-
 	// 跳过 data: URLs
 	if strings.HasPrefix(rawURL, "data:") {
 		return rawURL
+	}
+
+	// 如果已经是完整URL，解析并规范化路径
+	if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			log.Printf("Failed to parse absolute URL %s: %v", rawURL, err)
+			return rawURL
+		}
+		// 使用 ResolveReference 规范化路径（处理 ../ 等）
+		normalized := parsed.ResolveReference(&url.URL{})
+		return normalized.String()
 	}
 
 	// 解析基础URL
@@ -275,7 +282,7 @@ func (e *HTMLResourceExtractor) resolveURL(rawURL, baseURL string) string {
 		return rawURL
 	}
 
-	// 合并URL
+	// 合并URL（自动规范化路径）
 	resolved := base.ResolveReference(ref)
 	return resolved.String()
 }

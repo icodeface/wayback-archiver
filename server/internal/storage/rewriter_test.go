@@ -87,6 +87,64 @@ func TestRewriteHTML_URLQuotEncoding(t *testing.T) {
 	}
 }
 
+func TestNormalizeHTMLURLs_DotDotPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "href with ../ double quote",
+			input:    `<link rel="stylesheet" href="https://example.com/a/b/../c/style.css">`,
+			expected: `<link rel="stylesheet" href="https://example.com/a/c/style.css">`,
+		},
+		{
+			name:     "href with ../ single quote",
+			input:    `<link href='https://example.com/a/b/../c/style.css' rel="stylesheet">`,
+			expected: `<link href='https://example.com/a/c/style.css' rel="stylesheet">`,
+		},
+		{
+			name:     "src with ../",
+			input:    `<script src="https://example.com/js/lib/../common/app.js"></script>`,
+			expected: `<script src="https://example.com/js/common/app.js"></script>`,
+		},
+		{
+			name:     "multiple ../ segments",
+			input:    `<link href="https://example.com/a/b/c/../../d/style.css" rel="stylesheet">`,
+			expected: `<link href="https://example.com/a/d/style.css" rel="stylesheet">`,
+		},
+		{
+			name:     "preserves query params",
+			input:    `<script src="https://example.com/a/../b/app.js?v=123"></script>`,
+			expected: `<script src="https://example.com/b/app.js?v=123"></script>`,
+		},
+		{
+			name:     "no ../ unchanged",
+			input:    `<link href="https://example.com/normal/style.css" rel="stylesheet">`,
+			expected: `<link href="https://example.com/normal/style.css" rel="stylesheet">`,
+		},
+		{
+			name:     "multiple links mixed",
+			input:    `<link href="https://a.com/x/../y.css" rel="stylesheet"><link href="https://b.com/normal.css" rel="stylesheet">`,
+			expected: `<link href="https://a.com/y.css" rel="stylesheet"><link href="https://b.com/normal.css" rel="stylesheet">`,
+		},
+		{
+			name:     "real world okx pattern",
+			input:    `<link rel="stylesheet" type="text/css" href="https://www.okx.com/cdn/assets/okfe/okx-nav/header/../common/9214.466d2d42.css">`,
+			expected: `<link rel="stylesheet" type="text/css" href="https://www.okx.com/cdn/assets/okfe/okx-nav/common/9214.466d2d42.css">`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := NormalizeHTMLURLs(tt.input)
+			if result != tt.expected {
+				t.Errorf("NormalizeHTMLURLs()\ngot:  %s\nwant: %s", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestRewriteHTML_NormalSrcHref(t *testing.T) {
 	r := newTestRewriter(1, "20260310", map[string]string{
 		"https://example.com/style.css": "resources/ab/cd/hash.css",

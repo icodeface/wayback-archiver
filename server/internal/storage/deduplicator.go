@@ -390,8 +390,9 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		}
 	}
 
-	// 重写 HTML 中的资源 URL
-	rewrittenHTML := rewriter.RewriteHTML(req.HTML)
+	// 重写 HTML 中的资源 URL（先规范化 HTML 中的 ../ 路径）
+	normalizedHTML := NormalizeHTMLURLs(req.HTML)
+	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
 
 	// 更新保存的 HTML 文件（用重写后的内容替换临时内容）
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
@@ -649,9 +650,10 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 	log.Printf("[Update] CSS rewrite: %v", time.Since(cssRewriteStart))
 
-	// 重写 HTML 中的资源 URL
+	// 重写 HTML 中的资源 URL（先规范化 HTML 中的 ../ 路径）
 	htmlRewriteStart := time.Now()
-	rewrittenHTML := rewriter.RewriteHTML(req.HTML)
+	normalizedHTML := NormalizeHTMLURLs(req.HTML)
+	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
 	log.Printf("[Update] HTML rewrite: %v (html size: %d bytes)", time.Since(htmlRewriteStart), len(rewrittenHTML))
 
 	// 更新保存的 HTML 文件

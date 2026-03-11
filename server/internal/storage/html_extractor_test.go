@@ -93,6 +93,41 @@ func TestExtractResources_HTMLEntityDecode(t *testing.T) {
 	}
 }
 
+func TestExtractResources_DotDotURLNormalized(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	// CSS link with ../ in absolute URL — should be normalized
+	html := `<html><head>
+		<link rel="stylesheet" href="https://example.com/assets/nav/header/../common/style.css">
+		<link rel="stylesheet" href="https://example.com/assets/normal/style.css">
+	</head></html>`
+
+	resources := extractor.ExtractResources(html, "https://example.com/page")
+
+	foundNormalized := false
+	foundNormal := false
+	for _, r := range resources {
+		if r.URL == "https://example.com/assets/nav/common/style.css" {
+			foundNormalized = true
+			if r.Type != "css" {
+				t.Errorf("Expected type 'css', got '%s'", r.Type)
+			}
+		}
+		if r.URL == "https://example.com/assets/nav/header/../common/style.css" {
+			t.Error("URL with ../ should be normalized, but got raw URL")
+		}
+		if r.URL == "https://example.com/assets/normal/style.css" {
+			foundNormal = true
+		}
+	}
+	if !foundNormalized {
+		t.Error("Should extract and normalize URL with ../ to 'https://example.com/assets/nav/common/style.css'")
+	}
+	if !foundNormal {
+		t.Error("Should extract normal URL 'https://example.com/assets/normal/style.css'")
+	}
+}
+
 func TestExtractResources_VideoPoster(t *testing.T) {
 	extractor := NewHTMLResourceExtractor()
 

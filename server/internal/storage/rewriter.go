@@ -8,6 +8,46 @@ import (
 	"strings"
 )
 
+// NormalizeHTMLURLs 规范化 HTML 中所有包含 ../ 的绝对 URL
+// 例如：https://example.com/path/../file.css -> https://example.com/file.css
+func NormalizeHTMLURLs(html string) string {
+	// 匹配 src/href/poster 属性中的绝对 URL（双引号和单引号分别匹配）
+	urlRegexDQ := regexp.MustCompile(`((?:src|href|poster)=")(https?://[^"]+)"`)
+	urlRegexSQ := regexp.MustCompile(`((?:src|href|poster)=')(https?://[^']+)'`)
+
+	normalize := func(match string, re *regexp.Regexp, quote string) string {
+		parts := re.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+
+		attrPrefix := parts[1] // 如 href="
+		rawURL := parts[2]
+
+		if !strings.Contains(rawURL, "..") {
+			return match
+		}
+
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return match
+		}
+
+		normalized := parsed.ResolveReference(&url.URL{})
+		return attrPrefix + normalized.String() + quote
+	}
+
+	result := urlRegexDQ.ReplaceAllStringFunc(html, func(match string) string {
+		return normalize(match, urlRegexDQ, `"`)
+	})
+	result = urlRegexSQ.ReplaceAllStringFunc(result, func(match string) string {
+		return normalize(match, urlRegexSQ, `'`)
+	})
+
+	return result
+}
+
+
 // URLRewriter 负责重写 HTML 中的资源 URL
 type URLRewriter struct {
 	urlToLocalPath map[string]string
