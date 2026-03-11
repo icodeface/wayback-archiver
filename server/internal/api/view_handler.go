@@ -36,6 +36,11 @@ func (h *Handler) ViewPage(c *gin.Context) {
 
 	modifiedHTML := string(htmlContent)
 
+	// 移除 <base> 标签 — 归档页面的资源路径已重写为本地路径，
+	// <base href="https://原始域名/"> 会导致浏览器将 /archive/... 解析到原始域名
+	baseTagRe := regexp.MustCompile(`(?i)<base\s[^>]*>`)
+	modifiedHTML = baseTagRe.ReplaceAllString(modifiedHTML, "")
+
 	// 移除所有 <script> 标签
 	modifiedHTML = scriptTagRe.ReplaceAllString(modifiedHTML, "")
 
