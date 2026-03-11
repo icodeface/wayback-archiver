@@ -13,12 +13,12 @@ A self-hosted personal web archiving system that automatically captures and pres
 ```
 Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ PostgreSQL (metadata)
   (auto-capture on                    │               + File System (assets)
-   tab close / navigate)              │
+   page load)                         │
                                       ▼
                                    Web UI ──▶ Browse / Search / Replay
 ```
 
-1. A Tampermonkey userscript runs in your browser, silently capturing the full DOM and resources when you leave a page.
+1. A Tampermonkey userscript runs in your browser, automatically capturing the full DOM and resources once the page finishes loading. If significant DOM changes occur afterward, it submits one additional update.
 2. The Go server receives the snapshot, downloads any cross-origin resources the browser couldn't fetch, deduplicates everything by content hash, and stores it locally.
 3. A built-in Web UI lets you list, search, and replay any archived page — fully offline, no external dependencies.
 
@@ -88,7 +88,7 @@ Then:
 
 ### 4. Start Browsing
 
-That's it. Pages are automatically archived when you close a tab or navigate away. Open `http://localhost:8080` to browse your archive.
+That's it. Pages are automatically archived as soon as they load. Open `http://localhost:8080` to browse your archive.
 
 ## Configuration
 
