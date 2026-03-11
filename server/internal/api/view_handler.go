@@ -77,6 +77,11 @@ func (h *Handler) ViewPage(c *gin.Context) {
 		modifiedHTML = fixXcomLayout(modifiedHTML)
 	}
 
+	// 针对 OKX 网站的专项修复
+	if strings.Contains(page.URL, "okx.com") {
+		modifiedHTML = fixOKXLayout(modifiedHTML)
+	}
+
 	// 修复嵌套的 <button> 标签（HTML 规范不允许 button 嵌套 button）
 	// 浏览器遇到嵌套 button 时会隐式关闭外层 button，破坏 DOM 树结构，
 	// 导致后续元素（如 <main>、<section>）被提升到错误的层级
@@ -502,6 +507,21 @@ func fixXcomLayout(html string) string {
 	// 在 </head> 前注入
 	if idx := strings.Index(html, "</head>"); idx != -1 {
 		html = html[:idx] + xcomCSS + html[idx:]
+	}
+
+	return html
+}
+
+func fixOKXLayout(html string) string {
+	// .balance_okui-tabs 设置了 height:100%，在静态归档中会撑开大片空白
+	// .Balance_balanceBottom__vAGcz 设置了 min-height:640px，内容不足时也会产生空白
+	okxCSS := `<style>
+	.balance_okui-tabs { height: auto !important; }
+	[class*="Balance_balanceBottom"] { min-height: auto !important; }
+</style>`
+
+	if idx := strings.Index(html, "</head>"); idx != -1 {
+		html = html[:idx] + okxCSS + html[idx:]
 	}
 
 	return html
