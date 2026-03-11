@@ -81,6 +81,14 @@ func injectArchiveHeader(html string, page *models.Page) string {
 		height: auto !important;
 		min-height: 100%% !important;
 	}
+	/* 修复 vue-recycle-scroller 虚拟滚动：移除 transform 定位，让 items 自然排列 */
+	.vue-recycle-scroller__item-wrapper {
+		min-height: 0 !important;
+	}
+	.vue-recycle-scroller__item-view {
+		position: static !important;
+		transform: none !important;
+	}
 </style>
 `, escapeHTML(page.URL), capturedTime)
 
