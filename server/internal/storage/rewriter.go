@@ -87,6 +87,11 @@ func replaceURLInHTML(html, escapedURL, localURL string) string {
 
 // RewriteHTML 重写 HTML 中的资源 URL
 func (r *URLRewriter) RewriteHTML(html string) string {
+	return r.RewriteHTMLFast(html)
+}
+
+// rewriteHTMLRegex 使用正则逐个替换（旧版本，保留用于对比测试）
+func (r *URLRewriter) rewriteHTMLRegex(html string) string {
 	result := html
 
 	// 替换所有已知的资源 URL

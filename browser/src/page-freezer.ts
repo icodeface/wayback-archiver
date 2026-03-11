@@ -128,7 +128,15 @@ export function waitForDOMStable(
 ): Promise<void> {
   return new Promise((resolve) => {
     let timer: number | null = null;
+    let timeoutId: number | null = null;
     let lastMutation = Date.now();
+    let resolved = false;
+
+    const cleanup = () => {
+      if (timer) nativeClearTimeout(timer);
+      if (timeoutId) nativeClearTimeout(timeoutId);
+      observer.disconnect();
+    };
 
     const observer = new MutationObserver(() => {
       lastMutation = Date.now();
@@ -136,12 +144,13 @@ export function waitForDOMStable(
 
       timer = nativeSetTimeout(() => {
         const elapsed = Date.now() - lastMutation;
-        if (elapsed >= stableTime) {
-          observer.disconnect();
+        if (elapsed >= stableTime && !resolved) {
+          resolved = true;
+          cleanup();
           console.log('[Wayback] DOM stable after', elapsed, 'ms');
           resolve();
         }
-      }, stableTime);
+      }, stableTime) as unknown as number;
     });
 
     observer.observe(document.body, {
@@ -152,10 +161,13 @@ export function waitForDOMStable(
     });
 
     // Timeout protection
-    nativeSetTimeout(() => {
-      observer.disconnect();
-      console.log('[Wayback] DOM stability timeout reached');
-      resolve();
-    }, timeout);
+    timeoutId = nativeSetTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        console.log('[Wayback] DOM stability timeout reached');
+        resolve();
+      }
+    }, timeout) as unknown as number;
   });
 }
