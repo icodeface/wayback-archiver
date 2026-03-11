@@ -104,6 +104,7 @@ Environment variables (or `.env` file in `server/`):
 | `DB_SSLMODE` | `disable` | SSL mode |
 | `SERVER_PORT` | `8080` | HTTP server port |
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
+| `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`) |
 
 ## API
 

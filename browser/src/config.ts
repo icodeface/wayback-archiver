@@ -2,6 +2,7 @@
 
 export const CONFIG = {
   SERVER_URL: 'http://localhost:8080/api/archive',
+  AUTH_PASSWORD: '',                    // Set this to enable HTTP Basic Auth
   DOM_STABILITY_DELAY: 2000,        // ms to wait before starting capture
   MUTATION_OBSERVER_TIMEOUT: 10000, // max ms to wait for DOM stability
   DOM_STABLE_TIME: 1000,            // ms of no mutations to consider DOM stable

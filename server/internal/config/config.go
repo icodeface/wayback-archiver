@@ -11,6 +11,7 @@ type Config struct {
 	Database DatabaseConfig
 	Server   ServerConfig
 	Storage  StorageConfig
+	Auth     AuthConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -33,6 +34,18 @@ type StorageConfig struct {
 	DataDir string
 }
 
+// AuthConfig holds authentication settings
+type AuthConfig struct {
+	Password string
+}
+
+const AuthUsername = "wayback"
+
+// Enabled returns true if authentication is enabled
+func (a *AuthConfig) Enabled() bool {
+	return a.Password != ""
+}
+
 // LoadFromEnv loads configuration from environment variables with sensible defaults
 func LoadFromEnv() (*Config, error) {
 	cfg := &Config{
@@ -49,6 +62,9 @@ func LoadFromEnv() (*Config, error) {
 		},
 		Storage: StorageConfig{
 			DataDir: getEnv("DATA_DIR", "./data"),
+		},
+		Auth: AuthConfig{
+			Password: getEnv("AUTH_PASSWORD", ""),
 		},
 	}
 

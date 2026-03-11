@@ -104,6 +104,7 @@ npm run build
 | `DB_SSLMODE` | `disable` | SSL 模式 |
 | `SERVER_PORT` | `8080` | HTTP 服务端口 |
 | `DATA_DIR` | `./data` | HTML 和资源的存储目录 |
+| `AUTH_PASSWORD` | *（空）* | HTTP Basic Auth 密码（为空时关闭认证，用户名固定为 `wayback`） |
 
 ## API
 

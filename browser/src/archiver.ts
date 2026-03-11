@@ -9,13 +9,21 @@ import { CaptureData, ArchiveResponse } from './types';
 export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse> {
   console.log('[Wayback] >>> Sending to server...');
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+
+  // Add Basic Auth header if password is configured
+  if (CONFIG.AUTH_PASSWORD) {
+    const credentials = btoa(`wayback:${CONFIG.AUTH_PASSWORD}`);
+    headers['Authorization'] = `Basic ${credentials}`;
+  }
+
   return new Promise((resolve, reject) => {
     GM_xmlhttpRequest({
       method: 'POST',
       url: CONFIG.SERVER_URL,
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers,
       data: JSON.stringify(captureData),
       onload: (response) => {
         if (response.status === 200) {
@@ -41,13 +49,21 @@ export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse>
 export function updateOnServer(pageId: number, captureData: CaptureData): Promise<ArchiveResponse> {
   console.log('[Wayback] >>> Updating page', pageId, 'on server...');
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+
+  // Add Basic Auth header if password is configured
+  if (CONFIG.AUTH_PASSWORD) {
+    const credentials = btoa(`wayback:${CONFIG.AUTH_PASSWORD}`);
+    headers['Authorization'] = `Basic ${credentials}`;
+  }
+
   return new Promise((resolve, reject) => {
     GM_xmlhttpRequest({
       method: 'PUT',
       url: `${CONFIG.SERVER_URL}/${pageId}`,
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers,
       data: JSON.stringify(captureData),
       onload: (response) => {
         if (response.status === 200) {

@@ -4,21 +4,30 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"wayback/internal/config"
 )
 
 // SetupRoutes 设置路由
-func SetupRoutes(r *gin.Engine, handler *Handler) {
+func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig) {
 	// CORS 中间件
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, PUT, GET, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 		c.Next()
 	})
+
+	// Basic Auth 中间件（如果启用）
+	if authCfg.Enabled() {
+		accounts := gin.Accounts{
+			config.AuthUsername: authCfg.Password,
+		}
+		r.Use(gin.BasicAuth(accounts))
+	}
 
 	// Web UI
 	r.StaticFile("/", "./web/index.html")
