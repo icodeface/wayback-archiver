@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Timing Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            background: #f0f0f0;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>Wayback Archiver Timing Test</h1>
+    <div id="status" class="status">Waiting for archiver...</div>
+
+    <div id="content">
+        <p>This page tests the timing improvements for the Wayback archiver.</p>
+        <p>Initial content with timestamp: <span id="timestamp"></span></p>
+    </div>
+
+    <script>
+        // Set initial timestamp
+        document.getElementById('timestamp').textContent = new Date().toISOString();
+
+        // Simulate DOM changes after 3 seconds
+        setTimeout(() => {
+            const content = document.getElementById('content');
+            const newPara = document.createElement('p');
+            newPara.textContent = 'Dynamic content added at: ' + new Date().toISOString();
+            content.appendChild(newPara);
+
+            // Add more elements to trigger mutation threshold
+            for (let i = 0; i < 15; i++) {
+                const item = document.createElement('div');
+                item.textContent = `Item ${i + 1}`;
+                content.appendChild(item);
+            }
+
+            document.getElementById('status').textContent = 'DOM updated - waiting for archiver to detect changes...';
+        }, 3000);
+    </script>
+</body>
+</html>

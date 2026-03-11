@@ -1,12 +1,14 @@
 # Wayback Archiver
 
+> *The Memory of Your Internet — Archive Everything You Browse.*
+
 English | [中文](README-zh.md)
 
 A self-hosted personal web archiving system that automatically captures and preserves web pages you visit in Chrome — HTML, CSS, JavaScript, images, and all. When the original page goes offline, you can still browse your archived copy with styles and layout intact.
 
-![index](./screenshot/index.png)  
-![x](./screenshot/x.png)   
-![v2ex](./screenshot/v2ex.png)  
+![index](./screenshot/index.webp)  
+![x](./screenshot/x.webp)   
+![v2ex](./screenshot/v2ex.webp)  
 
 ## How It Works
 
@@ -29,6 +31,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ PostgreSQL (m
 - **Cross-origin resource recovery** — server-side extraction and download of resources blocked by CORS
 - **Content-hash deduplication** — identical resources shared across pages are stored only once (SHA-256)
 - **Version history** — same URL archived multiple times, distinguished by timestamp
+- **Timeline view** — browse all snapshots of a URL on a visual timeline (like web.archive.org), with prev/next navigation between snapshots
 - **Smart dedup** — session-level + server-level dedup prevents redundant captures; content-hash comparison skips unchanged pages
 - **Dynamic content support** — captures the live DOM state; MutationObserver triggers one auto-update if significant changes occur after initial capture
 - **SPA-aware** — detects SPA navigation, resets capture state per route
@@ -115,7 +118,9 @@ Environment variables (or `.env` file in `server/`):
 | `GET` | `/api/pages` | List all archived pages |
 | `GET` | `/api/pages/:id` | Get page details |
 | `GET` | `/api/search?q=keyword` | Search pages by URL or title |
+| `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
 | `GET` | `/view/:id` | Replay an archived page |
+| `GET` | `/timeline?url=URL` | Visual timeline page for a URL |
 
 ### POST /api/archive
 
