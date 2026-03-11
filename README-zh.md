@@ -1,5 +1,7 @@
 # Wayback Archiver
 
+> *The Memory of Your Internet — Archive Everything You Browse.*
+
 [English](README.md) | 中文
 
 一个自托管的个人网页归档系统，自动捕获并保存你在 Chrome 中浏览过的网页 — HTML、CSS、JavaScript、图片等一应俱全。当原始网页无法访问时，你仍然可以通过归档副本还原当时的页面样式和内容。
@@ -29,6 +31,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go 服务器 ──▶ PostgreSQL
 - **跨域资源恢复** — 服务器端自动提取并下载被 CORS 拦截的资源
 - **内容哈希去重** — 相同资源跨页面共享，仅存储一份（SHA-256）
 - **版本历史** — 同一 URL 可多次归档，按时间戳区分
+- **时间线视图** — 在可视化时间轴上浏览同一 URL 的所有快照（类似 web.archive.org），支持快照间前后导航
 - **智能去重** — 会话级 + 服务器级双重去重，内容无变化时仅更新访问时间
 - **动态内容支持** — 捕获实时 DOM 状态；MutationObserver 监听变化，超过阈值自动提交一次更新
 - **SPA 感知** — 检测单页应用导航，按路由重置捕获状态
@@ -115,7 +118,9 @@ npm run build
 | `GET` | `/api/pages` | 列出所有归档页面 |
 | `GET` | `/api/pages/:id` | 获取页面详情 |
 | `GET` | `/api/search?q=keyword` | 按 URL 或标题搜索 |
+| `GET` | `/api/pages/timeline?url=URL` | 获取同一 URL 的所有快照（时间线视图） |
 | `GET` | `/view/:id` | 还原归档页面 |
+| `GET` | `/timeline?url=URL` | URL 时间线可视化页面 |
 
 ### POST /api/archive
 
