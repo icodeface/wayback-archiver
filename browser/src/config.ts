@@ -10,4 +10,5 @@ export const CONFIG = {
   UPDATE_DEBOUNCE_DELAY: 5000,      // ms of no DOM changes before triggering an update
   UPDATE_MIN_MUTATIONS: 10,         // minimum mutation count before triggering an update
   UPDATE_MONITOR_TIMEOUT: 30000,    // max ms to keep monitoring DOM changes
+  REQUEST_TIMEOUT: 300000,          // max ms to wait for server response (5 minutes)
 } as const;

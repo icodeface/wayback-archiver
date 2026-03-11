@@ -25,6 +25,7 @@ export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse>
       url: CONFIG.SERVER_URL,
       headers,
       data: JSON.stringify(captureData),
+      timeout: CONFIG.REQUEST_TIMEOUT,
       onload: (response) => {
         if (response.status === 200) {
           const result: ArchiveResponse = JSON.parse(response.responseText);
@@ -38,6 +39,10 @@ export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse>
       onerror: (error) => {
         console.error('[Wayback] ✗ Error:', error);
         reject(error);
+      },
+      ontimeout: () => {
+        console.error('[Wayback] ✗ Request timed out');
+        reject(new Error('Archive request timed out'));
       }
     });
   });
@@ -47,7 +52,9 @@ export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse>
  * Sends an update request for an existing page.
  */
 export function updateOnServer(pageId: number, captureData: CaptureData): Promise<ArchiveResponse> {
-  console.log('[Wayback] >>> Updating page', pageId, 'on server...');
+  const dataSize = JSON.stringify(captureData).length;
+  console.log(`[Wayback] >>> Updating page ${pageId} on server (${dataSize} bytes)...`);
+  const startTime = Date.now();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
@@ -65,19 +72,27 @@ export function updateOnServer(pageId: number, captureData: CaptureData): Promis
       url: `${CONFIG.SERVER_URL}/${pageId}`,
       headers,
       data: JSON.stringify(captureData),
+      timeout: CONFIG.REQUEST_TIMEOUT,
       onload: (response) => {
+        const elapsed = Date.now() - startTime;
         if (response.status === 200) {
           const result: ArchiveResponse = JSON.parse(response.responseText);
-          console.log('[Wayback] ✓ Updated:', result.action);
+          console.log(`[Wayback] ✓ Updated: ${result.action} (took ${elapsed}ms)`);
           resolve(result);
         } else {
-          console.error('[Wayback] ✗ Update failed:', response.status);
+          console.error(`[Wayback] ✗ Update failed: ${response.status} (took ${elapsed}ms)`);
           reject(new Error(`Update failed: ${response.status}`));
         }
       },
       onerror: (error) => {
-        console.error('[Wayback] ✗ Update error:', error);
+        const elapsed = Date.now() - startTime;
+        console.error(`[Wayback] ✗ Update error (took ${elapsed}ms):`, error);
         reject(error);
+      },
+      ontimeout: () => {
+        const elapsed = Date.now() - startTime;
+        console.error(`[Wayback] ✗ Update timed out after ${elapsed}ms`);
+        reject(new Error('Update request timed out'));
       }
     });
   });

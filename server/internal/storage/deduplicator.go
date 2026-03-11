@@ -412,6 +412,9 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 
 // UpdateCapture 更新已存在页面的捕获内容
 func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (string, error) {
+	startTime := time.Now()
+	log.Printf("[Update] Starting update for page %d", pageID)
+
 	// 1. 获取现有页面信息
 	page, err := d.db.GetPageByID(fmt.Sprintf("%d", pageID))
 	if err != nil || page == nil {
@@ -427,6 +430,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		if err := d.db.UpdatePageLastVisited(pageID, time.Now()); err != nil {
 			return "", err
 		}
+		log.Printf("[Update] Content unchanged, took %v", time.Since(startTime))
 		return models.ArchiveActionUnchanged, nil
 	}
 
@@ -439,6 +443,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 
 	// 5. 处理新内容（复用 ProcessCapture 的资源处理逻辑）
+	extractStart := time.Now()
 	htmlResources := d.htmlExtractor.ExtractResources(req.HTML, req.URL)
 	allResources := make([]models.ResourceReference, 0, len(htmlResources))
 	for _, res := range htmlResources {
@@ -448,7 +453,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		})
 	}
 
-	log.Printf("[Update] Total resources to process: %d", len(allResources))
+	log.Printf("[Update] Extracted %d resources in %v", len(allResources), time.Since(extractStart))
 
 	// 保存新 HTML
 	tempHTMLPath, err := d.storage.SaveHTML(req.URL, req.HTML, capturedAt)
@@ -474,6 +479,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 
 	var resourceIDs []int64
 	cssURLMapping := make(map[string]string)
+	processStart := time.Now()
 
 	// 并行处理资源
 	type resourceResult struct {
@@ -549,6 +555,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			})
 		}
 	}
+	log.Printf("[Update] Processed %d resources in %v", len(resourceIDs), time.Since(processStart))
 
 	// 处理 CSS 中引用的资源
 	type cssSubResource struct {
@@ -571,6 +578,8 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 
 	if len(allCSSSubResources) > 0 {
+		cssSubStart := time.Now()
+		log.Printf("[Update] Processing %d CSS sub-resources", len(allCSSSubResources))
 		type cssSubResult struct {
 			sub      cssSubResource
 			resID    int64
@@ -624,9 +633,11 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			cssURLMapping[result.sub.absoluteURL] = result.filePath
 			rewriter.AddMapping(result.sub.absoluteURL, result.filePath)
 		}
+		log.Printf("[Update] CSS sub-resources processed in %v", time.Since(cssSubStart))
 	}
 
 	// 重写 CSS 文件中的 URL
+	cssRewriteStart := time.Now()
 	for _, cw := range cssWorkItems {
 		cssResources := d.cssParser.ExtractResources(cw.cssContent)
 		if len(cssResources) > 0 {
@@ -636,16 +647,22 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			}
 		}
 	}
+	log.Printf("[Update] CSS rewrite: %v", time.Since(cssRewriteStart))
 
 	// 重写 HTML 中的资源 URL
+	htmlRewriteStart := time.Now()
 	rewrittenHTML := rewriter.RewriteHTML(req.HTML)
+	log.Printf("[Update] HTML rewrite: %v (html size: %d bytes)", time.Since(htmlRewriteStart), len(rewrittenHTML))
 
 	// 更新保存的 HTML 文件
+	saveStart := time.Now()
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
 		return "", fmt.Errorf("update html failed: %w", err)
 	}
+	log.Printf("[Update] Save HTML: %v", time.Since(saveStart))
 
 	// 更新数据库记录
+	dbStart := time.Now()
 	if err := d.db.UpdatePageContent(pageID, tempHTMLPath, newContentHash, req.Title); err != nil {
 		return "", fmt.Errorf("update page content failed: %w", err)
 	}
@@ -656,6 +673,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			log.Printf("[Update] Failed to link resource: %v", err)
 		}
 	}
+	log.Printf("[Update] DB operations: %v (%d resources linked)", time.Since(dbStart), len(resourceIDs))
 
 	// 删除旧 HTML 文件（DB 已指向新文件，此时删除安全）
 	if oldHTMLPath != tempHTMLPath {
@@ -664,7 +682,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		}
 	}
 
-	log.Printf("[Update] Page updated (ID: %d, new hash: %s)", pageID, newContentHash[:16])
+	log.Printf("[Update] Page updated (ID: %d, new hash: %s, total: %v)", pageID, newContentHash[:16], time.Since(startTime))
 	return models.ArchiveActionUpdated, nil
 }
 
