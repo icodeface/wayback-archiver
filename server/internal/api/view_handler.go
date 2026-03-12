@@ -593,10 +593,10 @@ func fixGitHubLayout(html string) string {
 		min-height: 0 !important;
 	}
 
-	/* 修复 timeline items 的定位问题（移除绝对定位和 transform） */
-	[class*="TimelineRow"],
-	[class*="Timeline-Item"],
-	[class*="TimelineItem"] {
+	/* 修复虚拟滚动 timeline items 的定位问题（仅针对有 inline transform 的元素） */
+	/* 注意：不能用 [class*="TimelineItem"]，会误匹配 TimelineItem-avatar/badge/body 导致头像错位 */
+	[class*="TimelineRow"][style*="transform"],
+	[class*="TimelineRow"][style*="position: absolute"] {
 		position: static !important;
 		transform: none !important;
 	}
