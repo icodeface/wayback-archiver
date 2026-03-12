@@ -346,34 +346,6 @@ curl -u wayback:your_password "http://localhost:8080/api/pages?limit=10"
 - Tracking pixels and analytics URLs with dynamic parameters not preserved
 - Large media files consume significant storage
 
-## Project Structure
-
-```
-wayback-archiver/
-├── browser/                  # Tampermonkey userscript (TypeScript)
-│   ├── src/
-│   │   ├── main.ts           # Entry point
-│   │   ├── config.ts         # Constants
-│   │   ├── types.ts          # TypeScript interfaces
-│   │   ├── page-filter.ts    # URL filtering
-│   │   ├── page-freezer.ts   # Freeze page runtime
-│   │   ├── dom-collector.ts  # DOM serialization
-│   │   └── archiver.ts       # Server communication
-│   └── dist/                 # Built userscript
-│
-├── server/                   # Go backend
-│   ├── cmd/server/main.go    # Entry point
-│   ├── internal/
-│   │   ├── api/              # HTTP handlers
-│   │   ├── config/           # Environment config
-│   │   ├── database/         # PostgreSQL operations
-│   │   ├── models/           # Data models
-│   │   └── storage/          # File storage & dedup
-│   └── web/                  # Web UI static files
-│
-└── tests/                    # Test suites
-```
-
 ## License
 
 MIT
