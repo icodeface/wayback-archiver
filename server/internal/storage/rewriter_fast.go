@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -101,10 +102,122 @@ func (r *URLRewriter) RewriteHTMLFast(html string) string {
 				`url('`+pathWithQuery+`')`, `url('`+localURL+`')`,
 				`url(`+pathWithQuery+`)`, `url(`+localURL+`)`,
 			)
+
+			// 5a. 绝对路径的 &amp; 编码变体（HTML 属性中 & 常被编码为 &amp;）
+			pathWithQueryEncoded := strings.ReplaceAll(pathWithQuery, "&", "&amp;")
+			if pathWithQueryEncoded != pathWithQuery {
+				pairs = append(pairs,
+					` src="`+pathWithQueryEncoded+`"`, ` src="`+localURL+`"`,
+					` href="`+pathWithQueryEncoded+`"`, ` href="`+localURL+`"`,
+					` poster="`+pathWithQueryEncoded+`"`, ` poster="`+localURL+`"`,
+					` srcset="`+pathWithQueryEncoded+`"`, ` srcset="`+localURL+`"`,
+					`url("`+pathWithQueryEncoded+`")`, `url("`+localURL+`")`,
+					`url('`+pathWithQueryEncoded+`')`, `url('`+localURL+`')`,
+					`url(`+pathWithQueryEncoded+`)`, `url(`+localURL+`)`,
+				)
+			}
 		}
 	}
 
 	// 使用 strings.NewReplacer 做单次遍历替换
 	replacer := strings.NewReplacer(pairs...)
-	return replacer.Replace(html)
+	html = replacer.Replace(html)
+
+	// 6. 处理多值 srcset/imagesrcset（如 srcset="url1 1x, url2 2x"）
+	// strings.NewReplacer 只能匹配 srcset="<单个URL>"，无法处理逗号分隔的多值
+	html = r.rewriteMultiValueSrcset(html)
+
+	return html
+}
+
+// rewriteMultiValueSrcset 重写 srcset 和 imagesrcset 属性中的多值 URL
+func (r *URLRewriter) rewriteMultiValueSrcset(html string) string {
+	// 构建 URL 查找表：各种 URL 变体 -> 本地 URL
+	urlMap := make(map[string]string)
+	for originalURL := range r.urlToLocalPath {
+		var localURL string
+		if r.pageID > 0 && r.timestamp != "" {
+			localURL = fmt.Sprintf("/archive/%d/%smp_/%s", r.pageID, r.timestamp, originalURL)
+		} else {
+			localURL = "/archive/" + r.urlToLocalPath[originalURL]
+		}
+
+		// 绝对 URL
+		urlMap[originalURL] = localURL
+		// &amp; 编码
+		if enc := strings.ReplaceAll(originalURL, "&", "&amp;"); enc != originalURL {
+			urlMap[enc] = localURL
+		}
+		// 协议相对
+		pr := strings.TrimPrefix(strings.TrimPrefix(originalURL, "https:"), "http:")
+		if pr != originalURL && strings.HasPrefix(pr, "//") {
+			urlMap[pr] = localURL
+			if enc := strings.ReplaceAll(pr, "&", "&amp;"); enc != pr {
+				urlMap[enc] = localURL
+			}
+		}
+		// 绝对路径 + query
+		parsed, err := url.Parse(originalURL)
+		if err == nil && parsed.Path != "" {
+			pq := parsed.Path
+			if parsed.RawQuery != "" {
+				pq = parsed.Path + "?" + parsed.RawQuery
+			}
+			urlMap[pq] = localURL
+			if enc := strings.ReplaceAll(pq, "&", "&amp;"); enc != pq {
+				urlMap[enc] = localURL
+			}
+		}
+	}
+
+	// 匹配 srcset="..." 和 imagesrcset="..."
+	srcsetDQ := regexp.MustCompile(`(?i)((?:image)?srcset)="([^"]+)"`)
+	html = srcsetDQ.ReplaceAllStringFunc(html, func(match string) string {
+		sub := srcsetDQ.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		attrName := sub[1]
+		value := sub[2]
+		rewritten := rewriteSrcsetValue(value, urlMap)
+		if rewritten == value {
+			return match
+		}
+		return attrName + `="` + rewritten + `"`
+	})
+	srcsetSQ := regexp.MustCompile(`(?i)((?:image)?srcset)='([^']+)'`)
+	return srcsetSQ.ReplaceAllStringFunc(html, func(match string) string {
+		sub := srcsetSQ.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		attrName := sub[1]
+		value := sub[2]
+		rewritten := rewriteSrcsetValue(value, urlMap)
+		if rewritten == value {
+			return match
+		}
+		return attrName + `='` + rewritten + `'`
+	})
+}
+
+// rewriteSrcsetValue 重写 srcset 属性值中的各个 URL
+func rewriteSrcsetValue(value string, urlMap map[string]string) string {
+	changed := false
+	parts := strings.Split(value, ",")
+	for i, part := range parts {
+		fields := strings.Fields(strings.TrimSpace(part))
+		if len(fields) == 0 {
+			continue
+		}
+		if local, ok := urlMap[fields[0]]; ok {
+			fields[0] = local
+			parts[i] = " " + strings.Join(fields, " ")
+			changed = true
+		}
+	}
+	if !changed {
+		return value
+	}
+	return strings.TrimLeft(strings.Join(parts, ","), " ")
 }

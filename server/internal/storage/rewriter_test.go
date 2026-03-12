@@ -161,3 +161,65 @@ func TestRewriteHTML_NormalSrcHref(t *testing.T) {
 		t.Errorf("src should be rewritten, got: %s", result)
 	}
 }
+
+func TestRewriteHTML_RelativePathWithAmpEncoding(t *testing.T) {
+	// Next.js image optimization URLs: relative path with &amp; in HTML
+	r := newTestRewriter(631, "20260312101010", map[string]string{
+		"https://www.moltbook.com/_next/image?url=%2Fmoltbook-transparent.png&w=384&q=75": "resources/ab/cd/hash.img",
+		"https://www.moltbook.com/_next/image?url=%2Fmoltbook-transparent.png&w=64&q=75":  "resources/ab/cd/hash2.img",
+	})
+
+	// HTML has relative path with &amp; encoding
+	html := `<img src="/_next/image?url=%2Fmoltbook-transparent.png&amp;w=384&amp;q=75">`
+	result := r.RewriteHTML(html)
+
+	expected := `src="/archive/631/20260312101010mp_/https://www.moltbook.com/_next/image?url=%2Fmoltbook-transparent.png&w=384&q=75"`
+	if !strings.Contains(result, expected) {
+		t.Errorf("relative path with &amp; should be rewritten to archive path, got: %s", result)
+	}
+}
+
+func TestRewriteHTML_MultiValueSrcset(t *testing.T) {
+	r := newTestRewriter(631, "20260312101010", map[string]string{
+		"https://www.moltbook.com/_next/image?url=%2Fmoltbook-transparent.png&w=256&q=75": "resources/ab/cd/hash1.img",
+		"https://www.moltbook.com/_next/image?url=%2Fmoltbook-transparent.png&w=384&q=75": "resources/ab/cd/hash2.img",
+	})
+
+	// Multi-value srcset with &amp; encoding and descriptors
+	html := `<link rel="preload" as="image" imagesrcset="/_next/image?url=%2Fmoltbook-transparent.png&amp;w=256&amp;q=75 1x, /_next/image?url=%2Fmoltbook-transparent.png&amp;w=384&amp;q=75 2x">`
+	result := r.RewriteHTML(html)
+
+	if !strings.Contains(result, `/archive/631/20260312101010mp_/https://www.moltbook.com/_next/image`) {
+		t.Errorf("multi-value srcset URLs should be rewritten to archive paths, got: %s", result)
+	}
+	if !strings.Contains(result, `1x`) || !strings.Contains(result, `2x`) {
+		t.Errorf("srcset descriptors should be preserved, got: %s", result)
+	}
+	// Should not contain unrewritten relative paths
+	if strings.Contains(result, `"/_next/image`) {
+		t.Errorf("should not contain unrewritten relative paths, got: %s", result)
+	}
+}
+
+func TestRewriteHTML_MultiValueSrcsetOnImg(t *testing.T) {
+	r := newTestRewriter(631, "20260312101010", map[string]string{
+		"https://www.moltbook.com/_next/image?url=%2Flogo.png&w=32&q=75": "resources/ab/cd/hash1.img",
+		"https://www.moltbook.com/_next/image?url=%2Flogo.png&w=64&q=75": "resources/ab/cd/hash2.img",
+	})
+
+	html := `<img srcset="/_next/image?url=%2Flogo.png&amp;w=32&amp;q=75 1x, /_next/image?url=%2Flogo.png&amp;w=64&amp;q=75 2x" src="/_next/image?url=%2Flogo.png&amp;w=64&amp;q=75">`
+	result := r.RewriteHTML(html)
+
+	// src should be rewritten
+	if !strings.Contains(result, `src="/archive/631/20260312101010mp_/`) {
+		t.Errorf("src should be rewritten to archive path, got: %s", result)
+	}
+	// srcset should be rewritten
+	if !strings.Contains(result, `srcset="/archive/631/20260312101010mp_/`) {
+		t.Errorf("srcset should be rewritten to archive path, got: %s", result)
+	}
+	// Should not contain unrewritten relative paths
+	if strings.Contains(result, `"/_next/image`) || strings.Contains(result, ` /_next/image`) {
+		t.Errorf("should not contain unrewritten relative paths, got: %s", result)
+	}
+}
