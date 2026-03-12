@@ -263,7 +263,10 @@
         async function loadTimeline(url) {
             try {
                 const response = await fetch(`/api/pages/timeline?url=${encodeURIComponent(url)}`);
-                if (!response.ok) throw new Error('Failed to load timeline');
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
                 const data = await response.json();
 
                 const snapshots = data.snapshots || [];
@@ -277,7 +280,7 @@
                 renderTimeline(snapshots);
             } catch (error) {
                 console.error('Timeline error:', error);
-                document.getElementById('content').innerHTML = '<div class="empty">Failed to load timeline.</div>';
+                document.getElementById('content').innerHTML = '<div class="empty">Unable to connect to server. Please check if the server is running.</div>';
             }
         }
 

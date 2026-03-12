@@ -593,6 +593,10 @@
                 if (dateTo) url += `&to=${dateTo}`;
 
                 const response = await fetch(url);
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
                 const data = await response.json();
 
                 // Handle new paginated response format
@@ -610,7 +614,7 @@
                 renderPages(allPages);
                 updatePagination();
             } catch (error) {
-                document.getElementById('pageList').innerHTML = '<li class="empty"><div class="empty-icon">[ ! ]</div>Failed to load archives</li>';
+                document.getElementById('pageList').innerHTML = '<li class="empty"><div class="empty-icon">[ ! ]</div>Unable to connect to server. Please check if the server is running.</li>';
             }
         }
 
