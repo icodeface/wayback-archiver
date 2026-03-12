@@ -160,28 +160,49 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 			if (s.overflowY === 'scroll' || s.overflowY === 'auto') return;
 			// 只修复高度接近视口的容器（SPA 壳层的典型特征）
 			if (el.clientHeight > window.innerHeight * 1.5) return;
-			if (el.clientHeight < 50) return;
+			if (el.clientHeight < 100) return;
+			// 跳过窄元素（头像、侧边图标等 UI 组件）
+			if (el.clientWidth < 200) return;
 			el.style.setProperty('height', 'auto', 'important');
 			el.style.setProperty('min-height', '0', 'important');
 		});
 	}
 
-	// 2. 修复虚拟滚动（子元素用 absolute + transform 定位）
+	// 2. 修复虚拟滚动（子元素用 absolute + translateY 定位）
+	function getTranslateY(transform) {
+		// 从 computed transform 的 matrix() 中提取 translateY 值
+		if (!transform || transform === 'none') return null;
+		var m = transform.match(/matrix\(([^)]+)\)/);
+		if (m) {
+			var parts = m[1].split(',');
+			if (parts.length >= 6) return parseFloat(parts[5]);
+		}
+		return null;
+	}
 	function fixVirtualScrolling() {
 		document.querySelectorAll('*').forEach(function(container) {
 			var children = container.children;
 			if (children.length < 3) return;
 			var absCount = 0;
 			var items = [];
+			var tyValues = [];
 			for (var i = 0; i < children.length; i++) {
 				var cs = window.getComputedStyle(children[i]);
-				if (cs.position === 'absolute' && cs.transform && cs.transform !== 'none') {
+				var ty = getTranslateY(cs.transform);
+				if (cs.position === 'absolute' && ty !== null) {
 					absCount++;
 					items.push(children[i]);
+					tyValues.push(ty);
 				}
 			}
-			// 至少 3 个绝对定位+transform 的子元素才判定为虚拟滚动
+			// 至少 3 个绝对定位+transform 的子元素
 			if (absCount < 3 || absCount < children.length * 0.5) return;
+			// 虚拟滚动的特征：translateY 值大且各不相同（递增排列）
+			// 排除 CSS 居中（translateY 值小且相同，如 -50%）
+			var minTy = Math.min.apply(null, tyValues);
+			var maxTy = Math.max.apply(null, tyValues);
+			var spread = maxTy - minTy;
+			if (spread < 100) return; // 值域 < 100px 不是虚拟滚动
 			container.style.setProperty('min-height', '0', 'important');
 			container.style.setProperty('height', 'auto', 'important');
 			for (var j = 0; j < items.length; j++) {
@@ -220,6 +241,8 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 	function fixOverflowClipping() {
 		document.querySelectorAll('*').forEach(function(el) {
 			if (el.id === 'wayback-archive-header') return;
+			// 跳过小元素（头像、图标等 UI 组件不应被修改）
+			if (el.clientHeight < 200) return;
 			var s = window.getComputedStyle(el);
 			if (s.overflowY !== 'hidden' && s.overflow !== 'hidden') return;
 			var clipped = el.scrollHeight - el.clientHeight;
