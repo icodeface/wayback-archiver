@@ -9,7 +9,7 @@ import (
 )
 
 // injectArchiveHeader 在页面顶部注入归档信息栏
-func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next *models.Page, snapshotTotal int) string {
+func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next *models.Page, snapshotTotal int, nonce string) string {
 	// 格式化时间
 	capturedTime := page.CapturedAt.Format("2006-01-02 15:04:05")
 
@@ -73,7 +73,25 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 	</div>
 </div>
 <style>
-	body { margin-top: 48px !important; }
+	:root {
+		--wayback-header-height: 48px;
+	}
+	body {
+		margin-top: var(--wayback-header-height) !important;
+		padding-top: 0 !important;
+	}
+	/* 将页面自身的 fixed/sticky 顶部元素下移，避免被归档 header 遮挡 */
+	/* 针对内联样式定义的 fixed/sticky 元素 */
+	[style*="position: fixed"][style*="top: 0"]:not(#wayback-archive-header),
+	[style*="position:fixed"][style*="top: 0"]:not(#wayback-archive-header),
+	[style*="position: fixed"][style*="top:0"]:not(#wayback-archive-header),
+	[style*="position:fixed"][style*="top:0"]:not(#wayback-archive-header),
+	[style*="position: sticky"][style*="top: 0"]:not(#wayback-archive-header),
+	[style*="position:sticky"][style*="top: 0"]:not(#wayback-archive-header),
+	[style*="position: sticky"][style*="top:0"]:not(#wayback-archive-header),
+	[style*="position:sticky"][style*="top:0"]:not(#wayback-archive-header) {
+		top: var(--wayback-header-height) !important;
+	}
 	/* SPA 框架常用 height:100%% 配合 JS 滚动，静态模式下会截断内容 */
 	html, body, #app, #root, #__next, #__nuxt {
 		height: auto !important;
@@ -95,7 +113,41 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		transform: none !important;
 	}
 </style>
-`, page.URL, escapeHTML(page.URL), escapeHTML(page.URL), capturedTime, navHTML)
+<script nonce="%s">
+(function() {
+	'use strict';
+	// 修复所有 fixed/sticky 定位的顶部元素，避免被归档 header 遮挡
+	function fixPositionedElements() {
+		const HEADER_HEIGHT = 48;
+		const elements = document.querySelectorAll('*:not(#wayback-archive-header):not(#wayback-archive-header *)');
+
+		elements.forEach(function(el) {
+			const style = window.getComputedStyle(el);
+			const position = style.position;
+			const top = style.top;
+
+			// 检查是否是 fixed 或 sticky 定位，且 top 为 0 或接近 0
+			if ((position === 'fixed' || position === 'sticky') &&
+			    (top === '0px' || top === '0' || parseInt(top) === 0)) {
+				// 设置新的 top 值，避免被归档 header 遮挡
+				el.style.setProperty('top', HEADER_HEIGHT + 'px', 'important');
+			}
+		});
+	}
+
+	// 页面加载完成后执行
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', fixPositionedElements);
+	} else {
+		fixPositionedElements();
+	}
+
+	// 延迟执行一次，确保动态加载的元素也被处理
+	setTimeout(fixPositionedElements, 100);
+	setTimeout(fixPositionedElements, 500);
+})();
+</script>
+`, page.URL, escapeHTML(page.URL), escapeHTML(page.URL), capturedTime, navHTML, nonce)
 
 	// 在 <body> 标签后注入
 	if bodyTagRe.MatchString(html) {

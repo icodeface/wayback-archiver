@@ -9,6 +9,7 @@ tests/root/*.png
 tests/server/*.log
 tests/server/*.png
 tests/browser/*.log
+tests/browser/*.png
 
 # Data directories
 server/data/

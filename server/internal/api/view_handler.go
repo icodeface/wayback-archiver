@@ -87,13 +87,14 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	// 导致后续元素（如 <main>、<section>）被提升到错误的层级
 	modifiedHTML = fixNestedButtons(modifiedHTML)
 
-	// 注入归档信息栏
-	modifiedHTML = injectArchiveHeader(modifiedHTML, page, prev, next, snapshotTotal)
+	// 注入归档信息栏（传入 nonce 用于 CSP）
+	nonce := "wayback-fix-positioning"
+	modifiedHTML = injectArchiveHeader(modifiedHTML, page, prev, next, snapshotTotal, nonce)
 
-	// 设置安全响应头（禁用所有脚本）
+	// 设置安全响应头（允许带 nonce 的内联脚本，用于修复定位问题）
 	c.Header("X-Frame-Options", "SAMEORIGIN")
 	c.Header("Referrer-Policy", "no-referrer")
-	c.Header("Content-Security-Policy", "default-src 'self'; script-src 'none'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'none'; object-src 'none';")
+	c.Header("Content-Security-Policy", fmt.Sprintf("default-src 'self'; script-src 'nonce-%s'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'none'; object-src 'none';", nonce))
 
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(modifiedHTML))
 }
