@@ -24,7 +24,7 @@ func setupTestHandler(t *testing.T) (*Handler, func()) {
 	dataDir := t.TempDir()
 	fs := storage.NewFileStorage(dataDir)
 	dedup := storage.NewDeduplicator(db, fs)
-	handler := NewHandler(dedup, db, dataDir)
+	handler := NewHandler(dedup, db, dataDir, nil)
 
 	cleanup := func() {
 		db.Close()

@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WAYBACK // LOGS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --color-bg: #000000;
+            --color-surface: #0a0a0a;
+            --color-border: #1a1a1a;
+            --color-text-primary: #e0e0e0;
+            --color-text-secondary: #808080;
+            --color-text-dim: #404040;
+            --color-accent: #00ff88;
+            --color-accent-dim: #00cc6a;
+            --color-cyan: #00d9ff;
+            --color-warn: #ffaa00;
+            --color-error: #ff4444;
+            --font-mono: 'JetBrains Mono', monospace;
+            --font-sans: 'Inter', sans-serif;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-mono);
+            background: var(--color-bg);
+            color: var(--color-text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        header {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--color-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+        .title-row { display: flex; align-items: center; gap: 16px; }
+        h1 { font-size: 1.25rem; font-weight: 700; color: var(--color-accent); letter-spacing: 0.05em; }
+        .back-link {
+            color: var(--color-text-dim);
+            text-decoration: none;
+            font-size: 0.8rem;
+            transition: color 0.2s;
+        }
+        .back-link:hover { color: var(--color-accent); }
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .filter-input {
+            padding: 6px 12px;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-primary);
+            outline: none;
+            width: 200px;
+        }
+        .filter-input:focus { border-color: var(--color-accent); }
+        .filter-input::placeholder { color: var(--color-text-dim); }
+        .btn {
+            padding: 6px 14px;
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+        .btn.active { border-color: var(--color-accent); color: var(--color-accent); background: rgba(0,255,136,0.08); }
+        .main { display: flex; flex: 1; overflow: hidden; }
+        .sidebar {
+            width: 220px;
+            border-right: 1px solid var(--color-border);
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+        .file-item {
+            padding: 10px 16px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--color-border);
+            transition: all 0.15s;
+        }
+        .file-item:hover { background: rgba(0,255,136,0.04); }
+        .file-item.active { background: rgba(0,255,136,0.08); border-left: 2px solid var(--color-accent); }
+        .file-name { font-size: 0.8rem; color: var(--color-text-primary); }
+        .file-meta { font-size: 0.7rem; color: var(--color-text-dim); margin-top: 2px; }
+        .log-viewer {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            font-size: 0.8rem;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .log-line { padding: 1px 0; }
+        .log-line:hover { background: rgba(0,255,136,0.04); }
+        .log-line .highlight { background: rgba(255,170,0,0.3); color: var(--color-warn); }
+        .empty-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--color-text-dim);
+            font-size: 0.9rem;
+        }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--color-bg); }
+        ::-webkit-scrollbar-thumb { background: var(--color-border); }
+        ::-webkit-scrollbar-thumb:hover { background: var(--color-accent); }
+        @media (max-width: 768px) {
+            .sidebar { width: 160px; }
+            .filter-input { width: 140px; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="title-row">
+            <h1>WAYBACK // LOGS</h1>
+            <a href="/" class="back-link">← back to archives</a>
+        </div>
+        <div class="controls">
+            <input type="text" class="filter-input" id="filterInput" placeholder="filter logs...">
+            <button class="btn active" id="autoScrollBtn" onclick="toggleAutoScroll()">Auto-scroll</button>
+            <button class="btn" id="refreshBtn" onclick="refreshLog()">Refresh</button>
+        </div>
+    </header>
+    <div class="main">
+        <div class="sidebar" id="sidebar">
+            <div class="empty-state">Loading...</div>
+        </div>
+        <div class="log-viewer" id="logViewer">
+            <div class="empty-state">Select a log file</div>
+        </div>
+    </div>
+    <script>
+        let currentFile = null;
+        let autoScroll = true;
+        let filterText = '';
+        let refreshTimer = null;
+
+        async function loadFileList() {
+            try {
+                const res = await fetch('/api/logs');
+                const data = await res.json();
+                const sidebar = document.getElementById('sidebar');
+                if (!data.files || data.files.length === 0) {
+                    sidebar.innerHTML = '<div class="empty-state">No log files</div>';
+                    return;
+                }
+                sidebar.innerHTML = data.files.map(f => `
+                    <div class="file-item${currentFile === f.name ? ' active' : ''}" onclick="selectFile('${f.name}')">
+                        <div class="file-name">${f.date}</div>
+                        <div class="file-meta">${formatSize(f.size)}</div>
+                    </div>
+                `).join('');
+                // Auto-select first file if none selected
+                if (!currentFile && data.files.length > 0) {
+                    selectFile(data.files[0].name);
+                }
+            } catch (e) {
+                document.getElementById('sidebar').innerHTML = '<div class="empty-state">Failed to load</div>';
+            }
+        }
+
+        async function selectFile(filename) {
+            currentFile = filename;
+            document.querySelectorAll('.file-item').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.file-item').forEach(el => {
+                if (el.querySelector('.file-name').textContent === filename.replace('wayback-','').replace('.log','')) {
+                    el.classList.add('active');
+                }
+            });
+            await loadLogContent();
+            if (autoScroll) startAutoRefresh();
+        }
+
+        async function loadLogContent() {
+            if (!currentFile) return;
+            try {
+                const res = await fetch(`/api/logs/${currentFile}?tail=2000`);
+                const data = await res.json();
+                renderLog(data.content || '');
+            } catch (e) {
+                document.getElementById('logViewer').innerHTML = '<div class="empty-state">Failed to load log</div>';
+            }
+        }
+
+        function renderLog(content) {
+            const viewer = document.getElementById('logViewer');
+            const lines = content.split('\n');
+            const filtered = filterText
+                ? lines.filter(l => l.toLowerCase().includes(filterText.toLowerCase()))
+                : lines;
+
+            viewer.innerHTML = filtered.map(line => {
+                let html = escapeHtml(line);
+                if (filterText) {
+                    const re = new RegExp('(' + escapeRegex(filterText) + ')', 'gi');
+                    html = html.replace(re, '<span class="highlight">$1</span>');
+                }
+                return `<div class="log-line">${html}</div>`;
+            }).join('');
+
+            if (autoScroll) {
+                viewer.scrollTop = viewer.scrollHeight;
+            }
+        }
+
+        function toggleAutoScroll() {
+            autoScroll = !autoScroll;
+            const btn = document.getElementById('autoScrollBtn');
+            btn.classList.toggle('active', autoScroll);
+            if (autoScroll) {
+                document.getElementById('logViewer').scrollTop = document.getElementById('logViewer').scrollHeight;
+                startAutoRefresh();
+            } else {
+                stopAutoRefresh();
+            }
+        }
+
+        function startAutoRefresh() {
+            stopAutoRefresh();
+            refreshTimer = setInterval(() => loadLogContent(), 3000);
+        }
+
+        function stopAutoRefresh() {
+            if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+        }
+
+        function refreshLog() {
+            loadFileList();
+            loadLogContent();
+        }
+
+        document.getElementById('filterInput').addEventListener('input', (e) => {
+            filterText = e.target.value;
+            loadLogContent();
+        });
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+
+        function escapeRegex(str) {
+            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        loadFileList();
+    </script>
+</body>
+</html>

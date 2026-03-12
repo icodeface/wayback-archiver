@@ -107,6 +107,7 @@ npm run build
 | `DB_SSLMODE` | `disable` | SSL 模式 |
 | `SERVER_PORT` | `8080` | HTTP 服务端口 |
 | `DATA_DIR` | `./data` | HTML 和资源的存储目录 |
+| `LOG_DIR` | `./data/logs` | 日志文件目录 |
 | `AUTH_PASSWORD` | *（空）* | HTTP Basic Auth 密码（为空时关闭认证，用户名固定为 `wayback`） |
 
 ## API
@@ -119,8 +120,11 @@ npm run build
 | `GET` | `/api/pages/:id` | 获取页面详情 |
 | `GET` | `/api/search?q=keyword` | 按 URL 或标题搜索 |
 | `GET` | `/api/pages/timeline?url=URL` | 获取同一 URL 的所有快照（时间线视图） |
+| `GET` | `/api/logs` | 列出可用日志文件 |
+| `GET` | `/api/logs/:filename` | 获取日志文件内容（支持 `?tail=N`） |
 | `GET` | `/view/:id` | 还原归档页面 |
 | `GET` | `/timeline?url=URL` | URL 时间线可视化页面 |
+| `GET` | `/logs` | 服务器日志查看器 |
 
 ### POST /api/archive
 
@@ -152,6 +156,7 @@ wayback-archiver/
 │   │   ├── api/              # HTTP 处理器（模块化）
 │   │   ├── config/           # 环境变量配置
 │   │   ├── database/         # PostgreSQL 操作
+│   │   ├── logging/          # 文件日志 & 自动轮转
 │   │   ├── models/           # 数据模型
 │   │   └── storage/          # 文件存储 & 去重
 │   ├── web/                  # Web UI 静态文件
@@ -169,6 +174,9 @@ data/
 ├── html/                     # HTML 快照，按日期组织
 │   └── 2026/03/09/
 │       └── <timestamp>_<hash>.html
+├── logs/                     # 服务器日志，按大小（10MB）和日期轮转（保留 7 天）
+│   ├── wayback-2026-03-12.001.log
+│   └── wayback-2026-03-12.002.log
 └── resources/                # 去重后的静态资源
     └── ab/cd/
         └── <sha256>.css

@@ -32,6 +32,7 @@ type ServerConfig struct {
 // StorageConfig holds storage settings
 type StorageConfig struct {
 	DataDir string
+	LogDir  string
 }
 
 // AuthConfig holds authentication settings
@@ -62,6 +63,7 @@ func LoadFromEnv() (*Config, error) {
 		},
 		Storage: StorageConfig{
 			DataDir: getEnv("DATA_DIR", "./data"),
+			LogDir:  getEnv("LOG_DIR", "./data/logs"),
 		},
 		Auth: AuthConfig{
 			Password: getEnv("AUTH_PASSWORD", ""),

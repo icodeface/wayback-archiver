@@ -1,6 +1,7 @@
 node_modules/
 .claude/
 CLAUDE.md
+AGENTS.md
 
 # Test artifacts
 tests/root/*.log

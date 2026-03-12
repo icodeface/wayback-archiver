@@ -107,6 +107,7 @@ Environment variables (or `.env` file in `server/`):
 | `DB_SSLMODE` | `disable` | SSL mode |
 | `SERVER_PORT` | `8080` | HTTP server port |
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
+| `LOG_DIR` | `./data/logs` | Log file directory |
 | `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`) |
 
 ## API
@@ -119,8 +120,11 @@ Environment variables (or `.env` file in `server/`):
 | `GET` | `/api/pages/:id` | Get page details |
 | `GET` | `/api/search?q=keyword` | Search pages by URL or title |
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
+| `GET` | `/api/logs` | List available log files |
+| `GET` | `/api/logs/:filename` | Get log file content (supports `?tail=N`) |
 | `GET` | `/view/:id` | Replay an archived page |
 | `GET` | `/timeline?url=URL` | Visual timeline page for a URL |
+| `GET` | `/logs` | Server logs viewer |
 
 ### POST /api/archive
 
@@ -152,6 +156,7 @@ wayback-archiver/
 │   │   ├── api/              # HTTP handlers (modular)
 │   │   ├── config/           # Environment-based config
 │   │   ├── database/         # PostgreSQL operations
+│   │   ├── logging/          # File-based logging with rotation
 │   │   ├── models/           # Data models
 │   │   └── storage/          # File storage & dedup
 │   ├── web/                  # Web UI static files
@@ -169,6 +174,9 @@ data/
 ├── html/                     # HTML snapshots, organized by date
 │   └── 2026/03/09/
 │       └── <timestamp>_<hash>.html
+├── logs/                     # Server logs, rotated by size (10MB) and date (7-day retention)
+│   ├── wayback-2026-03-12.001.log
+│   └── wayback-2026-03-12.002.log
 └── resources/                # Deduplicated static resources
     └── ab/cd/
         └── <sha256>.css

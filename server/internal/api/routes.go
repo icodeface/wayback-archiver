@@ -79,6 +79,8 @@ Allow: /
 	r.StaticFile("/test.html", "./web/test.html")
 	r.StaticFile("/timeline", "./web/timeline.html")
 	r.StaticFile("/timeline.html", "./web/timeline.html")
+	r.StaticFile("/logs", "./web/logs.html")
+	r.StaticFile("/logs.html", "./web/logs.html")
 
 	// favicon（避免 404）
 	r.GET("/favicon.ico", func(c *gin.Context) {
@@ -94,6 +96,8 @@ Allow: /
 		api.GET("/pages/:id", handler.GetPage)
 		api.DELETE("/pages/:id", handler.DeletePage)
 		api.GET("/search", handler.SearchPages)
+		api.GET("/logs", handler.ListLogs)
+		api.GET("/logs/:filename", handler.GetLog)
 	}
 
 	// 查看归档页面

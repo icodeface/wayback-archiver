@@ -8,6 +8,7 @@ import (
 	"wayback/internal/api"
 	"wayback/internal/config"
 	"wayback/internal/database"
+	"wayback/internal/logging"
 	"wayback/internal/storage"
 )
 
@@ -17,6 +18,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+
+	// 初始化日志系统（必须在其他组件之前）
+	logger, err := logging.Setup(cfg.Storage.LogDir)
+	if err != nil {
+		log.Fatalf("Failed to setup logging: %v", err)
+	}
+	defer logger.Close()
+	log.Println("Logging initialized:", cfg.Storage.LogDir)
 
 	// 连接数据库
 	db, err := database.New(
@@ -39,7 +48,7 @@ func main() {
 	dedup := storage.NewDeduplicator(db, fileStorage)
 
 	// 初始化 API 处理器
-	handler := api.NewHandler(dedup, db, cfg.Storage.DataDir)
+	handler := api.NewHandler(dedup, db, cfg.Storage.DataDir, logger)
 
 	// 设置 Gin
 	gin.SetMode(gin.ReleaseMode)

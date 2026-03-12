@@ -90,6 +90,9 @@
             padding-bottom: 20px;
             border-bottom: 1px solid var(--color-border);
             position: relative;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
         }
 
         header::after {
@@ -530,10 +533,13 @@
 <body>
     <div class="container">
         <header>
-            <div class="title-group">
-                <h1>WAYBACK // ARCHIVER</h1>
+            <div>
+                <div class="title-group">
+                    <h1>WAYBACK // ARCHIVER</h1>
+                </div>
+                <p class="tagline">The Memory of Your Internet — Archive Everything You Browse.</p>
             </div>
-            <p class="tagline">The Memory of Your Internet — Archive Everything You Browse.</p>
+            <a href="/logs" style="color:var(--color-text-dim);text-decoration:none;font-size:0.75rem;transition:color 0.2s;white-space:nowrap" onmouseover="this.style.color='var(--color-text-secondary)'" onmouseout="this.style.color='var(--color-text-dim)'">LOGS</a>
         </header>
 
         <div class="search-section">
