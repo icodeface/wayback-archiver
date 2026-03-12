@@ -49,8 +49,12 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	modifiedHTML = noscriptTagRe.ReplaceAllString(modifiedHTML, "")
 
 	// 移除内联事件处理器
-	eventHandlerRe := regexp.MustCompile(`(?i)\s+on\w+\s*=\s*["'][^"']*["']`)
-	modifiedHTML = eventHandlerRe.ReplaceAllString(modifiedHTML, "")
+	// 使用两个独立正则分别处理双引号和单引号包裹的属性值，
+	// 避免 [^"']* 在遇到嵌套引号时提前终止匹配（如 onclick="window.open('...')"）
+	eventHandlerDQ := regexp.MustCompile(`(?i)\s+on\w+\s*=\s*"[^"]*"`)
+	eventHandlerSQ := regexp.MustCompile(`(?i)\s+on\w+\s*=\s*'[^']*'`)
+	modifiedHTML = eventHandlerDQ.ReplaceAllString(modifiedHTML, "")
+	modifiedHTML = eventHandlerSQ.ReplaceAllString(modifiedHTML, "")
 
 	// 移除 javascript: 协议的链接
 	jsProtocolRe := regexp.MustCompile(`(?i)href\s*=\s*["']javascript:[^"']*["']`)
@@ -67,23 +71,29 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	// 早期归档的页面 srcset 未被重写，在渲染时补偿处理
 	modifiedHTML = fixUnrewrittenSrcset(modifiedHTML)
 
+	// 解析 URL 提取主机名，用于站点专项修复的精确匹配
+	pageHost := ""
+	if parsedURL, err := url.Parse(page.URL); err == nil {
+		pageHost = parsedURL.Hostname()
+	}
+
 	// 针对 m-team 网站的专项修复
-	if strings.Contains(page.URL, "m-team.cc") {
+	if strings.HasSuffix(pageHost, "m-team.cc") {
 		modifiedHTML = fixMTeamLayout(modifiedHTML)
 	}
 
 	// 针对 X.com (Twitter) 的专项修复
-	if strings.Contains(page.URL, "x.com") || strings.Contains(page.URL, "twitter.com") {
+	if pageHost == "x.com" || pageHost == "www.x.com" || strings.HasSuffix(pageHost, "twitter.com") {
 		modifiedHTML = fixXcomLayout(modifiedHTML)
 	}
 
 	// 针对 OKX 网站的专项修复
-	if strings.Contains(page.URL, "okx.com") {
+	if strings.HasSuffix(pageHost, "okx.com") {
 		modifiedHTML = fixOKXLayout(modifiedHTML)
 	}
 
 	// 针对 GitHub 的专项修复
-	if strings.Contains(page.URL, "github.com") {
+	if strings.HasSuffix(pageHost, "github.com") {
 		modifiedHTML = fixGitHubLayout(modifiedHTML)
 	}
 
