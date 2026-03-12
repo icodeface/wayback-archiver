@@ -21,6 +21,50 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig) {
 		c.Next()
 	})
 
+	// robots.txt（在认证之前，确保爬虫和工具可以访问）
+	r.GET("/robots.txt", func(c *gin.Context) {
+		robotsTxt := `User-agent: Googlebot
+Disallow: /
+
+User-agent: Bingbot
+Disallow: /
+
+User-agent: Slurp
+Disallow: /
+
+User-agent: DuckDuckBot
+Disallow: /
+
+User-agent: Baiduspider
+Disallow: /
+
+User-agent: YandexBot
+Disallow: /
+
+User-agent: Sogou
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: *
+Allow: /
+`
+		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(robotsTxt))
+	})
+
 	// Basic Auth 中间件（如果启用）
 	if authCfg.Enabled() {
 		accounts := gin.Accounts{
