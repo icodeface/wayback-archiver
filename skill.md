@@ -6,10 +6,13 @@ Wayback Archiver is a self-hosted personal web archiving system that captures an
 
 **Purpose**: Archive web pages you browse in Chrome and replay them offline when the original goes down.
 
+**Repository**: https://github.com/icodeface/wayback-archiver
+
 ## Prerequisites
 
 Before installation, ensure these are available:
 
+- **Git**
 - **Go** 1.21+
 - **Node.js** 16+
 - **PostgreSQL** 14+
@@ -17,7 +20,14 @@ Before installation, ensure these are available:
 
 ## Installation
 
-### 1. Database Setup
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/icodeface/wayback-archiver.git
+cd wayback-archiver
+```
+
+### 2. Database Setup
 
 ```bash
 # Create database
@@ -27,7 +37,7 @@ createdb -U postgres wayback
 psql -U postgres wayback < server/init_db.sql
 ```
 
-### 2. Server Configuration
+### 3. Server Configuration
 
 Create `.env` file in `server/` directory:
 
@@ -50,7 +60,7 @@ DATA_DIR=./data
 AUTH_PASSWORD=
 ```
 
-### 3. Start Server
+### 4. Start Server
 
 ```bash
 cd server
@@ -68,7 +78,7 @@ export https_proxy=http://127.0.0.1:7897
 ./wayback-server
 ```
 
-### 4. Install Userscript
+### 5. Install Userscript
 
 ```bash
 cd browser
