@@ -118,13 +118,17 @@ func (r *URLRewriter) RewriteHTMLFast(html string) string {
 				)
 			}
 
-			// 5b. 相对路径变体（如 ./style.css）
-			// 从绝对路径中提取文件名部分，生成 ./ 前缀的相对路径
+			// 5b. 相对路径变体（如 ./style.css 和 style.css）
+			// 从绝对路径中提取文件名部分，生成相对路径变体
 			fileName := path.Base(parsed.Path)
 			if fileName != "" && fileName != "." && fileName != "/" {
+				// 带 ./ 前缀的相对路径
 				relWithQuery := "./" + fileName
+				// 裸文件名（不带 ./ 前缀）
+				bareWithQuery := fileName
 				if parsed.RawQuery != "" {
 					relWithQuery = "./" + fileName + "?" + parsed.RawQuery
+					bareWithQuery = fileName + "?" + parsed.RawQuery
 				}
 				pairs = append(pairs,
 					` src="`+relWithQuery+`"`, ` src="`+localURL+`"`,
@@ -135,6 +139,19 @@ func (r *URLRewriter) RewriteHTMLFast(html string) string {
 					`url('`+relWithQuery+`')`, `url('`+localURL+`')`,
 					`url(`+relWithQuery+`)`, `url(`+localURL+`)`,
 				)
+
+				// 裸文件名变体（如 style.css，不带 ./ 前缀）
+				if bareWithQuery != pathWithQuery {
+					pairs = append(pairs,
+						` src="`+bareWithQuery+`"`, ` src="`+localURL+`"`,
+						` href="`+bareWithQuery+`"`, ` href="`+localURL+`"`,
+						` poster="`+bareWithQuery+`"`, ` poster="`+localURL+`"`,
+						` srcset="`+bareWithQuery+`"`, ` srcset="`+localURL+`"`,
+						`url("`+bareWithQuery+`")`, `url("`+localURL+`")`,
+						`url('`+bareWithQuery+`')`, `url('`+localURL+`')`,
+						`url(`+bareWithQuery+`)`, `url(`+localURL+`)`,
+					)
+				}
 
 				// 5c. &amp; 编码变体
 				relEncoded := strings.ReplaceAll(relWithQuery, "&", "&amp;")
@@ -147,6 +164,18 @@ func (r *URLRewriter) RewriteHTMLFast(html string) string {
 						`url("`+relEncoded+`")`, `url("`+localURL+`")`,
 						`url('`+relEncoded+`')`, `url('`+localURL+`')`,
 						`url(`+relEncoded+`)`, `url(`+localURL+`)`,
+					)
+				}
+				bareEncoded := strings.ReplaceAll(bareWithQuery, "&", "&amp;")
+				if bareEncoded != bareWithQuery {
+					pairs = append(pairs,
+						` src="`+bareEncoded+`"`, ` src="`+localURL+`"`,
+						` href="`+bareEncoded+`"`, ` href="`+localURL+`"`,
+						` poster="`+bareEncoded+`"`, ` poster="`+localURL+`"`,
+						` srcset="`+bareEncoded+`"`, ` srcset="`+localURL+`"`,
+						`url("`+bareEncoded+`")`, `url("`+localURL+`")`,
+						`url('`+bareEncoded+`')`, `url('`+localURL+`')`,
+						`url(`+bareEncoded+`)`, `url(`+localURL+`)`,
 					)
 				}
 			}

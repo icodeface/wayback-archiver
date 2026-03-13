@@ -225,6 +225,34 @@ func TestRewriteHTML_DotSlashRelativePath(t *testing.T) {
 	}
 }
 
+func TestRewriteHTML_BareRelativePath(t *testing.T) {
+	// Bare relative paths without ./ prefix (e.g., SPA apps like Angular)
+	r := newTestRewriter(1104, "20260313144244", map[string]string{
+		"https://dash.3ue.co/zh-Hans/styles-V46MLXWF.css": "resources/74/33/hash.css",
+		"https://dash.3ue.co/zh-Hans/main-QVKUS6BA.js":    "resources/87/4b/hash.js",
+		"https://dash.3ue.co/zh-Hans/polyfills-TR5YYZNL.js": "resources/32/bc/hash.js",
+	})
+
+	html := `<link rel="stylesheet" href="styles-V46MLXWF.css" media="all"><script src="main-QVKUS6BA.js" type="module"></script><link rel="modulepreload" href="polyfills-TR5YYZNL.js">`
+	result := r.RewriteHTML(html)
+
+	if strings.Contains(result, `"styles-V46MLXWF.css"`) {
+		t.Errorf("bare relative CSS should be rewritten, got: %s", result)
+	}
+	if strings.Contains(result, `"main-QVKUS6BA.js"`) {
+		t.Errorf("bare relative JS should be rewritten, got: %s", result)
+	}
+	if strings.Contains(result, `"polyfills-TR5YYZNL.js"`) {
+		t.Errorf("bare relative modulepreload should be rewritten, got: %s", result)
+	}
+	if !strings.Contains(result, `/archive/1104/20260313144244mp_/https://dash.3ue.co/zh-Hans/styles-V46MLXWF.css`) {
+		t.Errorf("Expected rewritten CSS URL, got: %s", result)
+	}
+	if !strings.Contains(result, `/archive/1104/20260313144244mp_/https://dash.3ue.co/zh-Hans/main-QVKUS6BA.js`) {
+		t.Errorf("Expected rewritten JS URL, got: %s", result)
+	}
+}
+
 func TestRewriteHTML_MultiValueSrcsetOnImg(t *testing.T) {
 	r := newTestRewriter(631, "20260312101010", map[string]string{
 		"https://www.moltbook.com/_next/image?url=%2Flogo.png&w=32&q=75": "resources/ab/cd/hash1.img",
