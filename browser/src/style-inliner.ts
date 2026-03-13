@@ -167,6 +167,37 @@ export function inlineLayoutStyles(): string {
           const ref = prop === 'width' ? vw : vh;
           if (Math.abs(px - ref) / ref < 0.05) continue;
         }
+        // 跳过 flex 子元素及其后代的 width/height（由 flex 布局动态计算，固化后失去弹性）
+        // 向上遍历祖先，检查是否有任何祖先是弹性 flex 子元素
+        let ancestor: Element | null = origEl;
+        let shouldSkipWidth = false;
+        let depth = 0;
+        const MAX_DEPTH = 10; // 最多向上检查 10 层，避免性能问题
+
+        while (ancestor && depth < MAX_DEPTH) {
+          const ancestorParent: Element | null = ancestor.parentElement;
+          if (!ancestorParent) break;
+
+          const parentStyles = window.getComputedStyle(ancestorParent);
+          if (parentStyles.display === 'flex' || parentStyles.display === 'inline-flex') {
+            const ancestorStyles = window.getComputedStyle(ancestor);
+            const flexGrow = ancestorStyles.getPropertyValue('flex-grow');
+            const flexShrink = ancestorStyles.getPropertyValue('flex-shrink');
+            const flexBasis = ancestorStyles.getPropertyValue('flex-basis');
+
+            // 如果祖先是弹性元素（flex-shrink≠0 或 flex-grow≠0 或 flex-basis≠auto）
+            // 则当前元素的 width 也不应该被固化
+            if (flexShrink !== '0' || flexGrow !== '0' || flexBasis !== 'auto') {
+              shouldSkipWidth = true;
+              break;
+            }
+          }
+
+          ancestor = ancestorParent;
+          depth++;
+        }
+
+        if (shouldSkipWidth) continue;
       }
       // 跳过与 max-width/max-height 相等的 width/height（冗余，且会破坏响应式布局）
       if (prop === 'width') {
