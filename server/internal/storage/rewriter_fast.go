@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -115,6 +116,39 @@ func (r *URLRewriter) RewriteHTMLFast(html string) string {
 					`url('`+pathWithQueryEncoded+`')`, `url('`+localURL+`')`,
 					`url(`+pathWithQueryEncoded+`)`, `url(`+localURL+`)`,
 				)
+			}
+
+			// 5b. 相对路径变体（如 ./style.css）
+			// 从绝对路径中提取文件名部分，生成 ./ 前缀的相对路径
+			fileName := path.Base(parsed.Path)
+			if fileName != "" && fileName != "." && fileName != "/" {
+				relWithQuery := "./" + fileName
+				if parsed.RawQuery != "" {
+					relWithQuery = "./" + fileName + "?" + parsed.RawQuery
+				}
+				pairs = append(pairs,
+					` src="`+relWithQuery+`"`, ` src="`+localURL+`"`,
+					` href="`+relWithQuery+`"`, ` href="`+localURL+`"`,
+					` poster="`+relWithQuery+`"`, ` poster="`+localURL+`"`,
+					` srcset="`+relWithQuery+`"`, ` srcset="`+localURL+`"`,
+					`url("`+relWithQuery+`")`, `url("`+localURL+`")`,
+					`url('`+relWithQuery+`')`, `url('`+localURL+`')`,
+					`url(`+relWithQuery+`)`, `url(`+localURL+`)`,
+				)
+
+				// 5c. &amp; 编码变体
+				relEncoded := strings.ReplaceAll(relWithQuery, "&", "&amp;")
+				if relEncoded != relWithQuery {
+					pairs = append(pairs,
+						` src="`+relEncoded+`"`, ` src="`+localURL+`"`,
+						` href="`+relEncoded+`"`, ` href="`+localURL+`"`,
+						` poster="`+relEncoded+`"`, ` poster="`+localURL+`"`,
+						` srcset="`+relEncoded+`"`, ` srcset="`+localURL+`"`,
+						`url("`+relEncoded+`")`, `url("`+localURL+`")`,
+						`url('`+relEncoded+`')`, `url('`+localURL+`')`,
+						`url(`+relEncoded+`)`, `url(`+localURL+`)`,
+					)
+				}
 			}
 		}
 	}
