@@ -118,6 +118,7 @@ npm run build
 | `PUT` | `/api/archive/:id` | 更新已有归档快照 |
 | `GET` | `/api/pages` | 列出所有归档页面 |
 | `GET` | `/api/pages/:id` | 获取页面详情 |
+| `GET` | `/api/pages/:id/content` | 获取页面正文的 Markdown 格式（方便 AI/LLM 读取） |
 | `GET` | `/api/search?q=keyword` | 按 URL 或标题搜索 |
 | `GET` | `/api/pages/timeline?url=URL` | 获取同一 URL 的所有快照（时间线视图） |
 | `GET` | `/api/logs` | 列出可用日志文件 |

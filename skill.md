@@ -16,6 +16,7 @@ Use this skill when the user wants to:
 - View snapshots of a specific URL
 - List recent archives or filter by date range
 - Get details about a specific archived page
+- Read page content in Markdown format (for AI/LLM consumption)
 - Explore the archiving system's data
 
 ## Prerequisites
@@ -89,6 +90,14 @@ curl "http://localhost:8080/api/pages?limit=100&offset=0"
 
 ```bash
 curl "http://localhost:8080/api/pages/$PAGE_ID"
+```
+
+#### Get Page Content as Markdown
+
+Returns the page body as clean Markdown (strips scripts, nav, footer, etc.). Ideal for AI/LLM consumption.
+
+```bash
+curl "http://localhost:8080/api/pages/$PAGE_ID/content"
 ```
 
 #### Get Timeline for URL

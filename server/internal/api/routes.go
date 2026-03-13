@@ -94,6 +94,7 @@ Allow: /
 		api.GET("/pages", handler.ListPages)
 		api.GET("/pages/timeline", handler.GetPageTimeline)
 		api.GET("/pages/:id", handler.GetPage)
+		api.GET("/pages/:id/content", handler.GetPageContent)
 		api.DELETE("/pages/:id", handler.DeletePage)
 		api.GET("/search", handler.SearchPages)
 		api.GET("/logs", handler.ListLogs)

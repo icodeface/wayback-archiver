@@ -118,6 +118,7 @@ Environment variables (or `.env` file in `server/`):
 | `PUT` | `/api/archive/:id` | Update an existing archive snapshot |
 | `GET` | `/api/pages` | List all archived pages |
 | `GET` | `/api/pages/:id` | Get page details |
+| `GET` | `/api/pages/:id/content` | Get page content as Markdown (for AI/LLM consumption) |
 | `GET` | `/api/search?q=keyword` | Search pages by URL or title |
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
 | `GET` | `/api/logs` | List available log files |

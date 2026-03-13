@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"wayback/internal/storage"
 )
 
 // ListPages 列出所有归档页面（支持分页和时间过滤）
@@ -154,4 +157,30 @@ func (h *Handler) DeletePage(c *gin.Context) {
 
 	log.Printf("Deleted page: %s (%s)", id, page.URL)
 	c.JSON(http.StatusOK, gin.H{"status": "success"})
+}
+
+// GetPageContent 返回页面正文的 Markdown 格式（精简版，方便 AI 读取）
+func (h *Handler) GetPageContent(c *gin.Context) {
+	id := c.Param("id")
+	page, err := h.db.GetPageByID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if page == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "page not found"})
+		return
+	}
+
+	htmlPath := filepath.Join(h.dataDir, page.HTMLPath)
+	htmlContent, err := os.ReadFile(htmlPath)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Failed to read HTML file")
+		return
+	}
+
+	markdown := storage.ExtractMarkdown(string(htmlContent))
+
+	c.Header("Content-Type", "text/markdown; charset=utf-8")
+	c.String(http.StatusOK, markdown)
 }
