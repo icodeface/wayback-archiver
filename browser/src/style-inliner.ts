@@ -28,6 +28,7 @@ const LAYOUT_PROPS = [
 const SKIP_TAGS = new Set([
   'SCRIPT', 'STYLE', 'LINK', 'META', 'TITLE', 'HEAD', 'BR', 'HR', 'NOSCRIPT',
   'BASE', 'COL', 'COLGROUP', 'PARAM', 'SOURCE', 'TRACK', 'WBR',
+  'HTML', 'BODY',  // 跳过顶层容器，避免固化视口相关的尺寸（如 min-width）
 ]);
 
 // 默认值 — computed 值等于默认值时跳过，减少 HTML 体积
@@ -166,6 +167,22 @@ export function inlineLayoutStyles(): string {
           const ref = prop === 'width' ? vw : vh;
           if (Math.abs(px - ref) / ref < 0.05) continue;
         }
+      }
+      // 跳过与 max-width/max-height 相等的 width/height（冗余，且会破坏响应式布局）
+      if (prop === 'width') {
+        const maxWidth = computed.getPropertyValue('max-width');
+        if (maxWidth && maxWidth !== 'none' && value === maxWidth) continue;
+      }
+      if (prop === 'height') {
+        const maxHeight = computed.getPropertyValue('max-height');
+        if (maxHeight && maxHeight !== 'none' && value === maxHeight) continue;
+      }
+      // 跳过 margin: auto 居中布局（computed 会把 auto 解析为像素值，固化后破坏居中）
+      if (prop === 'margin-left' || prop === 'margin-right') {
+        const ml = computed.getPropertyValue('margin-left');
+        const mr = computed.getPropertyValue('margin-right');
+        const mw = computed.getPropertyValue('max-width');
+        if (ml === mr && parseFloat(ml) > 0 && mw && mw !== 'none') continue;
       }
       parts.push(`${prop}:${value}`);
     }
