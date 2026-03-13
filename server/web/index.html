@@ -195,6 +195,7 @@
             white-space: nowrap;
         }
 
+        .date-filters input[type="text"],
         .date-filters input[type="date"] {
             padding: 8px 12px;
             font-family: var(--font-mono);
@@ -208,6 +209,11 @@
             color-scheme: dark;
         }
 
+        .date-filters input[type="text"]::placeholder {
+            color: var(--color-text-dim);
+        }
+
+        .date-filters input[type="text"]:focus,
         .date-filters input[type="date"]:focus {
             border-color: var(--color-accent);
             box-shadow: 0 0 0 1px var(--color-accent);
@@ -233,6 +239,7 @@
                 width: 100%;
             }
 
+            .date-filters input[type="text"],
             .date-filters input[type="date"] {
                 flex: 1;
             }
@@ -551,6 +558,10 @@
             </div>
             <div class="date-filters">
                 <div class="date-filter-group">
+                    <label class="date-filter-label" for="domainInput">Domain</label>
+                    <input type="text" id="domainInput" placeholder="e.g. x.com">
+                </div>
+                <div class="date-filter-group">
                     <label class="date-filter-label" for="dateFrom">From</label>
                     <input type="date" id="dateFrom">
                 </div>
@@ -595,8 +606,10 @@
                 let url = `/api/pages?limit=${pageSize}&offset=${offset}`;
                 const dateFrom = document.getElementById('dateFrom').value;
                 const dateTo = document.getElementById('dateTo').value;
+                const domain = document.getElementById('domainInput').value.trim();
                 if (dateFrom) url += `&from=${dateFrom}`;
                 if (dateTo) url += `&to=${dateTo}`;
+                if (domain) url += `&domain=${encodeURIComponent(domain)}`;
 
                 const response = await fetch(url);
                 if (!response.ok) {
@@ -764,8 +777,8 @@
             searchTimer = setTimeout(() => searchPages(keyword), 300);
         });
 
-        // 日期过滤器变化时重新加载
-        document.getElementById('dateFrom').addEventListener('change', () => {
+        // 过滤器变化时重新加载
+        function onFilterChange() {
             if (isSearchMode) {
                 const keyword = document.getElementById('searchInput').value.trim();
                 if (keyword) {
@@ -777,20 +790,15 @@
             } else {
                 loadPages(1);
             }
-        });
+        }
 
-        document.getElementById('dateTo').addEventListener('change', () => {
-            if (isSearchMode) {
-                const keyword = document.getElementById('searchInput').value.trim();
-                if (keyword) {
-                    searchPages(keyword);
-                } else {
-                    isSearchMode = false;
-                    loadPages(1);
-                }
-            } else {
-                loadPages(1);
-            }
+        document.getElementById('dateFrom').addEventListener('change', onFilterChange);
+        document.getElementById('dateTo').addEventListener('change', onFilterChange);
+
+        let domainTimer = null;
+        document.getElementById('domainInput').addEventListener('input', () => {
+            clearTimeout(domainTimer);
+            domainTimer = setTimeout(onFilterChange, 300);
         });
 
         async function searchPages(keyword) {
@@ -799,8 +807,10 @@
                 let url = `/api/search?q=${encodeURIComponent(keyword)}`;
                 const dateFrom = document.getElementById('dateFrom').value;
                 const dateTo = document.getElementById('dateTo').value;
+                const domain = document.getElementById('domainInput').value.trim();
                 if (dateFrom) url += `&from=${dateFrom}`;
                 if (dateTo) url += `&to=${dateTo}`;
+                if (domain) url += `&domain=${encodeURIComponent(domain)}`;
 
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('搜索失败');

@@ -13,6 +13,7 @@ CREATE TABLE pages (
     first_visited TIMESTAMP WITH TIME ZONE,
     last_visited TIMESTAMP WITH TIME ZONE,
     body_text TEXT,
+    domain TEXT DEFAULT '',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -23,6 +24,7 @@ CREATE INDEX idx_pages_content_hash ON pages(content_hash);
 CREATE INDEX idx_pages_url_hash ON pages(url, content_hash);
 CREATE INDEX idx_pages_body_text_trgm ON pages USING gin (body_text gin_trgm_ops);
 CREATE INDEX idx_pages_title_trgm ON pages USING gin (title gin_trgm_ops);
+CREATE INDEX idx_pages_domain ON pages(domain);
 
 -- 资源表（去重）
 CREATE TABLE resources (

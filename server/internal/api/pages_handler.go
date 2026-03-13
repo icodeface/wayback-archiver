@@ -45,14 +45,16 @@ func (h *Handler) ListPages(c *gin.Context) {
 		}
 	}
 
-	pages, err := h.db.ListPages(limit, offset, from, to)
+	domain := c.Query("domain")
+
+	pages, err := h.db.ListPages(limit, offset, from, to, domain)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	// 获取总数
-	total, err := h.db.GetTotalPagesCount(from, to)
+	total, err := h.db.GetTotalPagesCount(from, to, domain)
 	if err != nil {
 		log.Printf("Failed to get total count: %v", err)
 		total = len(pages)
@@ -102,7 +104,9 @@ func (h *Handler) SearchPages(c *gin.Context) {
 		}
 	}
 
-	pages, err := h.db.SearchPages(keyword, from, to)
+	domain := c.Query("domain")
+
+	pages, err := h.db.SearchPages(keyword, from, to, domain)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

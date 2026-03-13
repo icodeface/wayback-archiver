@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -44,7 +45,38 @@ func New(host, port, user, password, dbname string) (*DB, error) {
 		return nil, err
 	}
 
-	return &DB{conn: conn}, nil
+	db := &DB{conn: conn}
+	if err := db.ensureDomainColumn(); err != nil {
+		return nil, fmt.Errorf("failed to ensure domain column: %w", err)
+	}
+
+	return db, nil
+}
+
+// ensureDomainColumn adds the domain column, index, and backfills existing rows if needed.
+func (db *DB) ensureDomainColumn() error {
+	// Add column if not exists
+	_, err := db.conn.Exec(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS domain TEXT DEFAULT ''`)
+	if err != nil {
+		return err
+	}
+	// Create index if not exists
+	_, err = db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages (domain)`)
+	if err != nil {
+		return err
+	}
+	// Backfill: extract domain from url for rows where domain is empty
+	_, err = db.conn.Exec(`UPDATE pages SET domain = substring(url from '://([^/]+)') WHERE domain = '' AND url != ''`)
+	return err
+}
+
+// extractDomain extracts the hostname from a URL string.
+func extractDomain(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Hostname()
 }
 
 func (db *DB) Close() error {
@@ -55,8 +87,8 @@ func (db *DB) Close() error {
 func (db *DB) CreatePage(url, title, htmlPath, contentHash string, capturedAt time.Time) (int64, error) {
 	var id int64
 	err := db.conn.QueryRow(
-		"INSERT INTO pages (url, title, html_path, content_hash, captured_at, first_visited, last_visited) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-		url, title, htmlPath, contentHash, capturedAt, capturedAt, capturedAt,
+		"INSERT INTO pages (url, title, html_path, content_hash, captured_at, first_visited, last_visited, domain) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
+		url, title, htmlPath, contentHash, capturedAt, capturedAt, capturedAt, extractDomain(url),
 	).Scan(&id)
 	return id, err
 }
@@ -176,8 +208,8 @@ func (db *DB) GetResourceByURL(url string) (*models.Resource, error) {
 	return &r, nil
 }
 
-// ListPages 列出页面（分页，支持时间过滤）
-func (db *DB) ListPages(limit, offset int, from, to *time.Time) ([]models.Page, error) {
+// ListPages 列出页面（分页，支持时间和域名过滤）
+func (db *DB) ListPages(limit, offset int, from, to *time.Time, domain string) ([]models.Page, error) {
 	query := "SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited, created_at FROM pages"
 	args := []interface{}{}
 	argIndex := 1
@@ -195,6 +227,11 @@ func (db *DB) ListPages(limit, offset int, from, to *time.Time) ([]models.Page, 
 		conditions = append(conditions, fmt.Sprintf("captured_at < $%d", argIndex))
 		args = append(args, nextDay)
 		argIndex++
+	}
+	if domain != "" {
+		conditions = append(conditions, fmt.Sprintf("(domain = $%d OR domain LIKE $%d)", argIndex, argIndex+1))
+		args = append(args, domain, "%."+domain)
+		argIndex += 2
 	}
 
 	if len(conditions) > 0 {
@@ -224,8 +261,8 @@ func (db *DB) ListPages(limit, offset int, from, to *time.Time) ([]models.Page, 
 	return pages, nil
 }
 
-// GetTotalPagesCount 获取页面总数（支持时间过滤）
-func (db *DB) GetTotalPagesCount(from, to *time.Time) (int, error) {
+// GetTotalPagesCount 获取页面总数（支持时间和域名过滤）
+func (db *DB) GetTotalPagesCount(from, to *time.Time, domain string) (int, error) {
 	query := "SELECT COUNT(*) FROM pages"
 	args := []interface{}{}
 	argIndex := 1
@@ -243,6 +280,11 @@ func (db *DB) GetTotalPagesCount(from, to *time.Time) (int, error) {
 		conditions = append(conditions, fmt.Sprintf("captured_at < $%d", argIndex))
 		args = append(args, nextDay)
 		argIndex++
+	}
+	if domain != "" {
+		conditions = append(conditions, fmt.Sprintf("(domain = $%d OR domain LIKE $%d)", argIndex, argIndex+1))
+		args = append(args, domain, "%."+domain)
+		argIndex += 2
 	}
 
 	if len(conditions) > 0 {
@@ -274,8 +316,8 @@ func (db *DB) GetPageByID(id string) (*models.Page, error) {
 	return &p, nil
 }
 
-// SearchPages 搜索页面（按 URL、标题或正文内容，支持时间过滤）
-func (db *DB) SearchPages(keyword string, from, to *time.Time) ([]models.Page, error) {
+// SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
+func (db *DB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
 	query := "SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited, created_at FROM pages WHERE (url ILIKE $1 OR title ILIKE $1 OR body_text ILIKE $1)"
 	args := []interface{}{"%"+keyword+"%"}
 	argIndex := 2
@@ -292,6 +334,11 @@ func (db *DB) SearchPages(keyword string, from, to *time.Time) ([]models.Page, e
 		query += fmt.Sprintf(" AND captured_at < $%d", argIndex)
 		args = append(args, nextDay)
 		argIndex++
+	}
+	if domain != "" {
+		query += fmt.Sprintf(" AND (domain = $%d OR domain LIKE $%d)", argIndex, argIndex+1)
+		args = append(args, domain, "%."+domain)
+		argIndex += 2
 	}
 
 	query += " ORDER BY last_visited DESC LIMIT 100"

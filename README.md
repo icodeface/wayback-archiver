@@ -36,7 +36,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ PostgreSQL (m
 - **Dynamic content support** — captures the live DOM state; MutationObserver triggers one auto-update if significant changes occur after initial capture
 - **SPA-aware** — detects SPA navigation, resets capture state per route
 - **Anti-refresh protection** — archived pages are frozen: timers, WebSockets, and navigation APIs are neutralized
-- **Web UI** — responsive interface to browse, full-text search (page content, URL, and title), filter by date range, and replay archived pages
+- **Web UI** — responsive interface to browse, full-text search (page content, URL, and title), filter by date range and domain, and replay archived pages
 - **RESTful API** — programmatic access to all archiving and query operations
 
 ## Prerequisites
