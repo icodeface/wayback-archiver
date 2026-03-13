@@ -15,6 +15,7 @@ import { CONFIG } from './config';
 import { CaptureData } from './types';
 import { shouldSkipPage } from './page-filter';
 import { freezePageState, waitForDOMStable, serializeCSSOMToDOM } from './page-freezer';
+import { inlineLayoutStyles } from './style-inliner';
 import { sendToServer, updateOnServer } from './archiver';
 import { DOMCollector } from './dom-collector';
 
@@ -81,7 +82,8 @@ function initializeArchiver(): void {
       // Serialize CSSOM without freezing — we need timers alive for the DOM monitor
       serializeCSSOMToDOM();
 
-      const html = document.documentElement.outerHTML;
+      // 在克隆 DOM 上内联布局样式，不影响原始页面显示
+      const html = inlineLayoutStyles();
       captureData = {
         url: window.location.href,
         title: document.title,
@@ -165,7 +167,8 @@ function initializeArchiver(): void {
             // Only serialize CSSOM — don't freeze, to keep the SPA functional
             serializeCSSOMToDOM();
 
-            let newHTML = document.documentElement.outerHTML;
+            // 在克隆 DOM 上内联布局样式
+            let newHTML = inlineLayoutStyles();
 
             // Merge any nodes that were removed by virtual scrolling back into the snapshot
             if (domCollector && domCollector.collectedCount > 0) {

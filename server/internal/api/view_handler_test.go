@@ -65,28 +65,6 @@ func TestFixNestedButtons_CaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestFixOKXLayout(t *testing.T) {
-	html := `<html><head><link rel="stylesheet" href="/archive/590/test.css"></head><body>
-<div class="balance_okui balance_okui-tabs-var balance_okui-tabs ">
-<div class="Balance_balanceBottom__vAGcz">content</div>
-</div></body></html>`
-
-	result := fixOKXLayout(html)
-
-	if !strings.Contains(result, ".balance_okui-tabs { height: auto !important; }") {
-		t.Error("Should inject CSS to fix .balance_okui-tabs height")
-	}
-	if !strings.Contains(result, `[class*="Balance_balanceBottom"] { min-height: auto !important; }`) {
-		t.Error("Should inject CSS to fix Balance_balanceBottom min-height")
-	}
-	// 确保注入在 </head> 之前
-	headIdx := strings.Index(result, "</head>")
-	styleIdx := strings.Index(result, ".balance_okui-tabs { height: auto")
-	if styleIdx > headIdx {
-		t.Error("CSS should be injected before </head>")
-	}
-}
-
 // --- 内联事件处理器移除测试 ---
 
 func TestRemoveEventHandlers_Simple(t *testing.T) {

@@ -23,6 +23,7 @@ const moduleFiles = [
   'css-parser.js',
   'resource-collector.js',
   'page-freezer.js',
+  'style-inliner.js',
   'dom-collector.js',
   'archiver.js',
   'main.js',
