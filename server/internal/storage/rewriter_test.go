@@ -201,6 +201,30 @@ func TestRewriteHTML_MultiValueSrcset(t *testing.T) {
 	}
 }
 
+func TestRewriteHTML_DotSlashRelativePath(t *testing.T) {
+	r := newTestRewriter(990, "20260313", map[string]string{
+		"https://newshacker.me/style.css":  "resources/2c/09/hash.css",
+		"https://newshacker.me/favicon.png": "resources/f9/22/hash.img",
+		"https://newshacker.me/shared.js":   "resources/4d/ee/hash.js",
+	})
+
+	html := `<link rel="stylesheet" href="./style.css"><link rel="icon" href="./favicon.png"><script src="./shared.js"></script>`
+	result := r.RewriteHTML(html)
+
+	if strings.Contains(result, `"./style.css"`) {
+		t.Errorf("./style.css should be rewritten, got: %s", result)
+	}
+	if strings.Contains(result, `"./favicon.png"`) {
+		t.Errorf("./favicon.png should be rewritten, got: %s", result)
+	}
+	if strings.Contains(result, `"./shared.js"`) {
+		t.Errorf("./shared.js should be rewritten, got: %s", result)
+	}
+	if !strings.Contains(result, `/archive/990/20260313mp_/https://newshacker.me/style.css`) {
+		t.Errorf("Expected rewritten style.css URL, got: %s", result)
+	}
+}
+
 func TestRewriteHTML_MultiValueSrcsetOnImg(t *testing.T) {
 	r := newTestRewriter(631, "20260312101010", map[string]string{
 		"https://www.moltbook.com/_next/image?url=%2Flogo.png&w=32&q=75": "resources/ab/cd/hash1.img",
