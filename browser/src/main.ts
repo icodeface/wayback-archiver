@@ -38,6 +38,7 @@ function initializeArchiver(): void {
   let currentPageId: number | null = null;
   let updateCount = 0;
   const MAX_UPDATES = 1;
+  let initialHTMLSize = 0; // Track initial capture size for update quality guard
 
   // Collects nodes removed by virtual scrolling so we can merge them into the update snapshot
   let domCollector: DOMCollector | null = null;
@@ -91,6 +92,7 @@ function initializeArchiver(): void {
         headers,
       };
 
+      initialHTMLSize = html.length;
       console.log('[Wayback] ✓ Data prepared, size:', JSON.stringify(captureData).length, 'bytes');
     } catch (error) {
       console.error('[Wayback] Failed to prepare:', error);
@@ -157,6 +159,14 @@ function initializeArchiver(): void {
       debounceTimer = nativeSetTimeout(async () => {
         // Guard: only proceed if the page ID hasn't changed (SPA navigation resets it)
         if (mutationCount >= CONFIG.UPDATE_MIN_MUTATIONS && monitorPageId && monitorPageId === currentPageId && updateCount < MAX_UPDATES) {
+          // Guard: skip update when tab is hidden — sites like X.com aggressively strip DOM
+          // nodes when the tab loses focus, producing a degraded snapshot
+          if (document.visibilityState === 'hidden') {
+            console.log(`[Wayback] Skipping update: tab is hidden (DOM may be stripped)`);
+            mutationCount = 0;
+            return;
+          }
+
           console.log(`[Wayback] DOM changed (${mutationCount} mutations), triggering update...`);
           updateCount++;
           stopDOMChangeMonitor();
@@ -174,6 +184,13 @@ function initializeArchiver(): void {
             if (domCollector && domCollector.collectedCount > 0) {
               console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes...`);
               newHTML = domCollector.mergeInto(newHTML);
+            }
+
+            // Guard: reject update if HTML shrunk significantly (< 70% of initial capture)
+            // This catches DOM virtualization stripping content even when tab appears visible
+            if (initialHTMLSize > 0 && newHTML.length < initialHTMLSize * 0.7) {
+              console.log(`[Wayback] Skipping update: HTML shrunk too much (${newHTML.length} vs initial ${initialHTMLSize}, ${Math.round(newHTML.length / initialHTMLSize * 100)}%)`);
+              return;
             }
 
             const newCaptureData: CaptureData = {
