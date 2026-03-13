@@ -44,7 +44,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go 服务器 ──▶ PostgreSQL
 - **Go** 1.21+
 - **Node.js** 16+（用于构建用户脚本）
 - **PostgreSQL** 14+
-- **Chrome** + [Tampermonkey](https://www.tampermonkey.net/) 扩展
+- **Chrome** 或 **Firefox** + [Tampermonkey](https://www.tampermonkey.net/) 扩展（v5.3+）
 
 ## 快速开始
 
@@ -84,10 +84,12 @@ npm run build
 
 然后：
 
-1. 在 Chrome 中打开 Tampermonkey 管理面板
+1. 在浏览器中打开 Tampermonkey 管理面板
 2. 创建新脚本
 3. 粘贴 `browser/dist/wayback.user.js` 的内容
 4. 保存并启用
+
+> **Chrome 用户：** 右键点击 Tampermonkey 图标 → 管理扩展程序，启用"允许用户脚本"开关。Firefox 无需此步骤。
 
 ### 4. 开始浏览
 

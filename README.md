@@ -44,7 +44,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ PostgreSQL (m
 - **Go** 1.21+
 - **Node.js** 16+ (for building the userscript)
 - **PostgreSQL** 14+
-- **Chrome** + [Tampermonkey](https://www.tampermonkey.net/) extension
+- **Chrome** or **Firefox** + [Tampermonkey](https://www.tampermonkey.net/) extension (v5.3+)
 
 ## Quick Start
 
@@ -84,10 +84,12 @@ npm run build
 
 Then:
 
-1. Open Tampermonkey dashboard in Chrome
+1. Open Tampermonkey dashboard in your browser
 2. Create a new script
 3. Paste the contents of `browser/dist/wayback.user.js`
 4. Save and enable
+
+> **Chrome users:** Right-click the Tampermonkey icon → Manage extension, then enable the "Allow user scripts" toggle. Firefox does not require this step.
 
 ### 4. Start Browsing
 

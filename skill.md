@@ -27,7 +27,7 @@ Before using this skill, ensure the Wayback Archiver server is running:
 - **Go** 1.21+
 - **Node.js** 16+
 - **PostgreSQL** 14+
-- **Chrome** with [Tampermonkey](https://www.tampermonkey.net/) extension
+- **Chrome** or **Firefox** with [Tampermonkey](https://www.tampermonkey.net/) extension (v5.3+)
 
 ## Quick Start
 
@@ -61,6 +61,8 @@ npm run build
 ```
 
 Install `browser/dist/wayback.user.js` in Tampermonkey.
+
+> **Chrome users:** Enable "Allow user scripts" in Tampermonkey's extension settings (right-click icon → Manage extension). Firefox does not require this.
 
 ## API Usage
 
