@@ -26,6 +26,7 @@ type DatabaseConfig struct {
 
 // ServerConfig holds HTTP server settings
 type ServerConfig struct {
+	Host string
 	Port int
 }
 
@@ -65,6 +66,7 @@ func LoadFromEnv() (*Config, error) {
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
 		Server: ServerConfig{
+			Host: getEnv("SERVER_HOST", "127.0.0.1"),
 			Port: getEnvInt("SERVER_PORT", 8080),
 		},
 		Storage: StorageConfig{
