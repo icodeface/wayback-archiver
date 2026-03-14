@@ -80,7 +80,17 @@ func main() {
 
 	// 设置 Gin
 	gin.SetMode(gin.ReleaseMode)
-	r := gin.Default()
+	r := gin.New()
+
+	// 添加 Recovery 中间件（处理 panic）
+	r.Use(gin.Recovery())
+
+	// 添加自定义日志中间件（请求到达时立即打印）
+	r.Use(func(c *gin.Context) {
+		log.Printf("[HTTP] %s %s from %s", c.Request.Method, c.Request.URL.Path, c.ClientIP())
+		c.Next()
+	})
+
 	api.SetupRoutes(r, handler, &cfg.Auth)
 
 	// 启动服务器
