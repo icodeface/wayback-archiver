@@ -97,7 +97,7 @@ func (q *DeletionQueue) ProcessDeletions(baseDir string, retentionDays int) (int
 			// 文件不存在，视为已删除
 		} else {
 			deletedCount++
-			fmt.Printf("Deleted old HTML: %s (page_id: %d, age: %v)\n",
+			fmt.Printf("Deleted superseded HTML: %s (page_id: %d, age: %v)\n",
 				record.HTMLPath, record.PageID, time.Since(record.Timestamp))
 		}
 	}

@@ -744,9 +744,9 @@ func (d *Deduplicator) CleanupOldHTML(retentionDays int) error {
 	}
 
 	if deletedCount > 0 {
-		log.Printf("[cleanup] removed %d old HTML files from deletion queue", deletedCount)
+		log.Printf("[cleanup] removed %d superseded HTML files from deletion queue", deletedCount)
 	} else {
-		log.Printf("[cleanup] no old HTML files to remove from deletion queue")
+		log.Printf("[cleanup] no superseded HTML files to remove")
 	}
 
 	// Clean up empty directories
