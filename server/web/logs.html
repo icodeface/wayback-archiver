@@ -158,6 +158,7 @@
         let autoScroll = true;
         let filterText = '';
         let refreshTimer = null;
+        let userScrolling = false;
 
         async function loadFileList() {
             try {
@@ -236,7 +237,9 @@
             }).join('');
 
             if (autoScroll) {
+                userScrolling = true;
                 viewer.scrollTop = viewer.scrollHeight;
+                userScrolling = false;
             }
         }
 
@@ -245,7 +248,10 @@
             const btn = document.getElementById('autoScrollBtn');
             btn.classList.toggle('active', autoScroll);
             if (autoScroll) {
-                document.getElementById('logViewer').scrollTop = document.getElementById('logViewer').scrollHeight;
+                const viewer = document.getElementById('logViewer');
+                userScrolling = true;
+                viewer.scrollTop = viewer.scrollHeight;
+                userScrolling = false;
                 startAutoRefresh();
             } else {
                 stopAutoRefresh();
@@ -265,6 +271,22 @@
             loadFileList();
             loadLogContent();
         }
+
+        // Detect user scroll: disable auto-scroll when scrolling up, re-enable when at bottom
+        document.getElementById('logViewer').addEventListener('scroll', () => {
+            if (userScrolling) return; // ignore programmatic scrolls
+            const viewer = document.getElementById('logViewer');
+            const atBottom = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 30;
+            if (atBottom && !autoScroll) {
+                autoScroll = true;
+                document.getElementById('autoScrollBtn').classList.add('active');
+                startAutoRefresh();
+            } else if (!atBottom && autoScroll) {
+                autoScroll = false;
+                document.getElementById('autoScrollBtn').classList.remove('active');
+                stopAutoRefresh();
+            }
+        });
 
         document.getElementById('filterInput').addEventListener('input', (e) => {
             filterText = e.target.value;
