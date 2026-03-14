@@ -88,10 +88,8 @@ Allow: /
 	r.StaticFile("/logs", "./web/logs.html")
 	r.StaticFile("/logs.html", "./web/logs.html")
 
-	// favicon（避免 404）
-	r.GET("/favicon.ico", func(c *gin.Context) {
-		c.Status(http.StatusNoContent)
-	})
+	// favicon
+	r.StaticFile("/favicon.ico", "./web/favicon.ico")
 
 	api := r.Group("/api")
 	{
