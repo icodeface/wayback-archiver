@@ -130,6 +130,10 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	// 早期归档的页面 srcset 未被重写，在渲染时补偿处理
 	modifiedHTML = fixUnrewrittenSrcset(modifiedHTML)
 
+	// 移除 SPA loading 覆盖层（如 X.com 的 #placeholder 全屏黑色 loading 画面）
+	// 归档页面没有 JS 运行，这些覆盖层永远不会被隐藏，会遮挡真实内容
+	modifiedHTML = removeLoadingOverlays(modifiedHTML)
+
 	// 修复嵌套的 <button> 标签（HTML 规范不允许 button 嵌套 button）
 	// 浏览器遇到嵌套 button 时会隐式关闭外层 button，破坏 DOM 树结构，
 	// 导致后续元素（如 <main>、<section>）被提升到错误的层级
@@ -565,5 +569,47 @@ func hideVideoElements(html string) string {
 		// 无源的空 video → 隐藏
 		return strings.Replace(match, "<video", `<video style="display:none!important"`, 1)
 	})
+	return html
+}
+
+// removeLoadingOverlays 移除 SPA 的全屏 loading 覆盖层
+// 这些覆盖层在正常页面中由 JS 在加载完成后隐藏，但归档页面没有 JS，会永远遮挡内容
+// 例如 X.com 的 #placeholder（黑色背景 + X logo）和 #ScriptLoadFailure（错误提示）
+var (
+	openDivRe  = regexp.MustCompile(`(?i)<div\b`)
+	closeDivRe = regexp.MustCompile(`(?i)</div>`)
+)
+
+func removeLoadingOverlays(html string) string {
+	for _, id := range []string{"placeholder", "ScriptLoadFailure"} {
+		// Find the opening tag with this id
+		re := regexp.MustCompile(`(?i)<div\b[^>]*\bid="` + id + `"[^>]*>`)
+		loc := re.FindStringIndex(html)
+		if loc == nil {
+			continue
+		}
+		// Count nested divs to find the matching closing </div>
+		start := loc[0]
+		depth := 1
+		pos := loc[1]
+		for depth > 0 && pos < len(html) {
+			rest := html[pos:]
+			openLoc := openDivRe.FindStringIndex(rest)
+			closeLoc := closeDivRe.FindStringIndex(rest)
+			if closeLoc == nil {
+				break
+			}
+			if openLoc != nil && openLoc[0] < closeLoc[0] {
+				depth++
+				pos += openLoc[1]
+			} else {
+				depth--
+				pos += closeLoc[1]
+			}
+		}
+		if depth == 0 {
+			html = html[:start] + html[pos:]
+		}
+	}
 	return html
 }
