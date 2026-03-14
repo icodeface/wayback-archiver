@@ -49,11 +49,17 @@ func (a *AuthConfig) Enabled() bool {
 
 // LoadFromEnv loads configuration from environment variables with sensible defaults
 func LoadFromEnv() (*Config, error) {
+	// 默认使用当前系统用户名作为数据库用户（PostgreSQL 默认行为）
+	defaultUser := os.Getenv("USER")
+	if defaultUser == "" {
+		defaultUser = "postgres" // fallback for systems without USER env var
+	}
+
 	cfg := &Config{
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnvInt("DB_PORT", 5432),
-			User:     getEnv("DB_USER", "postgres"),
+			User:     getEnv("DB_USER", defaultUser),
 			Password: getEnv("DB_PASSWORD", ""),
 			DBName:   getEnv("DB_NAME", "wayback"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),

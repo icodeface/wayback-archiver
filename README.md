@@ -51,8 +51,10 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ PostgreSQL (m
 ### 1. Database Setup
 
 ```bash
-createdb -U postgres wayback
-psql -U postgres wayback < server/init_db.sql
+# PostgreSQL 默认使用当前系统用户名作为数据库用户
+# 如果你的系统用户名是 alice，以下命令等同于 createdb -U alice wayback
+createdb wayback
+psql wayback < server/init_db.sql
 ```
 
 ### 2. Start the Server
@@ -103,7 +105,7 @@ Environment variables (or `.env` file in `server/`):
 |---|---|---|
 | `DB_HOST` | `localhost` | PostgreSQL host |
 | `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_USER` | `postgres` | Database user |
+| `DB_USER` | `postgres` | Database user (PostgreSQL 默认使用系统用户名，建议不设置此变量) |
 | `DB_PASSWORD` | *(empty)* | Database password |
 | `DB_NAME` | `wayback` | Database name |
 | `DB_SSLMODE` | `disable` | SSL mode |

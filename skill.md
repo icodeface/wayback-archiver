@@ -37,9 +37,9 @@ Before using this skill, ensure the Wayback Archiver server is running:
 git clone https://github.com/icodeface/wayback-archiver.git
 cd wayback-archiver
 
-# Create database
-createdb -U postgres wayback
-psql -U postgres wayback < server/init_db.sql
+# Create database (PostgreSQL 默认使用当前系统用户名)
+createdb wayback
+psql wayback < server/init_db.sql
 ```
 
 ### 2. Start Server
@@ -205,7 +205,7 @@ Create `.env` file in `server/` directory:
 # Database
 DB_HOST=localhost
 DB_PORT=5432
-DB_USER=postgres
+DB_USER=postgres  # 可选，PostgreSQL 默认使用系统用户名
 DB_PASSWORD=
 DB_NAME=wayback
 DB_SSLMODE=disable
