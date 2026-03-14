@@ -155,7 +155,6 @@ func (db *DB) CreateResourceIfNotExists(url, hash, resourceType, filePath string
 	err := db.conn.QueryRow(`
 		INSERT INTO resources (url, content_hash, resource_type, file_path, file_size)
 		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (url) DO UPDATE SET last_seen = NOW()
 		RETURNING id
 	`, url, hash, resourceType, filePath, fileSize).Scan(&id)
 	return id, err
