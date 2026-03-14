@@ -5,10 +5,13 @@
 // (e.g. two retweets with identical outerHTML).
 
 const MAX_COLLECTED_SIZE = 5 * 1024 * 1024; // 5MB cap
+const MIN_NODE_SIZE = 2 * 1024; // Only collect nodes >= 2KB (filters out loading skeletons)
 
 export class DOMCollector {
   // parent CSS selector -> array of removed node outerHTML (duplicates allowed)
   private removed: Map<string, string[]> = new Map();
+  // Parallel arrays of text-based dedup keys for fast matching
+  private removedKeys: Map<string, string[]> = new Map();
   private totalSize = 0;
 
   handleMutations(mutations: MutationRecord[]): void {
@@ -18,6 +21,7 @@ export class DOMCollector {
       for (const node of Array.from(mutation.addedNodes)) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
         const html = (node as Element).outerHTML;
+        if (html.length < MIN_NODE_SIZE) continue;
         this.removeOneMatch(html);
       }
 
@@ -28,14 +32,20 @@ export class DOMCollector {
       for (const node of Array.from(mutation.removedNodes)) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
         const html = (node as Element).outerHTML;
+        // Skip small nodes (loading skeletons, placeholders) — real content is typically 2KB+
+        if (html.length < MIN_NODE_SIZE) continue;
         if (this.totalSize + html.length > MAX_COLLECTED_SIZE) continue;
 
         let arr = this.removed.get(parentSel);
+        let keys = this.removedKeys.get(parentSel);
         if (!arr) {
           arr = [];
+          keys = [];
           this.removed.set(parentSel, arr);
+          this.removedKeys.set(parentSel, keys);
         }
         arr.push(html);
+        keys!.push(this.textKey(html));
         this.totalSize += html.length;
       }
     }
@@ -48,31 +58,46 @@ export class DOMCollector {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     let merged = 0;
 
+    // Build a GLOBAL dedup map across all target parents
+    // This prevents duplicates even when the same node was collected under different parent selectors
+    // (nth-child indices shift as virtual scrolling adds/removes nodes)
+    const globalExisting = new Map<string, number>();
+    const parentElements = new Map<string, Element>();
+    for (const [selector] of this.removed) {
+      const parent = doc.querySelector(selector);
+      if (parent) {
+        parentElements.set(selector, parent);
+        for (const child of Array.from(parent.children)) {
+          const key = this.textKey(child.outerHTML);
+          if (key) {
+            globalExisting.set(key, (globalExisting.get(key) || 0) + 1);
+          }
+        }
+      }
+    }
+
+    const globalSkipped = new Map<string, number>();
+
     for (const [selector, collected] of this.removed) {
       if (collected.length === 0) continue;
-      const parent = doc.querySelector(selector);
+      const parent = parentElements.get(selector);
       if (!parent) continue;
 
-      // Build a count map of outerHTML already present in the parent
-      const existingCounts = new Map<string, number>();
-      for (const child of Array.from(parent.children)) {
-        const h = child.outerHTML;
-        existingCounts.set(h, (existingCounts.get(h) || 0) + 1);
-      }
-
-      // Track how many of each collected HTML we've already skipped (matched to existing)
-      const skippedCounts = new Map<string, number>();
-
       for (const nodeHTML of collected) {
-        const existCount = existingCounts.get(nodeHTML) || 0;
-        const skippedSoFar = skippedCounts.get(nodeHTML) || 0;
+        const key = this.textKey(nodeHTML);
+        if (!key) continue; // skip empty-text nodes
 
-        // Skip if this node is already present in the DOM and we haven't
-        // accounted for all existing copies yet
+        const existCount = globalExisting.get(key) || 0;
+        const skippedSoFar = globalSkipped.get(key) || 0;
+
         if (skippedSoFar < existCount) {
-          skippedCounts.set(nodeHTML, skippedSoFar + 1);
+          globalSkipped.set(key, skippedSoFar + 1);
           continue;
         }
+
+        // Only allow merging this key once — increment existing but NOT skipped,
+        // so subsequent duplicates see existCount > skippedSoFar and get skipped
+        globalExisting.set(key, existCount + 1);
 
         const tpl = doc.createElement('template');
         tpl.innerHTML = nodeHTML;
@@ -86,12 +111,60 @@ export class DOMCollector {
 
     if (merged > 0) {
       console.log(`[Wayback] Merged ${merged} removed nodes back into snapshot`);
+      // Fix virtual scroll layout: sort children by translateY and convert to normal flow
+      this.fixVirtualScrollLayout(doc);
     }
     return doc.documentElement.outerHTML;
   }
 
+  /**
+   * Virtual scroll containers use position:absolute + translateY to position children.
+   * After merging, we sort children by their translateY value and convert to static flow
+   * so the archived page renders correctly without the virtual scroll JS.
+   */
+  private fixVirtualScrollLayout(doc: Document): void {
+    // Find containers whose children use position:absolute + translateY
+    // (the parent typically has position:relative + large min-height)
+    const candidates = doc.querySelectorAll('[style*="position: relative"]');
+    for (const container of Array.from(candidates)) {
+      const children = Array.from(container.children) as HTMLElement[];
+      if (children.length < 2) continue;
+
+      // Check if children use translateY positioning
+      const withTranslateY = children.filter(c =>
+        c.style.position === 'absolute' && /translateY\([\d.]+px\)/.test(c.getAttribute('style') || '')
+      );
+      if (withTranslateY.length < children.length * 0.5) continue;
+
+      // Sort all children by translateY value
+      const sorted = children
+        .map(c => {
+          const match = (c.getAttribute('style') || '').match(/translateY\(([\d.]+)px\)/);
+          return { el: c, y: match ? parseFloat(match[1]) : 0 };
+        })
+        .sort((a, b) => a.y - b.y);
+
+      // Remove all children and re-append in sorted order
+      // Convert from absolute positioning to normal document flow
+      for (const { el } of sorted) {
+        el.style.position = 'static';
+        el.style.transform = 'none';
+        el.style.width = '100%';
+        container.appendChild(el);
+      }
+
+      // Remove the large min-height from the container
+      container.setAttribute('style',
+        (container.getAttribute('style') || '').replace(/min-height:\s*[\d.]+px;?/g, '')
+      );
+
+      console.log(`[Wayback] Fixed virtual scroll layout: ${sorted.length} children sorted`);
+    }
+  }
+
   clear(): void {
     this.removed.clear();
+    this.removedKeys.clear();
     this.totalSize = 0;
   }
 
@@ -101,16 +174,34 @@ export class DOMCollector {
     return n;
   }
 
-  /** Remove one matching entry from any parent's array. */
+  /** Remove one matching entry from any parent's array (style-insensitive). */
   private removeOneMatch(html: string): void {
-    for (const [, arr] of this.removed) {
-      const idx = arr.indexOf(html);
+    const key = this.textKey(html);
+    for (const [sel, keys] of this.removedKeys) {
+      const idx = keys.indexOf(key);
       if (idx !== -1) {
+        const arr = this.removed.get(sel)!;
+        this.totalSize -= arr[idx].length;
         arr.splice(idx, 1);
-        this.totalSize -= html.length;
+        keys.splice(idx, 1);
         return;
       }
     }
+  }
+
+  /** Extract a stable dedup key from HTML: text content + image sources.
+   *  This is immune to style/id/aria changes from virtual scroll re-renders. */
+  private textKey(html: string): string {
+    // Extract text (strip tags)
+    const text = html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    // Extract img src values for image-only nodes
+    const imgs: string[] = [];
+    const imgRe = /<img[^>]+src="([^"]+)"/g;
+    let m: RegExpExecArray | null;
+    while ((m = imgRe.exec(html)) !== null) {
+      imgs.push(m[1]);
+    }
+    return text + (imgs.length > 0 ? '\0' + imgs.join('\0') : '');
   }
 
   /** Build a CSS selector path for an element. */

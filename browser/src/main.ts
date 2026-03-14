@@ -40,8 +40,18 @@ function initializeArchiver(): void {
   const MAX_UPDATES = 1;
   let initialHTMLSize = 0; // Track initial capture size for update quality guard
 
-  // Collects nodes removed by virtual scrolling so we can merge them into the update snapshot
-  let domCollector: DOMCollector | null = null;
+  // Collects nodes removed by virtual scrolling so we can merge them into snapshots
+  // Started immediately so we never miss removals — MIN_NODE_SIZE filters out loading skeletons
+  const domCollector = new DOMCollector();
+  let collectorObserver: MutationObserver | null = new MutationObserver((mutations) => {
+    domCollector.handleMutations(mutations);
+  });
+  collectorObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: false,
+    characterData: false,
+  });
 
   // Track active DOM monitor so we can tear it down on SPA navigation
   let activeObserver: MutationObserver | null = null;
@@ -84,7 +94,14 @@ function initializeArchiver(): void {
       serializeCSSOMToDOM();
 
       // 在克隆 DOM 上内联布局样式，不影响原始页面显示
-      const html = inlineLayoutStyles();
+      let html = inlineLayoutStyles();
+
+      // Merge any nodes removed by virtual scrolling before/during capture
+      if (domCollector.collectedCount > 0) {
+        console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes into initial capture...`);
+        html = domCollector.mergeInto(html);
+      }
+
       captureData = {
         url: window.location.href,
         title: document.title,
@@ -138,8 +155,13 @@ function initializeArchiver(): void {
 
     console.log('[Wayback] Starting DOM change monitor...');
 
-    // Create a collector to accumulate nodes removed by virtual scrolling
-    domCollector = new DOMCollector();
+    // Disconnect the collector-only observer — the new monitor observer takes over feeding domCollector
+    if (collectorObserver) {
+      collectorObserver.disconnect();
+      collectorObserver = null;
+    }
+    // Do NOT clear domCollector — it may contain nodes removed between initial capture and now
+    // (e.g. the main tweet scrolled out during sendCapture's network request)
 
     let mutationCount = 0;
     let debounceTimer: number | null = null;
@@ -150,7 +172,7 @@ function initializeArchiver(): void {
       mutationCount += mutations.length;
 
       // Feed every mutation to the collector so it tracks removed/re-added nodes
-      domCollector?.handleMutations(mutations);
+      domCollector.handleMutations(mutations);
 
       if (debounceTimer) {
         nativeClearTimeout(debounceTimer);
@@ -181,7 +203,7 @@ function initializeArchiver(): void {
             let newHTML = inlineLayoutStyles();
 
             // Merge any nodes that were removed by virtual scrolling back into the snapshot
-            if (domCollector && domCollector.collectedCount > 0) {
+            if (domCollector.collectedCount > 0) {
               console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes...`);
               newHTML = domCollector.mergeInto(newHTML);
             }
@@ -232,10 +254,20 @@ function initializeArchiver(): void {
     hasArchived = false;
     currentPageId = null;
     updateCount = 0;
-    if (domCollector) {
-      domCollector.clear();
-      domCollector = null;
+    // Restart collector for the new page
+    if (collectorObserver) {
+      collectorObserver.disconnect();
     }
+    domCollector.clear();
+    collectorObserver = new MutationObserver((mutations) => {
+      domCollector.handleMutations(mutations);
+    });
+    collectorObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: false,
+      characterData: false,
+    });
   }
 
   // Start capture after initial delay
