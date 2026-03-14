@@ -32,32 +32,6 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 		}
 	}
 
-	// 提取 <link rel="stylesheet" href="...">
-	cssRegex := regexp.MustCompile(`<link[^>]+rel=["']stylesheet["'][^>]+href=["']([^"']+)["']`)
-	matches = cssRegex.FindAllStringSubmatch(html, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			rawURL := htmlpkg.UnescapeString(match[1])
-			fullURL := e.resolveURL(rawURL, pageURL)
-			if e.isExternalURL(fullURL) {
-				resources[fullURL] = ResourceRef{URL: fullURL, Type: "css"}
-			}
-		}
-	}
-
-	// 提取 <link href="..." rel="stylesheet">（顺序相反）
-	cssRegex2 := regexp.MustCompile(`<link[^>]+href=["']([^"']+)["'][^>]+rel=["']stylesheet["']`)
-	matches = cssRegex2.FindAllStringSubmatch(html, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			rawURL := htmlpkg.UnescapeString(match[1])
-			fullURL := e.resolveURL(rawURL, pageURL)
-			if e.isExternalURL(fullURL) {
-				resources[fullURL] = ResourceRef{URL: fullURL, Type: "css"}
-			}
-		}
-	}
-
 	// 提取 <script src="...">
 	jsRegex := regexp.MustCompile(`<script[^>]+src=["']([^"']+)["']`)
 	matches = jsRegex.FindAllStringSubmatch(html, -1)
@@ -71,54 +45,58 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 		}
 	}
 
-	// 提取 <link rel="preload" as="font" href="..."> 和 <link rel="preload" href="..." as="font">
-	fontRegex := regexp.MustCompile(`<link[^>]+rel=["']preload["'][^>]+as=["']font["'][^>]+href=["']([^"']+)["']`)
-	matches = fontRegex.FindAllStringSubmatch(html, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			rawURL := htmlpkg.UnescapeString(match[1])
-			fullURL := e.resolveURL(rawURL, pageURL)
-			if e.isExternalURL(fullURL) {
-				resources[fullURL] = ResourceRef{URL: fullURL, Type: "font"}
-			}
-		}
-	}
+	// 统一提取所有 <link> 标签中的资源
+	// 先匹配每个 <link ...> 标签，再从中解析 rel 和所有 *href= 属性
+	linkTagRegex := regexp.MustCompile(`<link[^>]+>`)
+	relAttrRegex := regexp.MustCompile(`\srel=["']([^"']+)["']`)
+	asAttrRegex := regexp.MustCompile(`\sas=["']([^"']+)["']`)
+	hrefAttrRegex := regexp.MustCompile(`\shref=["']([^"']+)["']`)
 
-	// 提取 <link rel="preload" href="..." as="font">（顺序相反）
-	fontRegex2 := regexp.MustCompile(`<link[^>]+rel=["']preload["'][^>]+href=["']([^"']+)["'][^>]+as=["']font["']`)
-	matches = fontRegex2.FindAllStringSubmatch(html, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			rawURL := htmlpkg.UnescapeString(match[1])
-			fullURL := e.resolveURL(rawURL, pageURL)
-			if e.isExternalURL(fullURL) {
-				resources[fullURL] = ResourceRef{URL: fullURL, Type: "font"}
-			}
+	linkTags := linkTagRegex.FindAllString(html, -1)
+	for _, tag := range linkTags {
+		relMatch := relAttrRegex.FindStringSubmatch(tag)
+		if relMatch == nil {
+			continue
 		}
-	}
+		rel := strings.ToLower(relMatch[1])
 
-	// 提取 <link rel="icon" href="...">
-	iconRegex := regexp.MustCompile(`<link[^>]+rel=["']icon["'][^>]+href=["']([^"']+)["']`)
-	matches = iconRegex.FindAllStringSubmatch(html, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			rawURL := htmlpkg.UnescapeString(match[1])
-			fullURL := e.resolveURL(rawURL, pageURL)
-			if e.isExternalURL(fullURL) {
-				resources[fullURL] = ResourceRef{URL: fullURL, Type: "image"}
+		// 根据 rel 判断资源类型
+		var resType string
+		switch {
+		case strings.Contains(rel, "stylesheet"):
+			resType = "css"
+		case strings.Contains(rel, "icon"):
+			resType = "image"
+		case strings.Contains(rel, "preload"):
+			asMatch := asAttrRegex.FindStringSubmatch(tag)
+			if asMatch == nil {
+				continue
 			}
+			switch strings.ToLower(asMatch[1]) {
+			case "font":
+				resType = "font"
+			case "image":
+				resType = "image"
+			case "style":
+				resType = "css"
+			case "script":
+				resType = "js"
+			default:
+				continue
+			}
+		default:
+			continue
 		}
-	}
 
-	// 提取 <link href="..." rel="icon">（顺序相反）
-	iconRegex2 := regexp.MustCompile(`<link[^>]+href=["']([^"']+)["'][^>]+rel=["']icon["']`)
-	matches = iconRegex2.FindAllStringSubmatch(html, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			rawURL := htmlpkg.UnescapeString(match[1])
-			fullURL := e.resolveURL(rawURL, pageURL)
-			if e.isExternalURL(fullURL) {
-				resources[fullURL] = ResourceRef{URL: fullURL, Type: "image"}
+		// 提取标签中所有 *href= 的值
+		hrefMatches := hrefAttrRegex.FindAllStringSubmatch(tag, -1)
+		for _, m := range hrefMatches {
+			if len(m) > 1 {
+				rawURL := htmlpkg.UnescapeString(m[1])
+				fullURL := e.resolveURL(rawURL, pageURL)
+				if e.isExternalURL(fullURL) {
+					resources[fullURL] = ResourceRef{URL: fullURL, Type: resType}
+				}
 			}
 		}
 	}
