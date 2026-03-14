@@ -220,6 +220,23 @@ func (db *DB) GetResourceByURL(url string) (*models.Resource, error) {
 	return &r, nil
 }
 
+// GetResourceByURLLike 根据 URL 模糊匹配查找资源（如忽略查询参数差异）
+func (db *DB) GetResourceByURLLike(pattern string) (*models.Resource, error) {
+	var r models.Resource
+	err := db.conn.QueryRow(
+		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE url LIKE $1 ORDER BY last_seen DESC LIMIT 1",
+		pattern,
+	).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
 // ListPages 列出页面（分页，支持时间和域名过滤）
 func (db *DB) ListPages(limit, offset int, from, to *time.Time, domain string) ([]models.Page, error) {
 	query := "SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited, created_at FROM pages"

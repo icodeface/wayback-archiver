@@ -261,6 +261,26 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 		}
 	}
 
+	// 最后兜底：忽略 pageID 限制，按 URL 路径全局查找（处理兜底逻辑重写的未关联资源）
+	if resource == nil {
+		urlPath := originalURL
+		if idx := strings.IndexByte(urlPath, '?'); idx != -1 {
+			urlPath = urlPath[:idx]
+		}
+		// 直接查 resources 表，不限定 page_resources 关联
+		resource, err = h.db.GetResourceByURL(urlPath)
+		if err != nil {
+			log.Printf("[Proxy] Database error (global path): %v", err)
+		}
+		// 如果还是找不到，尝试模糊匹配（URL 可能带查询参数）
+		if resource == nil {
+			resource, err = h.db.GetResourceByURLLike(urlPath + "%")
+			if err != nil {
+				log.Printf("[Proxy] Database error (global like): %v", err)
+			}
+		}
+	}
+
 	if resource == nil {
 		log.Printf("[Proxy] Resource not found: %s", originalURL)
 		c.String(http.StatusNotFound, "Resource not found")
