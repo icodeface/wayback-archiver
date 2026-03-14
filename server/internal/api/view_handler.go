@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -10,10 +12,21 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"wayback/internal/models"
 )
+
+// generateNonce 生成随机 CSP nonce（128 位，base64 编码）
+func generateNonce() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// 降级到时间戳（不应该发生，但提供回退）
+		return fmt.Sprintf("nonce-%d", time.Now().UnixNano())
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
 
 // validateResourcePath 验证资源路径，防止目录穿越攻击
 // 返回清理后的安全路径，如果路径试图逃逸出 baseDir 则返回错误
@@ -123,7 +136,8 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	modifiedHTML = fixNestedButtons(modifiedHTML)
 
 	// 注入归档信息栏（传入 nonce 用于 CSP）
-	nonce := "wayback-fix-positioning"
+	// 生成随机 nonce，防止归档页面中的恶意脚本绕过 CSP
+	nonce := generateNonce()
 	modifiedHTML = injectArchiveHeader(modifiedHTML, page, prev, next, snapshotTotal, nonce)
 
 	// 设置安全响应头（允许带 nonce 的内联脚本，用于修复定位问题）
