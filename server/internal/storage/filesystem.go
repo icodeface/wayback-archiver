@@ -2,7 +2,6 @@ package storage
 
 import (
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -20,10 +19,8 @@ type FileStorage struct {
 }
 
 func NewFileStorage(baseDir string) *FileStorage {
-	// 创建 HTTP 客户端，跳过 TLS 证书校验，支持代理
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
+	// 创建 HTTP 客户端，支持代理
+	transport := &http.Transport{}
 
 	// 检查是否设置了代理环境变量
 	if proxyURL := os.Getenv("https_proxy"); proxyURL != "" {

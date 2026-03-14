@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,51 @@ import (
 	"github.com/gin-gonic/gin"
 	"wayback/internal/models"
 )
+
+// validateResourcePath 验证资源路径，防止目录穿越攻击
+// 返回清理后的安全路径，如果路径试图逃逸出 baseDir 则返回错误
+func validateResourcePath(baseDir, resourcePath string) (string, error) {
+	// 拒绝绝对路径
+	if filepath.IsAbs(resourcePath) {
+		return "", errors.New("absolute paths are not allowed")
+	}
+
+	// 清理路径，移除 ../ 等相对路径元素
+	cleanPath := filepath.Clean(resourcePath)
+
+	// 检查清理后的路径是否仍包含 .. （说明试图向上遍历）
+	if strings.HasPrefix(cleanPath, "..") || strings.Contains(cleanPath, string(filepath.Separator)+"..") {
+		return "", errors.New("path traversal attempt detected")
+	}
+
+	// 构建完整路径
+	fullPath := filepath.Join(baseDir, cleanPath)
+
+	// 获取绝对路径（解析所有符号链接）
+	absFullPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve absolute path: %w", err)
+	}
+
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve base directory: %w", err)
+	}
+
+	// 检查解析后的路径是否在 baseDir 内
+	// 使用 filepath.Rel 检查相对关系
+	relPath, err := filepath.Rel(absBaseDir, absFullPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to compute relative path: %w", err)
+	}
+
+	// 如果相对路径以 .. 开头，说明试图逃逸出 baseDir
+	if strings.HasPrefix(relPath, "..") || strings.HasPrefix(relPath, string(filepath.Separator)) {
+		return "", errors.New("path traversal attempt detected")
+	}
+
+	return absFullPath, nil
+}
 
 // ViewPage 查看归档页面（静态快照模式，禁用JavaScript）
 func (h *Handler) ViewPage(c *gin.Context) {
@@ -116,17 +162,27 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 
 	// 检查是否是本地资源路径（以 resources/ 开头）
 	if strings.HasPrefix(originalURL, "resources/") {
-		// 直接读取本地文件
-		filePath := filepath.Join(h.dataDir, originalURL)
-		content, err := os.ReadFile(filePath)
+		// 提取 resources/ 后面的路径部分
+		resourcePath := strings.TrimPrefix(originalURL, "resources/")
+
+		// 验证路径，防止目录穿越攻击（确保路径在 resources/ 目录内）
+		resourcesDir := filepath.Join(h.dataDir, "resources")
+		safePath, err := validateResourcePath(resourcesDir, resourcePath)
 		if err != nil {
-			log.Printf("[Proxy] Failed to read local file %s: %v", filePath, err)
+			log.Printf("[Proxy] Path validation failed for %s: %v", originalURL, err)
+			c.String(http.StatusForbidden, "Invalid resource path")
+			return
+		}
+
+		content, err := os.ReadFile(safePath)
+		if err != nil {
+			log.Printf("[Proxy] Failed to read local file %s: %v", safePath, err)
 			c.String(http.StatusNotFound, "Resource not found")
 			return
 		}
 
 		// 根据文件扩展名检测 Content-Type
-		contentType := detectContentTypeByPath(filePath)
+		contentType := detectContentTypeByPath(safePath)
 		c.Header("Content-Type", contentType)
 		c.Header("Cache-Control", "public, max-age=31536000")
 
@@ -427,15 +483,23 @@ func fixNestedButtons(html string) string {
 // 路由格式: /archive/resources/*filepath
 func (h *Handler) ServeLocalResource(c *gin.Context) {
 	resourcePath := strings.TrimPrefix(c.Param("filepath"), "/")
-	filePath := filepath.Join(h.dataDir, "resources", resourcePath)
 
-	content, err := os.ReadFile(filePath)
+	// 验证路径，防止目录穿越攻击
+	resourcesDir := filepath.Join(h.dataDir, "resources")
+	safePath, err := validateResourcePath(resourcesDir, resourcePath)
+	if err != nil {
+		log.Printf("[ServeLocalResource] Path validation failed for %s: %v", resourcePath, err)
+		c.String(http.StatusForbidden, "Invalid resource path")
+		return
+	}
+
+	content, err := os.ReadFile(safePath)
 	if err != nil {
 		c.String(http.StatusNotFound, "Resource not found")
 		return
 	}
 
-	contentType := detectContentTypeByPath(filePath)
+	contentType := detectContentTypeByPath(safePath)
 	c.Header("Content-Type", contentType)
 	c.Header("Cache-Control", "public, max-age=31536000")
 	c.Data(http.StatusOK, contentType, content)
