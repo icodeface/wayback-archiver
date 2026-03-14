@@ -112,6 +112,7 @@ The server automatically loads `.env` file if it exists. You can also set enviro
 | `DB_PASSWORD` | *(empty)* | Database password |
 | `DB_NAME` | `wayback` | Database name |
 | `DB_SSLMODE` | `disable` | SSL mode |
+| `SERVER_HOST` | `127.0.0.1` | Server bind address (`0.0.0.0` = all interfaces, `127.0.0.1` = localhost only) |
 | `SERVER_PORT` | `8080` | HTTP server port |
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
 | `LOG_DIR` | `./data/logs` | Log file directory |

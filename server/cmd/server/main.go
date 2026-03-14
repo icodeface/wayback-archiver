@@ -61,8 +61,9 @@ func main() {
 	api.SetupRoutes(r, handler, &cfg.Auth)
 
 	// 启动服务器
-	log.Printf("Server starting on port %d", cfg.Server.Port)
-	if err := r.Run(fmt.Sprintf(":%d", cfg.Server.Port)); err != nil {
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	log.Printf("Server starting on %s", addr)
+	if err := r.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }

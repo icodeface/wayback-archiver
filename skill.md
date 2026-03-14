@@ -214,6 +214,7 @@ DB_NAME=wayback
 DB_SSLMODE=disable
 
 # Server
+SERVER_HOST=0.0.0.0  # 默认 127.0.0.1，设置 0.0.0.0 监听所有网卡
 SERVER_PORT=8080
 
 # Storage
