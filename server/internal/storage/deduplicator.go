@@ -214,6 +214,7 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	rewriter := NewURLRewriter()
 	rewriter.SetPageID(pageID)
 	rewriter.SetTimestamp(timestamp)
+	rewriter.SetBaseURL(req.URL)
 
 	var resourceIDs []int64
 	cssURLMapping := make(map[string]string) // CSS URL -> local path mapping
@@ -477,6 +478,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	rewriter := NewURLRewriter()
 	rewriter.SetPageID(pageID)
 	rewriter.SetTimestamp(timestamp)
+	rewriter.SetBaseURL(req.URL)
 
 	var resourceIDs []int64
 	cssURLMapping := make(map[string]string)
