@@ -275,3 +275,37 @@ func TestRewriteHTML_MultiValueSrcsetOnImg(t *testing.T) {
 		t.Errorf("should not contain unrewritten relative paths, got: %s", result)
 	}
 }
+
+// TestRewriteHTML_UnmappedAbsolutePaths 测试兜底逻辑：重写未映射的绝对路径
+func TestRewriteHTML_UnmappedAbsolutePaths(t *testing.T) {
+	r := newTestRewriter(48, "20260314043758", map[string]string{
+		"https://v2ex.com/assets/c7e730da4976f02d5012a1303a2c9d7f929049c6-combo.css?t=1773462600": "resources/ab/cd/hash.css",
+	})
+	r.SetBaseURL("https://v2ex.com")
+
+	// HTML 中包含一个未映射的绝对路径（时间戳不同）
+	html := `<link rel="stylesheet" href="/assets/c7e730da4976f02d5012a1303a2c9d7f929049c6-combo.css?t=177346860">`
+	result := r.RewriteHTML(html)
+
+	// 应该被重写为归档路径（即使不在映射表中）
+	expected := `/archive/48/20260314043758mp_/https://v2ex.com/assets/c7e730da4976f02d5012a1303a2c9d7f929049c6-combo.css?t=177346860`
+	if !strings.Contains(result, expected) {
+		t.Errorf("unmapped absolute path should be rewritten, expected: %s, got: %s", expected, result)
+	}
+}
+
+// TestRewriteHTML_UnmappedAbsolutePathsInStyle 测试 style 标签中的未映射路径
+func TestRewriteHTML_UnmappedAbsolutePathsInStyle(t *testing.T) {
+	r := newTestRewriter(22, "20260314043758", map[string]string{})
+	r.SetBaseURL("https://example.com")
+
+	// style 标签中包含未映射的绝对路径
+	html := `<style>body { background: url(/images/bg.png); }</style>`
+	result := r.RewriteHTML(html)
+
+	// 应该被重写为归档路径
+	expected := `url("/archive/22/20260314043758mp_/https://example.com/images/bg.png")`
+	if !strings.Contains(result, expected) {
+		t.Errorf("unmapped absolute path in style should be rewritten, expected: %s, got: %s", expected, result)
+	}
+}

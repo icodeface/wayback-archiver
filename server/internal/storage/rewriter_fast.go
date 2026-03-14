@@ -190,6 +190,88 @@ func (r *URLRewriter) RewriteHTMLFast(html string) string {
 	// strings.NewReplacer 只能匹配 srcset="<单个URL>"，无法处理逗号分隔的多值
 	html = r.rewriteMultiValueSrcset(html)
 
+	// 7. 兜底：重写所有未被替换的绝对路径（如 /assets/...）
+	// 这些路径可能是动态生成的，或者在资源提取时被遗漏
+	// 将它们重写为归档路径格式，让服务器的 view handler 处理
+	if r.pageID > 0 && r.timestamp != "" {
+		html = r.rewriteUnmappedAbsolutePaths(html)
+	}
+
+	return html
+}
+
+// rewriteUnmappedAbsolutePaths 重写所有未被映射的绝对路径
+// 这是一个兜底机制，用于处理动态生成或遗漏的资源引用
+func (r *URLRewriter) rewriteUnmappedAbsolutePaths(html string) string {
+	// 从 baseURL 中提取域名（如果设置了的话）
+	var baseHost string
+	if r.baseURL != "" {
+		if parsed, err := url.Parse(r.baseURL); err == nil {
+			baseHost = parsed.Scheme + "://" + parsed.Host
+		}
+	}
+
+	// 匹配所有以 / 开头的绝对路径（但不是 /archive/ 开头的，避免重复替换）
+	// 支持 src/href/poster/srcset 属性和 url() 引用
+	patterns := []struct {
+		regex *regexp.Regexp
+		repl  func(string) string
+	}{
+		{
+			// src="/path" 或 href="/path" 或 poster="/path"
+			regex: regexp.MustCompile(`(\s(?:src|href|poster|srcset))="(/[^"]+)"`),
+			repl: func(match string) string {
+				sub := regexp.MustCompile(`(\s(?:src|href|poster|srcset))="(/[^"]+)"`).FindStringSubmatch(match)
+				if len(sub) < 3 {
+					return match
+				}
+				attr := sub[1]
+				path := sub[2]
+				// 跳过已经是归档路径的
+				if strings.HasPrefix(path, "/archive/") {
+					return match
+				}
+				// 如果有 baseHost，构建完整 URL；否则只用路径
+				var fullURL string
+				if baseHost != "" {
+					fullURL = baseHost + path
+				} else {
+					fullURL = path
+				}
+				localURL := fmt.Sprintf("/archive/%d/%smp_/%s", r.pageID, r.timestamp, fullURL)
+				return attr + `="` + localURL + `"`
+			},
+		},
+		{
+			// url("/path") 或 url('/path') 或 url(/path)
+			regex: regexp.MustCompile(`url\(["']?(/[^"')]+)["']?\)`),
+			repl: func(match string) string {
+				sub := regexp.MustCompile(`url\(["']?(/[^"')]+)["']?\)`).FindStringSubmatch(match)
+				if len(sub) < 2 {
+					return match
+				}
+				path := sub[1]
+				// 跳过已经是归档路径的
+				if strings.HasPrefix(path, "/archive/") {
+					return match
+				}
+				// 如果有 baseHost，构建完整 URL；否则只用路径
+				var fullURL string
+				if baseHost != "" {
+					fullURL = baseHost + path
+				} else {
+					fullURL = path
+				}
+				localURL := fmt.Sprintf("/archive/%d/%smp_/%s", r.pageID, r.timestamp, fullURL)
+				return `url("` + localURL + `")`
+			},
+		},
+	}
+
+	for _, p := range patterns {
+		html = p.regex.ReplaceAllStringFunc(html, p.repl)
+	}
+
 	return html
 }
 
