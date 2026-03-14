@@ -46,6 +46,7 @@ psql wayback < server/init_db.sql
 
 ```bash
 cd server
+cp .env.example .env   # 可选，也可以直接使用环境变量
 go build -o wayback-server ./cmd/server
 ./wayback-server
 ```
@@ -199,7 +200,9 @@ cd tests/server && node test_update_feature.js
 
 ## Configuration
 
-Create `.env` file in `server/` directory:
+Create `.env` file in `server/` directory (or set environment variables directly):
+
+The server automatically loads `.env` file if it exists.
 
 ```bash
 # Database

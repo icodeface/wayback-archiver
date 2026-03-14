@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"wayback/internal/api"
 	"wayback/internal/config"
 	"wayback/internal/database"
@@ -13,6 +14,10 @@ import (
 )
 
 func main() {
+	// 加载 .env 文件（如果存在）
+	// 忽略错误，因为 .env 文件是可选的（可以直接使用环境变量）
+	_ = godotenv.Load()
+
 	// 加载配置
 	cfg, err := config.LoadFromEnv()
 	if err != nil {

@@ -61,7 +61,8 @@ psql wayback < server/init_db.sql
 
 ```bash
 cd server
-cp .env.example .env   # edit as needed
+cp .env.example .env   # 复制配置文件（可选，也可以直接使用环境变量）
+# 编辑 .env 文件根据需要修改配置
 go build -o wayback-server ./cmd/server
 ./wayback-server
 ```
@@ -99,7 +100,9 @@ That's it. Pages are automatically archived as soon as they load. Open `http://l
 
 ## Configuration
 
-Environment variables (or `.env` file in `server/`):
+Environment variables (or `.env` file in `server/` directory):
+
+The server automatically loads `.env` file if it exists. You can also set environment variables directly.
 
 | Variable | Default | Description |
 |---|---|---|
