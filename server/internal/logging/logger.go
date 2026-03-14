@@ -134,6 +134,7 @@ func (l *Logger) rotate() error {
 	l.writer = &sizeTrackingWriter{
 		writer: f,
 		size:   &l.curSize,
+		mu:     &l.mu,
 	}
 
 	// Redirect stdlib log and gin to both stdout and file
@@ -153,12 +154,15 @@ func (l *Logger) getFilename(date string, seq int) string {
 type sizeTrackingWriter struct {
 	writer io.Writer
 	size   *int64
+	mu     *sync.Mutex
 }
 
 func (w *sizeTrackingWriter) Write(p []byte) (n int, err error) {
 	n, err = w.writer.Write(p)
 	if n > 0 {
+		w.mu.Lock()
 		*w.size += int64(n)
+		w.mu.Unlock()
 	}
 	return
 }
