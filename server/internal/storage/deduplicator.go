@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +34,7 @@ type Deduplicator struct {
 	cssParser     *CSSParser
 	htmlExtractor *HTMLResourceExtractor
 	cache         sync.Map // url -> *resourceCacheEntry
+	deletionQueue *DeletionQueue
 }
 
 func NewDeduplicator(db *database.DB, storage *FileStorage) *Deduplicator {
@@ -40,6 +43,7 @@ func NewDeduplicator(db *database.DB, storage *FileStorage) *Deduplicator {
 		storage:       storage,
 		cssParser:     NewCSSParser(),
 		htmlExtractor: NewHTMLResourceExtractor(),
+		deletionQueue: NewDeletionQueue(storage.baseDir),
 	}
 }
 
@@ -409,11 +413,12 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 }
 
 // UpdateCapture 更新已存在页面的捕获内容
+// 策略：更新 page 记录的 html_path 和 content_hash，旧 HTML 文件加入删除队列（7 天后自动删除）
 func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (string, error) {
 	startTime := time.Now()
 	log.Printf("[Update] Starting update for page %d", pageID)
 
-	// 1. 获取现有页面信息
+	// 1. 获取现有页面信息（用于继承 first_visited）
 	page, err := d.db.GetPageByID(fmt.Sprintf("%d", pageID))
 	if err != nil || page == nil {
 		return "", fmt.Errorf("page not found: %d", pageID)
@@ -433,7 +438,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 
 	capturedAt := time.Now()
-	oldHTMLPath := page.HTMLPath
+	oldHTMLPath := page.HTMLPath // 保存旧路径用于日志记录
 
 	// 4. 删除旧的页面资源关联
 	if err := d.db.DeletePageResources(pageID); err != nil {
@@ -667,14 +672,15 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		}
 	}
 
-	// 删除旧 HTML 文件（DB 已指向新文件，此时删除安全）
+	// 将旧 HTML 文件加入删除队列（保留 7 天后自动删除）
 	if oldHTMLPath != tempHTMLPath {
-		if err := d.storage.DeleteHTML(oldHTMLPath); err != nil {
-			log.Printf("Failed to delete old HTML: %v", err)
+		if err := d.deletionQueue.Add(oldHTMLPath, pageID); err != nil {
+			log.Printf("[Update] Failed to add old HTML to deletion queue: %v", err)
 		}
 	}
 
-	log.Printf("[Update] Page updated (ID: %d, hash: %s, %d resources, %v)", pageID, newContentHash[:16], len(resourceIDs), time.Since(startTime))
+	log.Printf("[Update] Page updated (ID: %d, old_hash: %s, new_hash: %s, old_html: %s, new_html: %s, %d resources, %v)",
+		pageID, page.ContentHash[:16], newContentHash[:16], oldHTMLPath, tempHTMLPath, len(resourceIDs), time.Since(startTime))
 	return models.ArchiveActionUpdated, nil
 }
 
@@ -725,3 +731,53 @@ func (d *Deduplicator) guessResourceType(url string) string {
 
 	return "other"
 }
+
+// CleanupOldHTML processes the deletion queue and removes HTML files older than retentionDays
+func (d *Deduplicator) CleanupOldHTML(retentionDays int) error {
+	if retentionDays <= 0 {
+		return fmt.Errorf("retention days must be positive")
+	}
+
+	deletedCount, err := d.deletionQueue.ProcessDeletions(d.storage.baseDir, retentionDays)
+	if err != nil {
+		return fmt.Errorf("failed to process deletion queue: %w", err)
+	}
+
+	if deletedCount > 0 {
+		log.Printf("[cleanup] removed %d old HTML files from deletion queue", deletedCount)
+	} else {
+		log.Printf("[cleanup] no old HTML files to remove from deletion queue")
+	}
+
+	// Clean up empty directories
+	htmlDir := filepath.Join(d.storage.baseDir, "html")
+	d.cleanupEmptyDirs(htmlDir)
+
+	return nil
+}
+
+// cleanupEmptyDirs removes empty directories recursively
+func (d *Deduplicator) cleanupEmptyDirs(root string) {
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || !info.IsDir() || path == root {
+			return nil
+		}
+
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return nil
+		}
+
+		if len(entries) == 0 {
+			os.Remove(path)
+		}
+
+		return nil
+	})
+}
+
+// AddHTMLToDeletionQueue 将 HTML 文件加入删除队列（供外部调用）
+func (d *Deduplicator) AddHTMLToDeletionQueue(htmlPath string, pageID int64) error {
+	return d.deletionQueue.Add(htmlPath, pageID)
+}
+

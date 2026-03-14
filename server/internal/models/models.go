@@ -11,6 +11,8 @@ type Page struct {
 	ContentHash  string    `json:"content_hash"`
 	FirstVisited time.Time `json:"first_visited"`
 	LastVisited  time.Time `json:"last_visited"`
+	BodyText     string    `json:"body_text,omitempty"`
+	Domain       string    `json:"domain,omitempty"`
 }
 
 type Resource struct {

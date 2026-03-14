@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -51,6 +52,28 @@ func main() {
 
 	// 初始化去重器
 	dedup := storage.NewDeduplicator(db, fileStorage)
+
+	// 清理旧的孤立 HTML 文件（启动时执行一次）
+	const htmlRetentionDays = 7 // 保留 7 天的旧 HTML 文件
+	log.Printf("Cleaning up old HTML files older than %d days...", htmlRetentionDays)
+	if err := dedup.CleanupOldHTML(htmlRetentionDays); err != nil {
+		log.Printf("Warning: HTML cleanup failed: %v", err)
+	}
+
+	// 启动后台 goroutine 定期清理孤立 HTML 文件（每天午夜执行）
+	go func() {
+		for {
+			now := time.Now()
+			// 计算到下一个午夜的时间
+			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 1, 0, now.Location())
+			time.Sleep(next.Sub(now))
+
+			log.Printf("Running scheduled HTML cleanup...")
+			if err := dedup.CleanupOldHTML(htmlRetentionDays); err != nil {
+				log.Printf("Warning: scheduled HTML cleanup failed: %v", err)
+			}
+		}
+	}()
 
 	// 初始化 API 处理器
 	handler := api.NewHandler(dedup, db, cfg.Storage.DataDir, logger)

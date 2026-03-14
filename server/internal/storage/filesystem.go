@@ -360,3 +360,11 @@ func getExtension(resourceType string) string {
 		return ".bin"
 	}
 }
+
+// ReadHTML reads an HTML file content
+func (fs *FileStorage) ReadHTML(relPath string) ([]byte, error) {
+	filePath := filepath.Join(fs.baseDir, relPath)
+	return os.ReadFile(filePath)
+}
+
+

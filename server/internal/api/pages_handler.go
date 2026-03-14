@@ -159,6 +159,13 @@ func (h *Handler) DeletePage(c *gin.Context) {
 		return
 	}
 
+	// 将 HTML 文件加入删除队列（7 天后自动删除）
+	if page.HTMLPath != "" {
+		if err := h.dedup.AddHTMLToDeletionQueue(page.HTMLPath, pageID); err != nil {
+			log.Printf("Failed to add HTML to deletion queue for page %s: %v", id, err)
+		}
+	}
+
 	log.Printf("Deleted page: %s (%s)", id, page.URL)
 	c.JSON(http.StatusOK, gin.H{"status": "success"})
 }
