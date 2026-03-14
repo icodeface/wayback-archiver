@@ -81,8 +81,17 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 		data, hash, err = d.storage.DownloadResource(url, pageURL, headers)
 		if err != nil {
 			log.Printf("Download failed for %s: %v, trying fallback", url, err)
-			// 兜底：查找最近一次成功下载的相同 URL 资源
+			// 兜底1：查找最近一次成功下载的相同 URL 资源
 			existing, dbErr := d.db.GetResourceByURL(url)
+			// 兜底2：如果精确 URL 找不到，按路径匹配（忽略查询参数差异）
+			// 场景：HTML 中引用 /assets/combo.css?t=177346860，但 DB 中存的是 ?t=1773462600
+			if (dbErr != nil || existing == nil) && strings.Contains(url, "?") {
+				urlPath := url[:strings.IndexByte(url, '?')]
+				existing, dbErr = d.db.GetResourceByURLLike(urlPath + "%")
+				if existing != nil {
+					log.Printf("Fallback: found resource by URL path match: %s -> %s", url, existing.URL)
+				}
+			}
 			if dbErr != nil || existing == nil {
 				return 0, nil, fmt.Errorf("download failed and no fallback: %w", err)
 			}

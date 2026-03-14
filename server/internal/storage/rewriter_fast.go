@@ -215,12 +215,47 @@ func (r *URLRewriter) rewriteUnmappedAbsolutePaths(html string) string {
 	baseHost := parsed.Scheme + "://" + parsed.Host
 
 	// 预编译正则（避免在闭包内重复编译）
-	attrRe := regexp.MustCompile(`(\s(?:src|href|poster|srcset))="(/[^"]+)"`)
+	// 绝对路径：以单个 / 开头，但不是 // 开头（协议相对 URL）
+	attrDQ := regexp.MustCompile(`(\s(?:src|href|poster|srcset))="(/[^"/][^"]*)"`)
+	attrSQ := regexp.MustCompile(`(\s(?:src|href|poster|srcset))='(/[^'/][^']*)'`)
+	protoRelDQ := regexp.MustCompile(`(\s(?:src|href|poster|srcset))="(//[^"]+)"`)
+	protoRelSQ := regexp.MustCompile(`(\s(?:src|href|poster|srcset))='(//[^']+)'`)
 	urlRe := regexp.MustCompile(`url\(["']?(/[^"')]+)["']?\)`)
 
-	// 1. 重写 src/href/poster/srcset 属性中的绝对路径
-	html = attrRe.ReplaceAllStringFunc(html, func(match string) string {
-		sub := attrRe.FindStringSubmatch(match)
+	// 1. 先处理协议相对 URL（如 //cdn.example.com/path）（双引号）
+	html = protoRelDQ.ReplaceAllStringFunc(html, func(match string) string {
+		sub := protoRelDQ.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		attr := sub[1]
+		p := sub[2]
+		if strings.HasPrefix(p, "//archive/") {
+			return match
+		}
+		// 协议相对 URL 补全为 https
+		localURL := fmt.Sprintf("/archive/%d/%smp_/https:%s", r.pageID, r.timestamp, p)
+		return attr + `="` + localURL + `"`
+	})
+
+	// 1b. 协议相对 URL（单引号）
+	html = protoRelSQ.ReplaceAllStringFunc(html, func(match string) string {
+		sub := protoRelSQ.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		attr := sub[1]
+		p := sub[2]
+		if strings.HasPrefix(p, "//archive/") {
+			return match
+		}
+		localURL := fmt.Sprintf("/archive/%d/%smp_/https:%s", r.pageID, r.timestamp, p)
+		return attr + `='` + localURL + `'`
+	})
+
+	// 2. 再处理绝对路径（以单个 / 开头）（双引号）
+	html = attrDQ.ReplaceAllStringFunc(html, func(match string) string {
+		sub := attrDQ.FindStringSubmatch(match)
 		if len(sub) < 3 {
 			return match
 		}
@@ -233,7 +268,22 @@ func (r *URLRewriter) rewriteUnmappedAbsolutePaths(html string) string {
 		return attr + `="` + localURL + `"`
 	})
 
-	// 2. 重写 url() 中的绝对路径
+	// 2b. 绝对路径（单引号）
+	html = attrSQ.ReplaceAllStringFunc(html, func(match string) string {
+		sub := attrSQ.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		attr := sub[1]
+		p := sub[2]
+		if strings.HasPrefix(p, "/archive/") {
+			return match
+		}
+		localURL := fmt.Sprintf("/archive/%d/%smp_/%s", r.pageID, r.timestamp, baseHost+p)
+		return attr + `='` + localURL + `'`
+	})
+
+	// 3. 重写 url() 中的绝对路径
 	html = urlRe.ReplaceAllStringFunc(html, func(match string) string {
 		sub := urlRe.FindStringSubmatch(match)
 		if len(sub) < 2 {

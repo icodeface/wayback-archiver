@@ -309,3 +309,43 @@ func TestRewriteHTML_UnmappedAbsolutePathsInStyle(t *testing.T) {
 		t.Errorf("unmapped absolute path in style should be rewritten, expected: %s, got: %s", expected, result)
 	}
 }
+
+// TestRewriteHTML_UnmappedSingleQuote 测试单引号属性的未映射路径
+func TestRewriteHTML_UnmappedSingleQuote(t *testing.T) {
+	r := newTestRewriter(55, "20260314070000", map[string]string{})
+	r.SetBaseURL("https://v2ex.com")
+
+	// 单引号属性
+	html := `<link rel='stylesheet' href='/assets/combo.css?t=123'>`
+	result := r.RewriteHTML(html)
+
+	expected := `href='/archive/55/20260314070000mp_/https://v2ex.com/assets/combo.css?t=123'`
+	if !strings.Contains(result, expected) {
+		t.Errorf("single-quoted unmapped path should be rewritten, expected: %s, got: %s", expected, result)
+	}
+}
+
+// TestRewriteHTML_UnmappedProtocolRelative 测试协议相对 URL 的未映射路径
+func TestRewriteHTML_UnmappedProtocolRelative(t *testing.T) {
+	r := newTestRewriter(56, "20260314070100", map[string]string{})
+	r.SetBaseURL("https://example.com")
+
+	// 协议相对 URL（双引号）
+	html := `<img src="//cdn.example.com/logo.png">`
+	result := r.RewriteHTML(html)
+
+	expected := `src="/archive/56/20260314070100mp_/https://cdn.example.com/logo.png"`
+	if !strings.Contains(result, expected) {
+		t.Errorf("protocol-relative unmapped URL should be rewritten, expected: %s, got: %s", expected, result)
+	}
+
+	// 协议相对 URL（单引号）
+	html2 := `<script src='//cdn.example.com/app.js'></script>`
+	result2 := r.RewriteHTML(html2)
+
+	expected2 := `src='/archive/56/20260314070100mp_/https://cdn.example.com/app.js'`
+	if !strings.Contains(result2, expected2) {
+		t.Errorf("single-quoted protocol-relative URL should be rewritten, expected: %s, got: %s", expected2, result2)
+	}
+}
+
