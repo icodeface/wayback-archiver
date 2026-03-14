@@ -107,6 +107,7 @@ func (l *Logger) rotate() error {
 		info, err := os.Stat(filename)
 		if os.IsNotExist(err) {
 			// File doesn't exist, use this sequence
+			l.curSize = 0
 			break
 		}
 		if err != nil {
@@ -210,26 +211,29 @@ func (l *Logger) backgroundLoop() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-	for {
+	resetMidnightTimer := func() *time.Timer {
 		now := time.Now()
-		// Next midnight
 		next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 1, 0, now.Location())
-		timer := time.NewTimer(next.Sub(now))
+		return time.NewTimer(next.Sub(now))
+	}
+	midnightTimer := resetMidnightTimer()
+	defer midnightTimer.Stop()
 
+	for {
 		select {
 		case <-ticker.C:
 			// Check if current file needs rotation due to size
 			if err := l.rotate(); err != nil {
 				log.Printf("[logging] rotation failed: %v", err)
 			}
-		case <-timer.C:
+		case <-midnightTimer.C:
 			// Midnight rotation
 			if err := l.rotate(); err != nil {
 				log.Printf("[logging] rotation failed: %v", err)
 			}
 			l.cleanup()
+			midnightTimer = resetMidnightTimer()
 		case <-l.stopCh:
-			timer.Stop()
 			return
 		}
 	}
