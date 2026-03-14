@@ -11,7 +11,6 @@ type Page struct {
 	ContentHash  string    `json:"content_hash"`
 	FirstVisited time.Time `json:"first_visited"`
 	LastVisited  time.Time `json:"last_visited"`
-	CreatedAt    time.Time `json:"created_at"`
 }
 
 type Resource struct {

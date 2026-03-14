@@ -13,8 +13,7 @@ CREATE TABLE pages (
     first_visited TIMESTAMP WITH TIME ZONE,
     last_visited TIMESTAMP WITH TIME ZONE,
     body_text TEXT,
-    domain TEXT DEFAULT '',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    domain TEXT DEFAULT ''
 );
 
 CREATE INDEX idx_pages_url ON pages(url);
