@@ -166,6 +166,12 @@ export function inlineLayoutStyles(): string {
         if (px > 0) {
           const ref = prop === 'width' ? vw : vh;
           if (Math.abs(px - ref) / ref < 0.05) continue;
+
+          // 跳过远大于视口的 height（通常是内容驱动的容器，不应固化）
+          // 例如 GitHub 的 application-main、react-app 等容器
+          if (prop === 'height' && px > vh * 2) {
+            continue;
+          }
         }
         // 跳过 flex 子元素及其后代的 width/height（由 flex 布局动态计算，固化后失去弹性）
         // 向上遍历祖先，检查是否有任何祖先是弹性 flex 子元素
