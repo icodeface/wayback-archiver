@@ -22,6 +22,8 @@ const LAYOUT_PROPS = [
   // Overflow & Transform
   'overflow-x', 'overflow-y', 'visibility', 'opacity',
   'transform',
+  // WebKit Line Clamp (用于多行文本截断)
+  '-webkit-line-clamp', '-webkit-box-orient',
 ];
 
 // 跳过不需要内联的标签
@@ -92,6 +94,9 @@ const DEFAULTS: Record<string, Set<string>> = {
   'visibility': new Set(['visible']),
   'opacity': new Set(['1']),
   'transform': new Set(['none']),
+  // WebKit Line Clamp
+  '-webkit-line-clamp': new Set(['none']),
+  '-webkit-box-orient': new Set(['horizontal']),
 };
 
 // display 的默认值取决于标签类型，需要按标签判断
@@ -150,7 +155,7 @@ export function inlineLayoutStyles(): string {
     const parts: string[] = [];
 
     for (const prop of LAYOUT_PROPS) {
-      const value = computed.getPropertyValue(prop);
+      let value = computed.getPropertyValue(prop);
       if (!value) continue;
       if (DEFAULTS[prop]?.has(value)) continue;
       if (prop === 'display') {
@@ -159,6 +164,20 @@ export function inlineLayoutStyles(): string {
         if (tag === LIST_ITEM_TAG && value === 'list-item') continue;
         if (INLINE_TAGS.has(tag) && value === 'inline') continue;
         if (!INLINE_TAGS.has(tag) && !TABLE_DISPLAY_TAGS[tag] && tag !== LIST_ITEM_TAG && value === 'block') continue;
+
+        // 特殊处理：如果元素使用了 -webkit-line-clamp，需要保留 -webkit-box
+        // getComputedStyle 会将 -webkit-box 标准化为 flow-root，但这会破坏 -webkit-line-clamp
+        const lineClamp = computed.getPropertyValue('-webkit-line-clamp');
+        if (lineClamp && lineClamp !== 'none') {
+          // 检查原始 style 属性或 CSS 类是否使用了 -webkit-box
+          const inlineStyle = (origEl as HTMLElement).style.display;
+          if (inlineStyle === '-webkit-box' || inlineStyle === '-webkit-inline-box') {
+            value = inlineStyle;
+          } else if (value === 'flow-root' || value === 'block') {
+            // computed 返回 flow-root，但元素有 -webkit-line-clamp，推断原始值为 -webkit-box
+            value = '-webkit-box';
+          }
+        }
       }
       // 跳过接近视口尺寸的 width/height（来自 100%/100vh，固化为像素值会截断内容）
       if (prop === 'width' || prop === 'height') {
