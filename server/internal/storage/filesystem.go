@@ -3,8 +3,10 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -44,6 +46,103 @@ func NewFileStorage(baseDir string) *FileStorage {
 	}
 }
 
+// validateResourceURL 验证资源 URL，防止 SSRF 攻击
+func validateResourceURL(resourceURL string) error {
+	parsed, err := url.Parse(resourceURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	// 只允许 http 和 https 协议
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("only http and https schemes are allowed")
+	}
+
+	// 解析主机名和端口
+	host := parsed.Hostname()
+	if host == "" {
+		return errors.New("missing hostname")
+	}
+
+	// 解析 IP 地址
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		// DNS 解析失败，允许继续（可能是临时网络问题）
+		return nil
+	}
+
+	// 检查是否为内网地址或云元数据服务
+	for _, ip := range ips {
+		if isPrivateIP(ip) {
+			return fmt.Errorf("private IP address not allowed: %s", ip.String())
+		}
+		if isCloudMetadataIP(ip) {
+			return fmt.Errorf("cloud metadata service not allowed: %s", ip.String())
+		}
+	}
+
+	return nil
+}
+
+// isPrivateIP 检查是否为私有 IP 地址
+func isPrivateIP(ip net.IP) bool {
+	// 将 IPv4-mapped IPv6 地址转换为 IPv4（如 ::ffff:8.8.8.8 -> 8.8.8.8）
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
+
+	// IPv4 私有地址段
+	privateIPv4Blocks := []string{
+		"10.0.0.0/8",     // RFC1918
+		"172.16.0.0/12",  // RFC1918
+		"192.168.0.0/16", // RFC1918
+		"127.0.0.0/8",    // Loopback
+		"169.254.0.0/16", // Link-local
+	}
+
+	// IPv6 私有地址段
+	privateIPv6Blocks := []string{
+		"::1/128",   // Loopback
+		"fc00::/7",  // Unique local address
+		"fe80::/10", // Link-local
+	}
+
+	allBlocks := append(privateIPv4Blocks, privateIPv6Blocks...)
+
+	for _, block := range allBlocks {
+		_, subnet, err := net.ParseCIDR(block)
+		if err != nil {
+			continue
+		}
+		if subnet.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isCloudMetadataIP 检查是否为云服务元数据 IP
+func isCloudMetadataIP(ip net.IP) bool {
+	// AWS/Azure/GCP 元数据服务
+	metadataIPs := []string{
+		"169.254.169.254/32", // AWS, Azure, GCP
+		"fd00:ec2::254/128",  // AWS IPv6
+	}
+
+	for _, block := range metadataIPs {
+		_, subnet, err := net.ParseCIDR(block)
+		if err != nil {
+			continue
+		}
+		if subnet.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // SaveHTML 保存 HTML 文件，按日期组织目录
 func (fs *FileStorage) SaveHTML(url, html string, timestamp time.Time) (string, error) {
 	// 创建日期目录：data/html/2026/03/09/
@@ -69,6 +168,11 @@ func (fs *FileStorage) SaveHTML(url, html string, timestamp time.Time) (string, 
 
 // DownloadResource 下载资源并计算哈希，支持可选的认证 headers
 func (fs *FileStorage) DownloadResource(resourceURL string, pageURL string, headers map[string]string) ([]byte, string, error) {
+	// 防止 SSRF 攻击：拒绝内网地址和云元数据服务
+	if err := validateResourceURL(resourceURL); err != nil {
+		return nil, "", fmt.Errorf("invalid resource URL: %w", err)
+	}
+
 	req, err := http.NewRequest("GET", resourceURL, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("create request failed: %w", err)
@@ -125,14 +229,37 @@ func isSameRootDomain(url1, url2 string) bool {
 	return getRootDomain(parsed1.Hostname()) == getRootDomain(parsed2.Hostname())
 }
 
-// getRootDomain extracts the root domain (last two segments) from a hostname
-// e.g. "kp.m-team.cc" -> "m-team.cc", "img.m-team.cc" -> "m-team.cc"
+// getRootDomain extracts the root domain using public suffix list logic
+// e.g. "kp.m-team.cc" -> "m-team.cc", "img.example.co.uk" -> "example.co.uk"
 func getRootDomain(hostname string) string {
+	// 使用简化的公共后缀列表（常见的多段 TLD）
+	multiSegmentTLDs := map[string]bool{
+		"co.uk": true, "co.jp": true, "co.kr": true, "co.nz": true, "co.za": true,
+		"com.au": true, "com.br": true, "com.cn": true, "com.hk": true, "com.tw": true,
+		"net.au": true, "org.uk": true, "gov.uk": true, "ac.uk": true,
+		"ne.jp": true, "or.jp": true, "go.jp": true,
+	}
+
 	parts := strings.Split(hostname, ".")
-	if len(parts) <= 2 {
+	if len(parts) <= 1 {
 		return hostname
 	}
-	return strings.Join(parts[len(parts)-2:], ".")
+
+	// 检查是否为多段 TLD（如 co.uk）
+	if len(parts) >= 3 {
+		twoSegmentSuffix := strings.Join(parts[len(parts)-2:], ".")
+		if multiSegmentTLDs[twoSegmentSuffix] {
+			// 返回 domain + TLD（如 example.co.uk）
+			return strings.Join(parts[len(parts)-3:], ".")
+		}
+	}
+
+	// 默认返回最后两段（如 example.com）
+	if len(parts) >= 2 {
+		return strings.Join(parts[len(parts)-2:], ".")
+	}
+
+	return hostname
 }
 
 // SaveResource 保存资源文件，按哈希组织目录

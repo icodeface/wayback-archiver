@@ -267,15 +267,17 @@ function initializeArchiver(): void {
           return;
         }
         console.log('[Wayback] SPA navigate detected');
-        sendCapture();
-        resetState();
-        // Wait for new page to render, then capture
-        nativeSetTimeout(async () => {
-          await prepareCapture();
-          if (captureData) {
-            await sendCapture();
-          }
-        }, CONFIG.DOM_STABILITY_DELAY);
+        // 等待 sendCapture 完成后再重置状态，防止竞态条件
+        sendCapture().then(() => {
+          resetState();
+          // Wait for new page to render, then capture
+          nativeSetTimeout(async () => {
+            await prepareCapture();
+            if (captureData) {
+              await sendCapture();
+            }
+          }, CONFIG.DOM_STABILITY_DELAY);
+        });
       });
   }
 
@@ -289,14 +291,16 @@ function initializeArchiver(): void {
     if (newURL === lastURL) return;
     console.log('[Wayback] URL changed:', lastURL, '->', newURL);
     lastURL = newURL;
-    sendCapture();
-    resetState();
-    nativeSetTimeout(async () => {
-      await prepareCapture();
-      if (captureData) {
-        await sendCapture();
-      }
-    }, CONFIG.DOM_STABILITY_DELAY);
+    // 等待 sendCapture 完成后再重置状态，防止竞态条件
+    sendCapture().then(() => {
+      resetState();
+      nativeSetTimeout(async () => {
+        await prepareCapture();
+        if (captureData) {
+          await sendCapture();
+        }
+      }, CONFIG.DOM_STABILITY_DELAY);
+    });
   }
 
   if (!(window as unknown as Record<string, unknown>).navigation) {
