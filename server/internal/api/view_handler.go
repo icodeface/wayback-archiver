@@ -172,8 +172,6 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 		originalURL = originalURL + "?" + c.Request.URL.RawQuery
 	}
 
-	log.Printf("[Proxy] Request: page_id=%s, timestamp=%s, url=%s", pageID, timestamp, originalURL)
-
 	// 检查是否是本地资源路径（以 resources/ 开头）
 	if strings.HasPrefix(originalURL, "resources/") {
 		// 提取 resources/ 后面的路径部分
@@ -200,7 +198,6 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 		c.Header("Content-Type", contentType)
 		c.Header("Cache-Control", "public, max-age=31536000")
 
-		log.Printf("[Proxy] Serving local file: %s (%s, %d bytes)", originalURL, contentType, len(content))
 		c.Data(http.StatusOK, contentType, content)
 		return
 	}
@@ -301,7 +298,6 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 	c.Header("Content-Type", contentType)
 	c.Header("Cache-Control", "public, max-age=31536000")
 
-	log.Printf("[Proxy] Serving: %s (%s, %d bytes)", originalURL, contentType, len(content))
 	c.Data(http.StatusOK, contentType, content)
 }
 

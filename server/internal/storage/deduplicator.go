@@ -50,7 +50,6 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 		if entry, ok := d.cache.Load(url); ok {
 			cached := entry.(*resourceCacheEntry)
 			if time.Since(cached.cachedAt) < resourceCacheTTL {
-				log.Printf("Cache hit for resource: %s", url)
 				// 缓存命中仍需更新 last_seen
 				if err := d.db.UpdateResourceLastSeen(cached.resourceID); err != nil {
 					log.Printf("Failed to update last_seen for cached resource: %v", err)
@@ -75,7 +74,6 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 		// 计算哈希
 		hashBytes := sha256.Sum256(data)
 		hash = hex.EncodeToString(hashBytes[:])
-		log.Printf("Using provided content for resource (hash: %s): %s", hash[:16], url)
 	} else {
 		// 否则下载资源并计算哈希
 		data, hash, err = d.storage.DownloadResource(url, pageURL, headers)
@@ -117,7 +115,6 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 
 	if existingByURL != nil {
 		// 同 URL 已存在，更新最后见到时间
-		log.Printf("Resource exists by URL (hash: %s), reusing: %s", hash[:16], url)
 		if err := d.db.UpdateResourceLastSeen(existingByURL.ID); err != nil {
 			return 0, nil, err
 		}
@@ -179,7 +176,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	}
 
 	// 内容有变化或首次访问，创建新记录
-	log.Printf("New or changed content detected for: %s", req.URL)
 
 	// 从 HTML 中提取所有资源 URL
 	htmlResources := d.htmlExtractor.ExtractResources(req.HTML, req.URL)
@@ -294,7 +290,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 
 		resourceIDs = append(resourceIDs, result.resourceID)
 		rewriter.AddMapping(result.res.URL, result.filePath)
-		log.Printf("URL mapping added: %s -> %s", result.res.URL, result.filePath)
 
 		// 收集需要处理的 CSS 文件
 		if result.res.Type == "css" && result.data != nil {
@@ -316,16 +311,13 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 
 	for _, cw := range cssWorkItems {
 		cssResources := d.cssParser.ExtractResources(cw.cssContent)
-		if len(cssResources) > 0 {
-			log.Printf("Found %d resources in CSS: %s", len(cssResources), cw.cssURL)
-			for _, cssResURL := range cssResources {
-				absoluteURL := d.resolveURL(cw.cssURL, cssResURL)
-				allCSSSubResources = append(allCSSSubResources, cssSubResource{
-					absoluteURL: absoluteURL,
-					rawURL:      cssResURL,
-					cssURL:      cw.cssURL,
-				})
-			}
+		for _, cssResURL := range cssResources {
+			absoluteURL := d.resolveURL(cw.cssURL, cssResURL)
+			allCSSSubResources = append(allCSSSubResources, cssSubResource{
+				absoluteURL: absoluteURL,
+				rawURL:      cssResURL,
+				cssURL:      cw.cssURL,
+			})
 		}
 	}
 
@@ -383,7 +375,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 			cssURLMapping[result.sub.rawURL] = result.filePath
 			cssURLMapping[result.sub.absoluteURL] = result.filePath
 			rewriter.AddMapping(result.sub.absoluteURL, result.filePath)
-			log.Printf("CSS resource mapped: %s -> %s", result.sub.absoluteURL, result.filePath)
 		}
 	}
 
@@ -394,8 +385,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 			rewrittenCSS := d.cssParser.RewriteCSS(cw.cssContent, cssURLMapping)
 			if err := d.storage.UpdateResource(cw.filePath, []byte(rewrittenCSS)); err != nil {
 				log.Printf("Failed to update CSS file: %v", err)
-			} else {
-				log.Printf("CSS file updated with rewritten URLs: %s", cw.filePath)
 			}
 		}
 	}
@@ -408,8 +397,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
 		return 0, "", fmt.Errorf("update html failed: %w", err)
 	}
-
-	log.Printf("HTML updated with rewritten URLs (ID: %d)", pageID)
 
 	// 关联页面和资源
 	for _, resourceID := range resourceIDs {
@@ -649,7 +636,6 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 
 	// 重写 CSS 文件中的 URL
-	cssRewriteStart := time.Now()
 	for _, cw := range cssWorkItems {
 		cssResources := d.cssParser.ExtractResources(cw.cssContent)
 		if len(cssResources) > 0 {
@@ -659,23 +645,17 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			}
 		}
 	}
-	log.Printf("[Update] CSS rewrite: %v", time.Since(cssRewriteStart))
 
 	// 重写 HTML 中的资源 URL（先规范化 HTML 中的 ../ 路径）
-	htmlRewriteStart := time.Now()
 	normalizedHTML := NormalizeHTMLURLs(req.HTML)
 	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
-	log.Printf("[Update] HTML rewrite: %v (html size: %d bytes)", time.Since(htmlRewriteStart), len(rewrittenHTML))
 
 	// 更新保存的 HTML 文件
-	saveStart := time.Now()
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
 		return "", fmt.Errorf("update html failed: %w", err)
 	}
-	log.Printf("[Update] Save HTML: %v", time.Since(saveStart))
 
 	// 更新数据库记录
-	dbStart := time.Now()
 	if err := d.db.UpdatePageContent(pageID, tempHTMLPath, newContentHash, req.Title); err != nil {
 		return "", fmt.Errorf("update page content failed: %w", err)
 	}
@@ -686,7 +666,6 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			log.Printf("[Update] Failed to link resource: %v", err)
 		}
 	}
-	log.Printf("[Update] DB operations: %v (%d resources linked)", time.Since(dbStart), len(resourceIDs))
 
 	// 删除旧 HTML 文件（DB 已指向新文件，此时删除安全）
 	if oldHTMLPath != tempHTMLPath {
@@ -695,7 +674,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		}
 	}
 
-	log.Printf("[Update] Page updated (ID: %d, new hash: %s, total: %v)", pageID, newContentHash[:16], time.Since(startTime))
+	log.Printf("[Update] Page updated (ID: %d, hash: %s, %d resources, %v)", pageID, newContentHash[:16], len(resourceIDs), time.Since(startTime))
 	return models.ArchiveActionUpdated, nil
 }
 

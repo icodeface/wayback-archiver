@@ -124,7 +124,8 @@ npm run build
 | `GET` | `/api/search?q=keyword` | 按 URL 或标题搜索 |
 | `GET` | `/api/pages/timeline?url=URL` | 获取同一 URL 的所有快照（时间线视图） |
 | `GET` | `/api/logs` | 列出可用日志文件 |
-| `GET` | `/api/logs/:filename` | 获取日志文件内容（支持 `?tail=N`） |
+| `GET` | `/api/logs/latest` | 获取最新日志文件内容（支持 `?tail=N&grep=关键词`） |
+| `GET` | `/api/logs/:filename` | 获取日志文件内容（支持 `?tail=N&grep=关键词`） |
 | `GET` | `/view/:id` | 还原归档页面 |
 | `GET` | `/timeline?url=URL` | URL 时间线可视化页面 |
 | `GET` | `/logs` | 服务器日志查看器 |

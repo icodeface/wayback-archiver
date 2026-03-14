@@ -154,7 +154,8 @@ AUTH_PASSWORD: 'your_secure_password'
 | `GET` | `/api/search?q=keyword` | Search pages by URL or title |
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
 | `GET` | `/api/logs` | List available log files |
-| `GET` | `/api/logs/:filename` | Get log file content (supports `?tail=N`) |
+| `GET` | `/api/logs/latest` | Get latest log file content (supports `?tail=N&grep=keyword`) |
+| `GET` | `/api/logs/:filename` | Get log file content (supports `?tail=N&grep=keyword`) |
 | `GET` | `/view/:id` | Replay an archived page |
 | `GET` | `/timeline?url=URL` | Visual timeline page for a URL |
 | `GET` | `/logs` | Server logs viewer |

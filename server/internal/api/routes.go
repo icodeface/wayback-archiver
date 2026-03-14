@@ -104,6 +104,7 @@ Allow: /
 		api.DELETE("/pages/:id", handler.DeletePage)
 		api.GET("/search", handler.SearchPages)
 		api.GET("/logs", handler.ListLogs)
+		api.GET("/logs/latest", handler.GetLatestLog)
 		api.GET("/logs/:filename", handler.GetLog)
 	}
 

@@ -105,9 +105,16 @@
             white-space: pre-wrap;
             word-break: break-all;
         }
-        .log-line { padding: 1px 0; }
+        .log-line { padding: 1px 0; border-left: 2px solid transparent; padding-left: 8px; }
         .log-line:hover { background: rgba(0,255,136,0.04); }
         .log-line .highlight { background: rgba(255,170,0,0.3); color: var(--color-warn); }
+        .log-line.log-error { color: #ff5555; border-left-color: #ff5555; }
+        .log-line.log-warn { color: #ffaa00; border-left-color: #ffaa00; }
+        .log-line.log-success { color: #00ff88; }
+        .log-line.log-proxy { color: #808080; }
+        .log-line.log-http { color: #00d9ff; }
+        .log-line.log-cache { color: #bb88ff; }
+        .log-line.log-update { color: #44bbff; }
         .empty-state {
             display: flex;
             align-items: center;
@@ -199,6 +206,18 @@
             }
         }
 
+        function classifyLine(line) {
+            const l = line.toLowerCase();
+            if (l.includes('failed') || l.includes('error') || l.includes('pq:') || l.includes('panic')) return 'log-error';
+            if (l.includes('fallback') || l.includes('not found') || l.includes('skip') || l.includes('warn')) return 'log-warn';
+            if (l.includes('[update]')) return 'log-update';
+            if (l.includes('[proxy]')) return 'log-proxy';
+            if (l.includes('cache hit')) return 'log-cache';
+            if (l.includes('[gin]') || /"\s*(GET|POST|PUT|DELETE|HEAD)\s/.test(line)) return 'log-http';
+            if (l.includes('page created') || l.includes('html updated') || l.includes('new resource')) return 'log-success';
+            return '';
+        }
+
         function renderLog(content) {
             const viewer = document.getElementById('logViewer');
             const lines = content.split('\n');
@@ -212,7 +231,8 @@
                     const re = new RegExp('(' + escapeRegex(filterText) + ')', 'gi');
                     html = html.replace(re, '<span class="highlight">$1</span>');
                 }
-                return `<div class="log-line">${html}</div>`;
+                const cls = classifyLine(line);
+                return `<div class="log-line${cls ? ' ' + cls : ''}">${html}</div>`;
             }).join('');
 
             if (autoScroll) {

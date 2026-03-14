@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"log"
 	"regexp"
 	"strings"
 )
@@ -35,7 +34,6 @@ func (p *CSSParser) ExtractResources(cssContent string) []string {
 			if url != "" && !seen[url] && !isDataURL(url) {
 				seen[url] = true
 				resources = append(resources, url)
-				log.Printf("[CSS Parser] Found @import: %s", url)
 			}
 		}
 	}
@@ -48,7 +46,6 @@ func (p *CSSParser) ExtractResources(cssContent string) []string {
 			if url != "" && !seen[url] && !isDataURL(url) {
 				seen[url] = true
 				resources = append(resources, url)
-				log.Printf("[CSS Parser] Found url(): %s", url)
 			}
 		}
 	}
