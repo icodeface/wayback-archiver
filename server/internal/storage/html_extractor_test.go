@@ -128,6 +128,38 @@ func TestExtractResources_DotDotURLNormalized(t *testing.T) {
 	}
 }
 
+func TestExtractResources_AllHrefVariantsExtracted(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	// GitHub uses data-base-href alongside href — only real href should be extracted
+	html := `<html><head>
+		<link rel="alternate icon" class="js-site-favicon" type="image/png" href="https://github.githubassets.com/favicons/favicon.png">
+		<link rel="icon" class="js-site-favicon" type="image/svg+xml" href="https://github.githubassets.com/favicons/favicon.svg" data-base-href="https://github.githubassets.com/favicons/favicon">
+	</head></html>`
+
+	resources := extractor.ExtractResources(html, "https://github.com")
+
+	foundSVG := false
+	foundPNG := false
+	for _, r := range resources {
+		if r.URL == "https://github.githubassets.com/favicons/favicon.svg" {
+			foundSVG = true
+		}
+		if r.URL == "https://github.githubassets.com/favicons/favicon.png" {
+			foundPNG = true
+		}
+		if r.URL == "https://github.githubassets.com/favicons/favicon" {
+			t.Error("Should not extract data-base-href value (URL without extension)")
+		}
+	}
+	if !foundSVG {
+		t.Error("Should extract href value (favicon.svg)")
+	}
+	if !foundPNG {
+		t.Error("Should extract alternate icon href value (favicon.png)")
+	}
+}
+
 func TestExtractResources_VideoPoster(t *testing.T) {
 	extractor := NewHTMLResourceExtractor()
 
