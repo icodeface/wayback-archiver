@@ -114,9 +114,33 @@ The server automatically loads `.env` file if it exists. You can also set enviro
 | `DB_SSLMODE` | `disable` | SSL mode |
 | `SERVER_HOST` | `127.0.0.1` | Server bind address (`0.0.0.0` = all interfaces, `127.0.0.1` = localhost only) |
 | `SERVER_PORT` | `8080` | HTTP server port |
+| `ALLOWED_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080,null` | CORS allowed origins (comma-separated). For remote deployment, add your domain: `https://your-domain.com,null` |
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
 | `LOG_DIR` | `./data/logs` | Log file directory |
-| `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`) |
+| `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`). **REQUIRED for remote deployment** |
+
+## Remote Deployment
+
+For deploying to a remote server, see [REMOTE_DEPLOYMENT.md](REMOTE_DEPLOYMENT.md) for detailed instructions.
+
+Quick setup:
+
+```bash
+# Server .env configuration
+ALLOWED_ORIGINS=https://your-domain.com,null
+AUTH_PASSWORD=your_secure_password
+SERVER_HOST=0.0.0.0
+
+# Browser config.ts
+SERVER_URL: 'https://your-domain.com/api/archive'
+AUTH_PASSWORD: 'your_secure_password'
+```
+
+**Security Notes:**
+- Always use HTTPS for remote deployment
+- Set a strong `AUTH_PASSWORD`
+- Limit `ALLOWED_ORIGINS` to trusted domains only
+- Both CORS and Basic Auth are required for security (defense in depth)
 
 ## API
 

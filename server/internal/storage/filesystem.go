@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+const (
+	// 最大资源下载大小：50MB
+	maxResourceSize = 50 * 1024 * 1024
+)
+
 type FileStorage struct {
 	baseDir    string
 	httpClient *http.Client
@@ -203,10 +208,21 @@ func (fs *FileStorage) DownloadResource(resourceURL string, pageURL string, head
 		return nil, "", fmt.Errorf("failed to download: status %d", resp.StatusCode)
 	}
 
-	// 读取内容
-	data, err := io.ReadAll(resp.Body)
+	// 检查 Content-Length，防止下载超大文件
+	if resp.ContentLength > maxResourceSize {
+		return nil, "", fmt.Errorf("resource too large: %d bytes (max: %d)", resp.ContentLength, maxResourceSize)
+	}
+
+	// 使用 LimitReader 限制读取大小，防止恶意响应
+	limitedReader := io.LimitReader(resp.Body, maxResourceSize+1)
+	data, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return nil, "", err
+	}
+
+	// 检查实际读取的大小
+	if int64(len(data)) > maxResourceSize {
+		return nil, "", fmt.Errorf("resource exceeds size limit: %d bytes (max: %d)", len(data), maxResourceSize)
 	}
 
 	// 计算 SHA-256 哈希

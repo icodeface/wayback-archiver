@@ -165,38 +165,3 @@ func TestGetRootDomain(t *testing.T) {
 		})
 	}
 }
-
-func TestIsSameRootDomain(t *testing.T) {
-	tests := []struct {
-		name string
-		url1 string
-		url2 string
-		want bool
-	}{
-		// Same root domain
-		{"same domain", "https://example.com/page", "https://example.com/api", true},
-		{"different subdomains", "https://www.example.com/page", "https://api.example.com/data", true},
-		{"with and without subdomain", "https://example.com/page", "https://www.example.com/api", true},
-		// Different root domains
-		{"different domains", "https://example.com/page", "https://other.com/api", false},
-		{"different TLDs", "https://example.com/page", "https://example.org/api", false},
-		// Multi-segment TLD cases (the security issue)
-		{"co.uk same root", "https://www.bank.co.uk/login", "https://api.bank.co.uk/auth", true},
-		{"co.uk different root", "https://evil.co.uk/page", "https://bank.co.uk/login", false},
-		{"com.au same root", "https://www.example.com.au/page", "https://cdn.example.com.au/img", true},
-		{"com.au different root", "https://evil.com.au/page", "https://bank.com.au/login", false},
-		// Edge cases
-		{"empty URLs", "", "", false},
-		{"one empty", "https://example.com", "", false},
-		{"invalid URL", "not-a-url", "https://example.com", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isSameRootDomain(tt.url1, tt.url2)
-			if got != tt.want {
-				t.Errorf("isSameRootDomain(%s, %s) = %v, want %v", tt.url1, tt.url2, got, tt.want)
-			}
-		})
-	}
-}

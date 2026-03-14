@@ -28,9 +28,14 @@ export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse>
       timeout: CONFIG.REQUEST_TIMEOUT,
       onload: (response) => {
         if (response.status === 200) {
-          const result: ArchiveResponse = JSON.parse(response.responseText);
-          console.log('[Wayback] ✓ Archived:', result.action);
-          resolve(result);
+          try {
+            const result: ArchiveResponse = JSON.parse(response.responseText);
+            console.log('[Wayback] ✓ Archived:', result.action);
+            resolve(result);
+          } catch (err) {
+            console.error('[Wayback] ✗ Invalid JSON response:', response.responseText);
+            reject(new Error('Invalid JSON response from server'));
+          }
         } else {
           console.error('[Wayback] ✗ Failed:', response.status);
           reject(new Error(`Archive failed: ${response.status}`));
@@ -76,9 +81,14 @@ export function updateOnServer(pageId: number, captureData: CaptureData): Promis
       onload: (response) => {
         const elapsed = Date.now() - startTime;
         if (response.status === 200) {
-          const result: ArchiveResponse = JSON.parse(response.responseText);
-          console.log(`[Wayback] ✓ Updated: ${result.action} (took ${elapsed}ms)`);
-          resolve(result);
+          try {
+            const result: ArchiveResponse = JSON.parse(response.responseText);
+            console.log(`[Wayback] ✓ Updated: ${result.action} (took ${elapsed}ms)`);
+            resolve(result);
+          } catch (err) {
+            console.error(`[Wayback] ✗ Invalid JSON response (took ${elapsed}ms):`, response.responseText);
+            reject(new Error('Invalid JSON response from server'));
+          }
         } else {
           console.error(`[Wayback] ✗ Update failed: ${response.status} (took ${elapsed}ms)`);
           reject(new Error(`Update failed: ${response.status}`));

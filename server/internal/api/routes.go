@@ -9,9 +9,15 @@ import (
 
 // SetupRoutes 设置路由
 func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig) {
-	// CORS 中间件
+	// CORS 中间件 - 仅允许本地来源，防止 CSRF 攻击
 	r.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := c.Request.Header.Get("Origin")
+		// 仅允许本地来源（localhost, 127.0.0.1, file://)
+		if origin == "http://localhost:8080" || origin == "http://127.0.0.1:8080" ||
+		   origin == "null" || origin == "" { // null = file:// protocol
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, PUT, GET, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if c.Request.Method == "OPTIONS" {

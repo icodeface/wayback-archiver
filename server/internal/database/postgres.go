@@ -149,6 +149,18 @@ func (db *DB) CreateResource(url, hash, resourceType, filePath string, fileSize 
 	return id, err
 }
 
+// CreateResourceIfNotExists 创建资源记录，如果 URL 已存在则返回现有记录（防止竞态）
+func (db *DB) CreateResourceIfNotExists(url, hash, resourceType, filePath string, fileSize int64) (int64, error) {
+	var id int64
+	err := db.conn.QueryRow(`
+		INSERT INTO resources (url, content_hash, resource_type, file_path, file_size)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (url) DO UPDATE SET last_seen = NOW()
+		RETURNING id
+	`, url, hash, resourceType, filePath, fileSize).Scan(&id)
+	return id, err
+}
+
 // UpdateResourceLastSeen 更新资源最后见到时间
 func (db *DB) UpdateResourceLastSeen(id int64) error {
 	_, err := db.conn.Exec("UPDATE resources SET last_seen = NOW() WHERE id = $1", id)

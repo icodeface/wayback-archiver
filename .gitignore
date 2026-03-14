@@ -3,6 +3,10 @@ node_modules/
 CLAUDE.md
 AGENTS.md
 
+# Temporary documentation
+REFACTORING_*.md
+*_SUMMARY.md
+
 # Test artifacts
 tests/root/*.log
 tests/root/*.png
@@ -17,3 +21,4 @@ server/data/
 # Build artifacts
 *.exe
 server/wayback-server
+server/server

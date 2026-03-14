@@ -135,8 +135,8 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 		}
 	}
 
-	// 创建数据库记录（每个 URL 一条记录）
-	resourceID, err := d.db.CreateResource(url, hash, resourceType, filePath, int64(len(data)))
+	// 创建数据库记录（使用 ON CONFLICT 防止竞态）
+	resourceID, err := d.db.CreateResourceIfNotExists(url, hash, resourceType, filePath, int64(len(data)))
 	if err != nil {
 		return 0, nil, fmt.Errorf("db insert failed: %w", err)
 	}
