@@ -39,7 +39,7 @@ const header = `// ==UserScript==
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
-// @connect      localhost
+// @connect      *
 // @run-at       document-idle
 // ==/UserScript==
 

@@ -119,6 +119,8 @@ npm run build
 
 Load the extension from `browser/dist/` directory.
 
+**Note**: The Tampermonkey script is configured with `@connect *` to allow connections to any domain, making it work seamlessly with both local and remote servers.
+
 ## 5. Verify
 
 Test server:
