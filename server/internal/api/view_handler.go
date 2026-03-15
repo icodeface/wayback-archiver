@@ -139,6 +139,9 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	// 导致后续元素（如 <main>、<section>）被提升到错误的层级
 	modifiedHTML = fixNestedButtons(modifiedHTML)
 
+	// 修复滚动动画元素的 opacity: 0（归档页面没有 JS，动画永远不会触发）
+	modifiedHTML = fixScrollAnimationOpacity(modifiedHTML)
+
 	// 注入归档信息栏（传入 nonce 用于 CSP）
 	// 生成随机 nonce，防止归档页面中的恶意脚本绕过 CSP
 	nonce := generateNonce()
@@ -613,3 +616,62 @@ func removeLoadingOverlays(html string) string {
 	}
 	return html
 }
+
+// fixScrollAnimationOpacity 修复 JS 动画元素的 opacity: 0
+// 许多网站使用 IntersectionObserver 或 JS 库实现动画，元素初始 opacity: 0，
+// 动画触发后才变为 opacity: 1。归档页面没有 JS，这些元素永远不可见。
+// 匹配两类元素：
+// 1. 带有 data-animate* 属性且 style 中包含 opacity: 0 的元素
+// 2. style 中同时包含 opacity: 0 和 stroke-dashoffset 的 SVG 元素（线条绘制动画）
+var (
+	scrollAnimRe = regexp.MustCompile(
+		`(<[^>]*\bdata-animate(?:-\w+)?\b[^>]*\bstyle=")((?:[^"]*)opacity:\s*0[^"]*)(")`,
+	)
+	svgAnimRe = regexp.MustCompile(
+		`(?i)(<(?:path|circle|line|polyline|polygon|rect|ellipse)[\s>][^>]*\bstyle=")((?:[^"]*)opacity:\s*0[^"]*)(")`,
+	)
+)
+
+func fixScrollAnimationOpacity(html string) string {
+	html = scrollAnimRe.ReplaceAllStringFunc(html, func(match string) string {
+		return cleanAnimationStyle(scrollAnimRe, match)
+	})
+	html = svgAnimRe.ReplaceAllStringFunc(html, func(match string) string {
+		return cleanAnimationStyle(svgAnimRe, match)
+	})
+	return html
+}
+
+func cleanAnimationStyle(re *regexp.Regexp, match string) string {
+	sub := re.FindStringSubmatch(match)
+	if len(sub) < 4 {
+		return match
+	}
+	prefix := sub[1]  // <tag ... style="
+	style := sub[2]   // style content
+	closing := sub[3] // "
+
+	// 移除动画相关的内联样式属性
+	cleaned := animOpacityRe.ReplaceAllString(style, "")
+	cleaned = animTransformRe.ReplaceAllString(cleaned, "")
+	cleaned = animTranslateRe.ReplaceAllString(cleaned, "")
+	cleaned = animRotateRe.ReplaceAllString(cleaned, "")
+	cleaned = animScaleRe.ReplaceAllString(cleaned, "")
+	cleaned = animStrokeDashoffsetRe.ReplaceAllString(cleaned, "")
+	// 清理多余的分号和空格
+	cleaned = multiSemiRe.ReplaceAllString(cleaned, ";")
+	cleaned = strings.TrimLeft(cleaned, "; ")
+	cleaned = strings.TrimRight(cleaned, "; ")
+
+	return prefix + cleaned + closing
+}
+
+var (
+	animOpacityRe          = regexp.MustCompile(`\bopacity:\s*0\s*;?`)
+	animTransformRe        = regexp.MustCompile(`\btransform:\s*[^;]+;?`)
+	animTranslateRe        = regexp.MustCompile(`\btranslate:\s*[^;]+;?`)
+	animRotateRe           = regexp.MustCompile(`\brotate:\s*[^;]+;?`)
+	animScaleRe            = regexp.MustCompile(`\bscale:\s*[^;]+;?`)
+	animStrokeDashoffsetRe = regexp.MustCompile(`\bstroke-dashoffset:\s*[^;]+;?`)
+	multiSemiRe            = regexp.MustCompile(`;\s*;+`)
+)

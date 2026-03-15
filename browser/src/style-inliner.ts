@@ -33,6 +33,26 @@ const SKIP_TAGS = new Set([
   'HTML', 'BODY',  // 跳过顶层容器，避免固化视口相关的尺寸（如 min-width）
 ]);
 
+// SVG 图形元素标签集合
+const SVG_GRAPHIC_TAGS = new Set([
+  'path', 'circle', 'line', 'polyline', 'polygon', 'rect', 'ellipse',
+  'PATH', 'CIRCLE', 'LINE', 'POLYLINE', 'POLYGON', 'RECT', 'ELLIPSE',
+]);
+
+// 预编译正则 — 避免在循环中重复创建
+const GSAP_ANIM_RE = /translate:\s*none|rotate:\s*none|scale:\s*none/;
+const ANIM_STYLE_CLEANUP_RE = /\b(?:opacity:\s*0|transform:\s*[^;]+|translate:\s*[^;]+|rotate:\s*[^;]+|scale:\s*[^;]+|stroke-dashoffset:\s*[^;]+)\s*;?/g;
+const MULTI_SEMI_RE = /;\s*;+/g;
+
+// 检测元素是否有 data-animate* 属性（避免 getAttributeNames() 分配数组）
+function hasDataAnimateAttr(el: Element): boolean {
+  const attrs = el.attributes;
+  for (let i = 0; i < attrs.length; i++) {
+    if (attrs[i].name.startsWith('data-animate')) return true;
+  }
+  return false;
+}
+
 // 默认值 — computed 值等于默认值时跳过，减少 HTML 体积
 const DEFAULTS: Record<string, Set<string>> = {
   // Box Model
@@ -154,10 +174,32 @@ export function inlineLayoutStyles(): string {
     const existing = cloneEl.getAttribute('style') || '';
     const parts: string[] = [];
 
+    // 检测滚动/JS 动画元素：opacity: 0 + 动画相关特征
+    // 这些元素在未触发动画时 opacity 为 0，不应固化这个状态
+    // 特征：data-animate* 属性、GSAP 动画属性（translate/rotate/scale: none）、SVG 图形元素
+    const isHiddenByAnimation = computed.opacity === '0' && (
+      SVG_GRAPHIC_TAGS.has(origEl.tagName) ||
+      GSAP_ANIM_RE.test(existing) ||
+      hasDataAnimateAttr(origEl)
+    );
+
+    // 清理克隆元素内联样式中的动画属性
+    if (isHiddenByAnimation && existing) {
+      ANIM_STYLE_CLEANUP_RE.lastIndex = 0;
+      const cleaned = existing
+        .replace(ANIM_STYLE_CLEANUP_RE, '')
+        .replace(MULTI_SEMI_RE, ';')
+        .replace(/^;\s*/, '')
+        .replace(/;\s*$/, '');
+      cloneEl.setAttribute('style', cleaned);
+    }
+
     for (const prop of LAYOUT_PROPS) {
       let value = computed.getPropertyValue(prop);
       if (!value) continue;
       if (DEFAULTS[prop]?.has(value)) continue;
+      // 跳过滚动动画元素的 opacity 和 transform，避免固化未触发的动画状态（opacity: 0）
+      if (isHiddenByAnimation && (prop === 'opacity' || prop === 'transform')) continue;
       if (prop === 'display') {
         const tag = origEl.tagName;
         if (TABLE_DISPLAY_TAGS[tag] === value) continue;
