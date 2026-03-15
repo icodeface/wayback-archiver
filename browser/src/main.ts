@@ -31,13 +31,13 @@ function initializeArchiver(): void {
   // Save native timers before freezePageState() replaces them with noops
   const nativeSetTimeout = window.setTimeout.bind(window);
   const nativeClearTimeout = window.clearTimeout.bind(window);
+  const nativeSetInterval = window.setInterval.bind(window);
+  const nativeClearInterval = window.clearInterval.bind(window);
 
   let captureData: CaptureData | null = null;
   let isCapturing = false;
   let hasArchived = false;
   let currentPageId: number | null = null;
-  let updateCount = 0;
-  const MAX_UPDATES = 1;
   let initialHTMLSize = 0; // Track initial capture size for update quality guard
 
   // Collects nodes removed by virtual scrolling so we can merge them into snapshots
@@ -56,6 +56,7 @@ function initializeArchiver(): void {
   // Track active DOM monitor so we can tear it down on SPA navigation
   let activeObserver: MutationObserver | null = null;
   let monitorTimeoutId: number | null = null;
+  let monitorIntervalId: number | null = null;
 
   async function prepareCapture(): Promise<void> {
     if (isCapturing || hasArchived) {
@@ -130,7 +131,7 @@ function initializeArchiver(): void {
       console.log('[Wayback] Page ID:', currentPageId, 'Action:', response.action);
 
       // Start DOM change monitor for newly created pages
-      if (response.action === 'created' && updateCount < MAX_UPDATES) {
+      if (response.action === 'created') {
         startDOMChangeMonitor();
       }
     } catch (error) {
@@ -143,6 +144,10 @@ function initializeArchiver(): void {
       activeObserver.disconnect();
       activeObserver = null;
     }
+    if (monitorIntervalId) {
+      nativeClearInterval(monitorIntervalId);
+      monitorIntervalId = null;
+    }
     if (monitorTimeoutId) {
       nativeClearTimeout(monitorTimeoutId);
       monitorTimeoutId = null;
@@ -153,7 +158,7 @@ function initializeArchiver(): void {
     // Clean up any previous monitor first
     stopDOMChangeMonitor();
 
-    console.log('[Wayback] Starting DOM change monitor...');
+    console.log('[Wayback] Starting DOM change monitor (interval mode)...');
 
     // Disconnect the collector-only observer — the new monitor observer takes over feeding domCollector
     if (collectorObserver) {
@@ -164,71 +169,14 @@ function initializeArchiver(): void {
     // (e.g. the main tweet scrolled out during sendCapture's network request)
 
     let mutationCount = 0;
-    let debounceTimer: number | null = null;
+    let isUpdating = false;
     // Snapshot the page ID at monitor start so the callback can't act on a different page
     const monitorPageId = currentPageId;
 
     const observer = new MutationObserver((mutations) => {
       mutationCount += mutations.length;
-
       // Feed every mutation to the collector so it tracks removed/re-added nodes
       domCollector.handleMutations(mutations);
-
-      if (debounceTimer) {
-        nativeClearTimeout(debounceTimer);
-      }
-
-      debounceTimer = nativeSetTimeout(async () => {
-        // Guard: only proceed if the page ID hasn't changed (SPA navigation resets it)
-        if (mutationCount >= CONFIG.UPDATE_MIN_MUTATIONS && monitorPageId && monitorPageId === currentPageId && updateCount < MAX_UPDATES) {
-          // Guard: skip update when tab is hidden — sites like X.com aggressively strip DOM
-          // nodes when the tab loses focus, producing a degraded snapshot
-          if (document.visibilityState === 'hidden') {
-            console.log(`[Wayback] Skipping update: tab is hidden (DOM may be stripped)`);
-            mutationCount = 0;
-            return;
-          }
-
-          console.log(`[Wayback] DOM changed (${mutationCount} mutations), triggering update...`);
-          updateCount++;
-          stopDOMChangeMonitor();
-
-          try {
-            await waitForDOMStable(CONFIG.MUTATION_OBSERVER_TIMEOUT, CONFIG.DOM_STABLE_TIME);
-
-            // Only serialize CSSOM — don't freeze, to keep the SPA functional
-            serializeCSSOMToDOM();
-
-            // 在克隆 DOM 上内联布局样式
-            let newHTML = inlineLayoutStyles();
-
-            // Merge any nodes that were removed by virtual scrolling back into the snapshot
-            if (domCollector.collectedCount > 0) {
-              console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes...`);
-              newHTML = domCollector.mergeInto(newHTML);
-            }
-
-            // Guard: reject update if HTML shrunk significantly (< 70% of initial capture)
-            // This catches DOM virtualization stripping content even when tab appears visible
-            if (initialHTMLSize > 0 && newHTML.length < initialHTMLSize * 0.7) {
-              console.log(`[Wayback] Skipping update: HTML shrunk too much (${newHTML.length} vs initial ${initialHTMLSize}, ${Math.round(newHTML.length / initialHTMLSize * 100)}%)`);
-              return;
-            }
-
-            const newCaptureData: CaptureData = {
-              url: window.location.href,
-              title: document.title,
-              html: newHTML,
-              headers: captureData?.headers,
-            };
-
-            await updateOnServer(monitorPageId, newCaptureData);
-          } catch (error) {
-            console.error('[Wayback] Update failed:', error);
-          }
-        }
-        mutationCount = 0;
-      }, CONFIG.UPDATE_DEBOUNCE_DELAY) as unknown as number;
     });
 
     activeObserver = observer;
@@ -240,10 +188,87 @@ function initializeArchiver(): void {
       characterData: false,
     });
 
+    // Periodic check: every UPDATE_CHECK_INTERVAL, upload if DOM has changed
+    const intervalId = nativeSetInterval(() => {
+      if (isUpdating) return;
+
+      // Guard: page ID changed (SPA navigation) — stop
+      if (!monitorPageId || monitorPageId !== currentPageId) {
+        stopDOMChangeMonitor();
+        return;
+      }
+
+      // Collector reached size limit — do one final upload and stop
+      if (domCollector.reachedLimit) {
+        console.log('[Wayback] Collector reached size limit, performing final update...');
+        mutationCount = Math.max(mutationCount, CONFIG.UPDATE_MIN_MUTATIONS); // force trigger
+      }
+
+      // No meaningful changes — skip this cycle
+      if (mutationCount < CONFIG.UPDATE_MIN_MUTATIONS) {
+        return;
+      }
+
+      // Guard: skip update when tab is hidden — sites like X.com aggressively strip DOM
+      if (document.visibilityState === 'hidden') {
+        console.log(`[Wayback] Skipping update: tab is hidden (DOM may be stripped)`);
+        return;
+      }
+
+      const currentMutations = mutationCount;
+      mutationCount = 0;
+      isUpdating = true;
+      const isFinal = domCollector.reachedLimit;
+
+      (async () => {
+        try {
+          console.log(`[Wayback] DOM changed (${currentMutations} mutations), triggering update...`);
+
+          // Only serialize CSSOM — don't freeze, to keep the SPA functional
+          serializeCSSOMToDOM();
+
+          // 在克隆 DOM 上内联布局样式
+          let newHTML = inlineLayoutStyles();
+
+          // Merge any nodes that were removed by virtual scrolling back into the snapshot
+          if (domCollector.collectedCount > 0) {
+            console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes...`);
+            newHTML = domCollector.mergeInto(newHTML);
+          }
+
+          // Guard: reject update if HTML shrunk significantly (< 70% of initial capture)
+          if (initialHTMLSize > 0 && newHTML.length < initialHTMLSize * 0.7) {
+            console.log(`[Wayback] Skipping update: HTML shrunk too much (${newHTML.length} vs initial ${initialHTMLSize}, ${Math.round(newHTML.length / initialHTMLSize * 100)}%)`);
+            return;
+          }
+
+          const newCaptureData: CaptureData = {
+            url: window.location.href,
+            title: document.title,
+            html: newHTML,
+            headers: captureData?.headers,
+          };
+
+          await updateOnServer(monitorPageId, newCaptureData);
+        } catch (error) {
+          console.error('[Wayback] Update failed:', error);
+        } finally {
+          if (isFinal) {
+            console.log('[Wayback] Final update cycle complete, stopping monitor');
+            stopDOMChangeMonitor();
+          }
+          isUpdating = false;
+        }
+      })();
+    }, CONFIG.UPDATE_CHECK_INTERVAL) as unknown as number;
+
+    // Store intervalId so stopDOMChangeMonitor can clear it
+    monitorIntervalId = intervalId;
+
     // Auto-stop after timeout
     monitorTimeoutId = nativeSetTimeout(() => {
       stopDOMChangeMonitor();
-      console.log('[Wayback] DOM change monitor stopped');
+      console.log('[Wayback] DOM change monitor stopped (timeout)');
     }, CONFIG.UPDATE_MONITOR_TIMEOUT) as unknown as number;
   }
 
@@ -253,7 +278,6 @@ function initializeArchiver(): void {
     isCapturing = false;
     hasArchived = false;
     currentPageId = null;
-    updateCount = 0;
     // Restart collector for the new page
     if (collectorObserver) {
       collectorObserver.disconnect();

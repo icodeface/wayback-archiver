@@ -26,7 +26,7 @@ Page load → collectorObserver starts immediately
 
 Key filters:
 - **MIN_NODE_SIZE (2KB)**: Skips loading skeletons, placeholders, and separator elements. Real content nodes (tweets, comments) are typically 10KB+.
-- **MAX_COLLECTED_SIZE (5MB)**: Caps total memory usage.
+- **MAX_COLLECTED_SIZE (10MB)**: Caps total memory usage. When reached, triggers a final update upload and stops monitoring.
 
 #### Deduplication
 
@@ -82,9 +82,9 @@ initializeArchiver()
   │    │
   │    └─ startDOMChangeMonitor()
   │         ├─ Disconnect collectorObserver
-  │         ├─ New observer takes over (feeds DOMCollector + triggers updates)
-  │         ├─ Debounce 5s + min 10 mutations → trigger update
-  │         └─ Update: inlineLayoutStyles → mergeInto → PUT /api/archive/:id
+  │         ├─ New observer takes over (feeds DOMCollector + counts mutations)
+  │         ├─ Every 5s: check mutations ≥ 10 → upload update
+  │         └─ Stops after 5min timeout or collector reaches 10MB
   │
   └─ SPA navigation
        ├─ sendCapture() (save current page)

@@ -4,7 +4,7 @@
 // Uses arrays (not Sets) to preserve genuinely duplicated nodes
 // (e.g. two retweets with identical outerHTML).
 
-const MAX_COLLECTED_SIZE = 5 * 1024 * 1024; // 5MB cap
+const MAX_COLLECTED_SIZE = 10 * 1024 * 1024; // 10MB cap
 const MIN_NODE_SIZE = 2 * 1024; // Only collect nodes >= 2KB (filters out loading skeletons)
 
 export class DOMCollector {
@@ -13,6 +13,12 @@ export class DOMCollector {
   // Parallel arrays of text-based dedup keys for fast matching
   private removedKeys: Map<string, string[]> = new Map();
   private totalSize = 0;
+  private _reachedLimit = false;
+
+  /** Whether the collector has reached MAX_COLLECTED_SIZE */
+  get reachedLimit(): boolean {
+    return this._reachedLimit;
+  }
 
   handleMutations(mutations: MutationRecord[]): void {
     for (const mutation of mutations) {
@@ -34,7 +40,10 @@ export class DOMCollector {
         const html = (node as Element).outerHTML;
         // Skip small nodes (loading skeletons, placeholders) — real content is typically 2KB+
         if (html.length < MIN_NODE_SIZE) continue;
-        if (this.totalSize + html.length > MAX_COLLECTED_SIZE) continue;
+        if (this.totalSize + html.length > MAX_COLLECTED_SIZE) {
+          this._reachedLimit = true;
+          continue;
+        }
 
         let arr = this.removed.get(parentSel);
         let keys = this.removedKeys.get(parentSel);
@@ -166,6 +175,7 @@ export class DOMCollector {
     this.removed.clear();
     this.removedKeys.clear();
     this.totalSize = 0;
+    this._reachedLimit = false;
   }
 
   get collectedCount(): number {

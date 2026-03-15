@@ -7,8 +7,8 @@ export const CONFIG = {
   MUTATION_OBSERVER_TIMEOUT: 10000, // max ms to wait for DOM stability
   DOM_STABLE_TIME: 1000,            // ms of no mutations to consider DOM stable
   TIMER_CLEAR_RANGE: 10000,         // number of timer IDs to clear when freezing
-  UPDATE_DEBOUNCE_DELAY: 5000,      // ms of no DOM changes before triggering an update
+  UPDATE_CHECK_INTERVAL: 5000,      // ms between update checks
   UPDATE_MIN_MUTATIONS: 10,         // minimum mutation count before triggering an update
-  UPDATE_MONITOR_TIMEOUT: 30000,    // max ms to keep monitoring DOM changes
+  UPDATE_MONITOR_TIMEOUT: 300000,   // max ms to keep monitoring DOM changes (5 minutes)
   REQUEST_TIMEOUT: 300000,          // max ms to wait for server response (5 minutes)
 } as const;
