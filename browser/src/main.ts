@@ -173,6 +173,9 @@ function initializeArchiver(): void {
     // Snapshot the page ID at monitor start so the callback can't act on a different page
     const monitorPageId = currentPageId;
 
+    // Track the furthest scroll position — only upload when user reaches new content
+    let maxScrollY = window.scrollY;
+
     const observer = new MutationObserver((mutations) => {
       mutationCount += mutations.length;
       // Feed every mutation to the collector so it tracks removed/re-added nodes
@@ -214,6 +217,14 @@ function initializeArchiver(): void {
         console.log(`[Wayback] Skipping update: tab is hidden (DOM may be stripped)`);
         return;
       }
+
+      // Guard: skip update if user hasn't scrolled past previous max — content already captured
+      const currentScrollY = window.scrollY;
+      if (currentScrollY < maxScrollY) {
+        console.log(`[Wayback] Skipping update: not at new scroll position (${currentScrollY} < ${maxScrollY})`);
+        return;
+      }
+      maxScrollY = currentScrollY;
 
       const currentMutations = mutationCount;
       mutationCount = 0;

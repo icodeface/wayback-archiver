@@ -67,19 +67,23 @@ export class DOMCollector {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     let merged = 0;
 
-    // Build a GLOBAL dedup map across all target parents
-    // This prevents duplicates even when the same node was collected under different parent selectors
-    // (nth-child indices shift as virtual scrolling adds/removes nodes)
+    // Build a GLOBAL dedup map across all target parents AND their sibling containers.
+    // nth-child selectors shift as virtual scrolling changes the DOM, so a node may
+    // exist in the snapshot under a different parent than what the collector recorded.
+    // By scanning sibling containers we cover these shifted-index cases.
     const globalExisting = new Map<string, number>();
     const parentElements = new Map<string, Element>();
+    const scannedParents = new Set<Element>();
+
     for (const [selector] of this.removed) {
       const parent = doc.querySelector(selector);
       if (parent) {
         parentElements.set(selector, parent);
-        for (const child of Array.from(parent.children)) {
-          const key = this.textKey(child.outerHTML);
-          if (key) {
-            globalExisting.set(key, (globalExisting.get(key) || 0) + 1);
+        this.scanChildren(parent, globalExisting, scannedParents);
+        // Also scan sibling containers under the same grandparent
+        if (parent.parentElement) {
+          for (const sibling of Array.from(parent.parentElement.children)) {
+            this.scanChildren(sibling, globalExisting, scannedParents);
           }
         }
       }
@@ -199,11 +203,28 @@ export class DOMCollector {
     }
   }
 
+  /** Scan direct children of an element and add their textKeys to the dedup map. */
+  private scanChildren(el: Element, map: Map<string, number>, visited: Set<Element>): void {
+    if (visited.has(el)) return;
+    visited.add(el);
+    for (const child of Array.from(el.children)) {
+      const key = this.textKey(child.outerHTML);
+      if (key) {
+        map.set(key, (map.get(key) || 0) + 1);
+      }
+    }
+  }
+
   /** Extract a stable dedup key from HTML: text content + image sources.
-   *  This is immune to style/id/aria changes from virtual scroll re-renders. */
+   *  Strips dynamic content (video timestamps, relative times, ticker prices)
+   *  that changes between virtual scroll re-renders. */
   private textKey(html: string): string {
     // Extract text (strip tags)
-    const text = html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    let text = html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    // Strip video player timestamps: "0:03 / 2:14", "1:23:45 / 2:00:00"
+    text = text.replace(/\d+:\d+(:\d+)?\s*\/\s*\d+:\d+(:\d+)?/g, '');
+    // Strip relative timestamps: "·14h", "·40m", "·2s", "·3d" (X.com format: ·Nunit)
+    text = text.replace(/(?<=·)\d+[smhd]/g, '');
     // Extract img src values for image-only nodes
     const imgs: string[] = [];
     const imgRe = /<img[^>]+src="([^"]+)"/g;

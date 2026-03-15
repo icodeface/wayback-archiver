@@ -35,16 +35,17 @@ Virtual scrolling re-renders nodes with different attributes each time (dynamic 
 Solution: `textKey` — a stable dedup key composed of:
 - Text content (all HTML tags stripped, whitespace normalized)
 - Image `src` values (for image-only nodes)
+- Dynamic content stripped: video timestamps (`0:03 / 2:14`), relative times (`·14h`, `·40m`)
 
 This is used in two places:
 1. **`removeOneMatch`**: When a node is re-added to the DOM, find and remove the matching collected entry using `textKey` comparison (via cached `removedKeys` array for performance).
-2. **`mergeInto`**: Before appending a collected node, check if an equivalent already exists. Uses **global dedup** across all parent selectors, because `nth-child` indices shift as virtual scrolling adds/removes nodes, causing the same logical parent to have different CSS selectors at different times.
+2. **`mergeInto`**: Before appending a collected node, check if an equivalent already exists. Uses **global dedup** across all parent selectors and their sibling containers, because `nth-child` indices shift as virtual scrolling adds/removes nodes, causing the same logical parent to have different CSS selectors at different times.
 
 #### Merge Logic (`mergeInto`)
 
 ```
 1. Parse snapshot HTML into a DOM document
-2. Build globalExisting map: textKey → count (from all target parents' children)
+2. Build globalExisting map: textKey → count (from target parents' children AND sibling containers)
 3. For each collected node:
    a. Compute textKey
    b. Skip if already exists (existCount > skippedCount)

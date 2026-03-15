@@ -83,6 +83,7 @@ interval 触发
   ├─ collector 达到上限? → 强制触发最后一次上传
   ├─ mutations < 10? → 跳过，等下一轮
   ├─ tab hidden? → 跳过（DOM 可能被剥离）
+  ├─ scrollY < maxScrollY? → 跳过（用户在回看已捕获的内容）
   └─ 执行上传
        ├─ serializeCSSOMToDOM()
        ├─ inlineLayoutStyles()
@@ -114,6 +115,8 @@ interval 触发
 3. **并发保护**：`isUpdating` 标志防止多次上传同时进行。
 
 4. **跨页面保护**：快照 `monitorPageId`，如果 SPA 导航导致 `currentPageId` 变化，停止监听。
+
+5. **回滚保护**：记录 `maxScrollY`（用户到达过的最远滚动位置），当前 `scrollY < maxScrollY` 时跳过上传。回看已捕获的内容不会触发更新，减少不必要的上传和重复风险。
 
 ## 三、SPA 导航处理
 
