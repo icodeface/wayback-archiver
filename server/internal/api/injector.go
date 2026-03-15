@@ -112,6 +112,31 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		position: static !important;
 		transform: none !important;
 	}
+	/* 允许用户选择文本内容（覆盖原页面的 user-select: none） */
+	* {
+		user-select: text !important;
+		-webkit-user-select: text !important;
+	}
+	/* 启用鼠标事件 - 通用方案
+	   对于 fixed/sticky 定位且可能遮挡内容的宽容器，让其不拦截事件
+	   但保留其子元素的交互能力
+	   排除归档 header 本身 */
+	[style*="position: fixed"][style*="left:"][style*="right:"]:not(#wayback-archive-header),
+	[style*="position:fixed"][style*="left:"][style*="right:"]:not(#wayback-archive-header),
+	[style*="position: fixed"][style*="top:"][style*="bottom:"]:not(#wayback-archive-header),
+	[style*="position:fixed"][style*="top:"][style*="bottom:"]:not(#wayback-archive-header) {
+		pointer-events: none !important;
+	}
+	[style*="position: fixed"] > *:not(#wayback-archive-header *),
+	[style*="position:fixed"] > *:not(#wayback-archive-header *) {
+		pointer-events: auto !important;
+	}
+	/* 禁用透明高 z-index 覆盖层的鼠标事件 - 它们通常是隐藏的弹窗或遮罩
+	   z-index > 10000 通常是插件/扩展使用的极高值 */
+	[style*="opacity: 0"][style*="z-index:"],
+	[style*="opacity:0"][style*="z-index:"] {
+		pointer-events: none !important;
+	}
 </style>
 <script nonce="%s">
 (function() {
@@ -135,16 +160,62 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		});
 	}
 
-	// 页面加载完成后执行
-	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', fixPositionedElements);
-	} else {
-		fixPositionedElements();
+	// 强制启用文本选择并处理覆盖层
+	function forceEnableInteraction() {
+		// 为所有元素强制设置 user-select
+		const allElements = document.querySelectorAll('*');
+		allElements.forEach(function(el) {
+			el.style.setProperty('user-select', 'text', 'important');
+			el.style.setProperty('-webkit-user-select', 'text', 'important');
+		});
+
+		// 处理 fixed/sticky 定位的宽容器：让容器不拦截事件，但子元素保持交互
+		document.querySelectorAll('[style*="position: fixed"], [style*="position:fixed"]').forEach(function(el) {
+			if (el.id === 'wayback-archive-header') return;
+
+			const style = el.getAttribute('style') || '';
+			// 检查是否是占据多边的宽容器（如 left+right 或 top+bottom）
+			const hasLeftRight = (style.includes('left:') && style.includes('right:'));
+			const hasTopBottom = (style.includes('top:') && style.includes('bottom:'));
+
+			if (hasLeftRight || hasTopBottom) {
+				el.style.setProperty('pointer-events', 'none', 'important');
+				// 子元素保持可交互
+				Array.from(el.children).forEach(function(child) {
+					child.style.setProperty('pointer-events', 'auto', 'important');
+				});
+			}
+		});
+
+		// 移除透明覆盖层（通常是隐藏的弹窗或插件元素）
+		document.querySelectorAll('[style*="opacity: 0"], [style*="opacity:0"]').forEach(function(el) {
+			const style = window.getComputedStyle(el);
+			// 如果是透明且高 z-index，移除它
+			if (style.opacity === '0' && parseInt(style.zIndex) > 1000) {
+				el.style.setProperty('display', 'none', 'important');
+				console.log('[Wayback] Hidden overlay removed:', el.id || el.className);
+			}
+		});
+
+		console.log('[Wayback] Text selection enabled for', allElements.length, 'elements');
 	}
 
-	// 延迟执行一次，确保动态加载的元素也被处理
+	// 页面加载完成后执行
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', function() {
+			fixPositionedElements();
+			forceEnableInteraction();
+		});
+	} else {
+		fixPositionedElements();
+		forceEnableInteraction();
+	}
+
+	// 延迟执行，确保动态加载的元素也被处理
 	setTimeout(fixPositionedElements, 100);
+	setTimeout(forceEnableInteraction, 100);
 	setTimeout(fixPositionedElements, 500);
+	setTimeout(forceEnableInteraction, 500);
 
 })();
 </script>
