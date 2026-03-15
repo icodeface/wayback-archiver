@@ -167,3 +167,148 @@ func TestFixNestedButtons_RealWorldPopover(t *testing.T) {
 		t.Errorf("Outer popover button should be preserved, got: %s", result)
 	}
 }
+
+// --- 滚动动画 opacity 修复测试 ---
+
+func TestFixScrollAnimationOpacity_Basic(t *testing.T) {
+	html := `<div data-animate-item="" style="opacity: 0; transform: translate(0px, 50px);">content</div>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity: 0") {
+		t.Errorf("opacity: 0 should be removed, got: %s", result)
+	}
+	if strings.Contains(result, "transform:") {
+		t.Errorf("transform should be removed, got: %s", result)
+	}
+	if !strings.Contains(result, "content") {
+		t.Errorf("content should be preserved, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_AnimateChild(t *testing.T) {
+	html := `<h3 data-animate-child="" style="translate: none; rotate: none; scale: none; transform: translate(0px, 20px); opacity: 0;">Title</h3>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity: 0") {
+		t.Errorf("opacity: 0 should be removed, got: %s", result)
+	}
+	if strings.Contains(result, "translate:") || strings.Contains(result, "rotate:") || strings.Contains(result, "scale:") {
+		t.Errorf("animation properties should be removed, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_NoAnimateAttr(t *testing.T) {
+	// 没有 data-animate-* 属性的元素不应被修改
+	html := `<div style="opacity: 0; transform: translate(0px, 50px);">hidden</div>`
+	result := fixScrollAnimationOpacity(html)
+	if result != html {
+		t.Errorf("Should not modify elements without data-animate-*, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_VisibleElement(t *testing.T) {
+	// opacity: 1 的动画元素不应被修改
+	html := `<div data-animate-item="" style="opacity: 1;">visible</div>`
+	result := fixScrollAnimationOpacity(html)
+	if result != html {
+		t.Errorf("Should not modify visible elements, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_PreservesOtherStyles(t *testing.T) {
+	html := `<div data-animate-item="" style="padding-top:20px;opacity: 0;display:flex;transform:matrix(1, 0, 0, 1, 0, 50)">text</div>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity") {
+		t.Errorf("opacity should be removed, got: %s", result)
+	}
+	if !strings.Contains(result, "padding-top:20px") {
+		t.Errorf("padding-top should be preserved, got: %s", result)
+	}
+	if !strings.Contains(result, "display:flex") {
+		t.Errorf("display:flex should be preserved, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_DataAnimateNoSuffix(t *testing.T) {
+	html := `<div data-animate="" class="w-full flex" style="translate: none; rotate: none; scale: none; transform: translate(0px, 50px); opacity: 0;;margin-top:24px">text</div>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity: 0") {
+		t.Errorf("opacity: 0 should be removed, got: %s", result)
+	}
+	if strings.Contains(result, "transform:") {
+		t.Errorf("transform should be removed, got: %s", result)
+	}
+	if !strings.Contains(result, "margin-top:24px") {
+		t.Errorf("margin-top should be preserved, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_DataAnimateGroup(t *testing.T) {
+	html := `<div data-animate-group="" style="opacity: 0; transform: translate(0px, 30px);">group</div>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity: 0") {
+		t.Errorf("opacity: 0 should be removed, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_SVGChartLine(t *testing.T) {
+	html := `<path class="chart-line" d="M49.0 397.3" stroke="#74C375" stroke-width="1.5" style="opacity: 0; stroke-dashoffset: 1100px; stroke-dasharray: 1099.62;;box-sizing:border-box"></path>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity: 0") {
+		t.Errorf("opacity: 0 should be removed from SVG chart line, got: %s", result)
+	}
+	if strings.Contains(result, "stroke-dashoffset") {
+		t.Errorf("stroke-dashoffset should be removed, got: %s", result)
+	}
+	if !strings.Contains(result, "stroke-dasharray") {
+		t.Errorf("stroke-dasharray should be preserved, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_SVGChartLegend(t *testing.T) {
+	html := `<circle class="chart-legend" cx="205.5" cy="165" r="2.5" fill="#F1F1F1" style="opacity: 0; stroke-dashoffset: 0;;box-sizing:border-box"></circle>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity: 0") {
+		t.Errorf("opacity: 0 should be removed from SVG chart legend, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_SVGNoStrokeDash(t *testing.T) {
+	// SVG element with opacity: 0 but no stroke-dashoffset — should also be fixed
+	// SVG graphic elements rarely use inline opacity: 0 intentionally
+	html := `<path d="M0 0" style="opacity: 0; fill: red;"></path>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity: 0") {
+		t.Errorf("opacity: 0 should be removed from SVG element, got: %s", result)
+	}
+	if !strings.Contains(result, "fill: red") {
+		t.Errorf("fill should be preserved, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_SVGCustomElement(t *testing.T) {
+	// 自定义元素名以 SVG 标签开头（如 path-component）不应被匹配
+	html := `<path-component style="opacity: 0; display: none;">hidden</path-component>`
+	result := fixScrollAnimationOpacity(html)
+	if result != html {
+		t.Errorf("Custom element should not be modified, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_SVGUpperCase(t *testing.T) {
+	// 大写 SVG 标签也应被匹配
+	html := `<PATH d="M0 0" style="opacity: 0; fill: red;"></PATH>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity: 0") {
+		t.Errorf("opacity: 0 should be removed from uppercase SVG element, got: %s", result)
+	}
+}
+
+func TestFixScrollAnimationOpacity_LeadingWhitespace(t *testing.T) {
+	html := `<div data-animate-item="" style="  opacity: 0; color: red;">text</div>`
+	result := fixScrollAnimationOpacity(html)
+	if strings.Contains(result, "opacity: 0") {
+		t.Errorf("opacity: 0 with leading whitespace should be removed, got: %s", result)
+	}
+	if !strings.Contains(result, "color: red") {
+		t.Errorf("color should be preserved, got: %s", result)
+	}
+}
