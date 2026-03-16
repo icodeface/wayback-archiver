@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wayback-postgres
+    environment:
+      POSTGRES_USER: wayback
+      POSTGRES_PASSWORD: wayback
+      POSTGRES_DB: wayback
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./server/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wayback"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  wayback:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-docker}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    container_name: wayback-server
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: wayback
+      DB_PASSWORD: wayback
+      DB_NAME: wayback
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      DATA_DIR: /app/data
+      LOG_DIR: /app/data/logs
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080,null}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

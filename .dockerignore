@@ -1,0 +1,15 @@
+.git
+.github
+.claude
+.env
+.DS_Store
+bin/
+data/
+node_modules/
+tests/
+docs/
+screenshot/
+*.md
+!browser/README.md
+LICENSE
+skill.md

@@ -46,6 +46,28 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go 服务器 ──▶ PostgreSQL
 
 ## 快速开始
 
+### 方式一：Docker 部署（推荐）
+
+最快的启动方式。Docker Compose 会自动配置服务器和 PostgreSQL。
+
+```bash
+# 克隆仓库
+git clone https://github.com/icodeface/wayback-archiver.git
+cd wayback-archiver
+
+# 启动所有服务
+docker compose up -d
+
+# 查看日志
+docker compose logs -f wayback
+```
+
+服务启动后访问 `http://localhost:8080`，然后跳到[第 4 步（安装用户脚本）](#4-安装用户脚本)。
+
+详细的 Docker 配置和部署选项参见 [docs/DOCKER.md](docs/DOCKER.md)。
+
+### 方式二：预编译二进制
+
 ### 1. 下载预编译二进制
 
 从 [Releases 页面](https://github.com/icodeface/wayback-archiver/releases) 下载最新版本：

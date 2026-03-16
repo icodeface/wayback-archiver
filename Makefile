@@ -1,4 +1,4 @@
-.PHONY: build all server script test test-go test-e2e clean
+.PHONY: build all server script test test-go test-e2e clean docker-build docker-up docker-down docker-logs
 
 BINARY    := wayback-server
 SERVER_PKG := ./cmd/server
@@ -49,3 +49,19 @@ test-e2e:
 		echo "Running $$test ..."; \
 		node $$test || exit 1; \
 	done
+
+# Docker targets
+docker-build:
+	docker build -t wayback-archiver:latest \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg BUILD_TIME="$(BUILD_TIME)" \
+		.
+
+docker-up:
+	VERSION=$(VERSION) BUILD_TIME="$(BUILD_TIME)" docker compose up -d
+
+docker-down:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f wayback
