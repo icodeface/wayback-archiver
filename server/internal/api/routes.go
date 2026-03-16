@@ -10,7 +10,7 @@ import (
 )
 
 // SetupRoutes 设置路由
-func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig) {
+func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, version, buildTime string) {
 	// CORS 中间件 - 仅允许本地来源，防止 CSRF 攻击
 	r.Use(func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
@@ -32,8 +32,18 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig) {
 	// robots.txt（在认证之前，确保爬虫和工具可以访问）
 	webFS, _ := fs.Sub(web.StaticFiles, ".")
 	serveFile := func(name string) gin.HandlerFunc {
+		data, _ := fs.ReadFile(webFS, name)
+		contentType := "application/octet-stream"
+		switch {
+		case len(name) > 5 && name[len(name)-5:] == ".html":
+			contentType = "text/html; charset=utf-8"
+		case len(name) > 4 && name[len(name)-4:] == ".ico":
+			contentType = "image/x-icon"
+		case len(name) > 4 && name[len(name)-4:] == ".txt":
+			contentType = "text/plain; charset=utf-8"
+		}
 		return func(c *gin.Context) {
-			c.FileFromFS(name, http.FS(webFS))
+			c.Data(http.StatusOK, contentType, data)
 		}
 	}
 	r.GET("/robots.txt", serveFile("robots.txt"))
@@ -57,6 +67,13 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig) {
 
 	api := r.Group("/api")
 	{
+		api.GET("/version", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"version":    version,
+				"build_time": buildTime,
+				"repo":       "https://github.com/icodeface/wayback-archiver",
+			})
+		})
 		api.POST("/archive", handler.ArchivePage)
 		api.PUT("/archive/:id", handler.UpdatePage)
 		api.GET("/pages", handler.ListPages)

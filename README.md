@@ -60,11 +60,9 @@ psql wayback < server/init_db.sql
 ### 2. Start the Server
 
 ```bash
-cd server
-cp .env.example .env   # 复制配置文件（可选，也可以直接使用环境变量）
-# 编辑 .env 文件根据需要修改配置
-go build -o wayback-server ./cmd/server
-./wayback-server
+cp .env.example .env                 # Optional; edit as needed
+make build                           # Builds server + userscript into bin/
+./bin/wayback-server
 ```
 
 The server starts at `http://localhost:8080` by default.
@@ -74,16 +72,12 @@ If you need a proxy for downloading external resources:
 ```bash
 export http_proxy=http://127.0.0.1:7897
 export https_proxy=http://127.0.0.1:7897
-./wayback-server
+./bin/wayback-server
 ```
 
 ### 3. Install the Userscript
 
-```bash
-cd browser
-npm install
-npm run build
-```
+The `make build` step above already produces `bin/wayback.user.js`. 
 
 Then:
 
@@ -100,9 +94,9 @@ That's it. Pages are automatically archived as soon as they load. Open `http://l
 
 ## Configuration
 
-Environment variables (or `.env` file in `server/` directory):
+Environment variables (or `.env` file in the project root):
 
-The server automatically loads `.env` file if it exists. You can also set environment variables directly.
+The server automatically loads `.env` from the working directory if it exists. You can also set environment variables directly.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -126,7 +120,7 @@ For deploying to a remote server, see [REMOTE_DEPLOYMENT.md](REMOTE_DEPLOYMENT.m
 Quick setup:
 
 ```bash
-# Server .env configuration
+# .env configuration
 ALLOWED_ORIGINS=https://your-domain.com,null
 AUTH_PASSWORD=your_secure_password
 SERVER_HOST=0.0.0.0
@@ -146,6 +140,7 @@ AUTH_PASSWORD: 'your_secure_password'
 
 | Method | Endpoint | Description |
 |---|---|---|
+| `GET` | `/api/version` | Server version and build info |
 | `POST` | `/api/archive` | Create a page archive |
 | `PUT` | `/api/archive/:id` | Update an existing archive snapshot |
 | `GET` | `/api/pages` | List all archived pages |
@@ -172,6 +167,8 @@ Accepts the same body as POST. Replaces the snapshot content — old HTML and re
 
 ```
 wayback-archiver/
+├── Makefile                  # Build, test, cross-compile
+├── bin/                      # Build output (server binary + userscript)
 ├── browser/                  # Tampermonkey userscript (TypeScript)
 │   ├── src/
 │   │   ├── main.ts           # Entry point & orchestration
@@ -193,9 +190,9 @@ wayback-archiver/
 │   │   ├── logging/          # File-based logging with rotation
 │   │   ├── models/           # Data models
 │   │   └── storage/          # File storage & dedup
-│   ├── web/                  # Web UI static files
-│   └── .env.example
+│   └── web/                  # Web UI static files
 │
+├── .env.example              # Configuration template
 └── tests/                    # Test suites
     ├── browser/              # Browser-side tests
     └── server/               # Server-side & E2E tests
@@ -220,10 +217,18 @@ data/
 
 ```bash
 # Go unit tests
-cd server && go test ./... -v
+make test
 
-# E2E tests (requires Chrome)
-cd tests/server && node test_update_feature.js
+# E2E tests (requires server running on localhost:8080)
+make test-e2e
+```
+
+## Building for Other Platforms
+
+```bash
+# Cross-compile for all supported platforms (linux/darwin/windows, amd64/arm64)
+make all
+# Outputs to bin/wayback-server-<os>-<arch>
 ```
 
 ## Known Limitations

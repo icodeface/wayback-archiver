@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,7 +15,21 @@ import (
 	"wayback/internal/storage"
 )
 
+// Set via -ldflags at build time
+var (
+	Version   = "dev"
+	BuildTime = ""
+)
+
 func main() {
+	// Handle --version / -v
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("wayback-server %s\n", Version)
+		if BuildTime != "" {
+			fmt.Printf("built at %s\n", BuildTime)
+		}
+		return
+	}
 	// 加载 .env 文件（如果存在）
 	// 忽略错误，因为 .env 文件是可选的（可以直接使用环境变量）
 	_ = godotenv.Load()
@@ -91,7 +106,7 @@ func main() {
 		c.Next()
 	})
 
-	api.SetupRoutes(r, handler, &cfg.Auth)
+	api.SetupRoutes(r, handler, &cfg.Auth, Version, BuildTime)
 
 	// 启动服务器
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

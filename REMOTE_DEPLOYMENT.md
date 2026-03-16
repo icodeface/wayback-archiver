@@ -35,7 +35,7 @@ GRANT ALL PRIVILEGES ON DATABASE wayback TO wayback;
 
 ## 2. Configure Server
 
-Create `.env` file in `server/` directory:
+Create `.env` file in project root:
 
 ```bash
 # Database
@@ -67,9 +67,8 @@ sudo chown $USER:$USER /var/wayback/data
 ## 3. Build and Run Server
 
 ```bash
-cd server
-go build -o wayback-server ./cmd/server
-./wayback-server
+make build
+./bin/wayback-server
 ```
 
 For production, use systemd:
@@ -83,8 +82,8 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 User=wayback
-WorkingDirectory=/opt/wayback/server
-ExecStart=/opt/wayback/server/wayback-server
+WorkingDirectory=/opt/wayback
+ExecStart=/opt/wayback/bin/wayback-server
 Restart=on-failure
 
 [Install]
@@ -112,12 +111,10 @@ export const CONFIG = {
 Rebuild:
 
 ```bash
-cd browser
-npm install
-npm run build
+make script
 ```
 
-Load the extension from `browser/dist/` directory.
+Load the extension from `bin/wayback.user.js`.
 
 **Note**: The Tampermonkey script is configured with `@connect *` to allow connections to any domain, making it work seamlessly with both local and remote servers.
 

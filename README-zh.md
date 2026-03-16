@@ -58,10 +58,9 @@ psql -U postgres wayback < server/init_db.sql
 ### 2. 启动服务器
 
 ```bash
-cd server
 cp .env.example .env   # 按需修改配置
-go build -o wayback-server ./cmd/server
-./wayback-server
+make build                           # 构建服务器 + 用户脚本到 bin/
+./bin/wayback-server
 ```
 
 服务器默认在 `http://localhost:8080` 启动。
@@ -71,16 +70,12 @@ go build -o wayback-server ./cmd/server
 ```bash
 export http_proxy=http://127.0.0.1:7897
 export https_proxy=http://127.0.0.1:7897
-./wayback-server
+./bin/wayback-server
 ```
 
 ### 3. 安装用户脚本
 
-```bash
-cd browser
-npm install
-npm run build
-```
+`make build` 已经生成了 `bin/wayback.user.js`。
 
 然后：
 
@@ -97,7 +92,7 @@ npm run build
 
 ## 配置项
 
-环境变量（或 `server/.env` 文件）：
+环境变量（或项目根目录的 `.env` 文件）：
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
@@ -116,6 +111,7 @@ npm run build
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| `GET` | `/api/version` | 服务器版本和构建信息 |
 | `POST` | `/api/archive` | 创建页面归档 |
 | `PUT` | `/api/archive/:id` | 更新已有归档快照 |
 | `GET` | `/api/pages` | 列出所有归档页面 |
@@ -142,6 +138,8 @@ npm run build
 
 ```
 wayback-archiver/
+├── Makefile                  # 构建、测试、交叉编译
+├── bin/                      # 构建产物（服务器二进制 + 用户脚本）
 ├── browser/                  # Tampermonkey 用户脚本 (TypeScript)
 │   ├── src/
 │   │   ├── main.ts           # 入口 & 流程编排
@@ -163,9 +161,9 @@ wayback-archiver/
 │   │   ├── logging/          # 文件日志 & 自动轮转
 │   │   ├── models/           # 数据模型
 │   │   └── storage/          # 文件存储 & 去重
-│   ├── web/                  # Web UI 静态文件
-│   └── .env.example
+│   └── web/                  # Web UI 静态文件
 │
+├── .env.example              # 配置模板
 └── tests/                    # 测试
     ├── browser/              # 浏览器端测试
     └── server/               # 服务器端 & 端到端测试
@@ -190,10 +188,18 @@ data/
 
 ```bash
 # Go 单元测试
-cd server && go test ./... -v
+make test
 
-# 端到端测试（需要 Chrome）
-cd tests/server && node test_update_feature.js
+# 端到端测试（需要服务器运行在 localhost:8080）
+make test-e2e
+```
+
+## 跨平台构建
+
+```bash
+# 交叉编译所有支持的平台（linux/darwin/windows, amd64/arm64）
+make all
+# 输出到 bin/wayback-server-<os>-<arch>
 ```
 
 ## 已知限制

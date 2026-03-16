@@ -546,7 +546,10 @@
                 </div>
                 <p class="tagline">The Memory of Your Internet — Archive Everything You Browse.</p>
             </div>
-            <a href="/logs" style="color:var(--color-text-dim);text-decoration:none;font-size:0.75rem;transition:color 0.2s;white-space:nowrap" onmouseover="this.style.color='var(--color-text-secondary)'" onmouseout="this.style.color='var(--color-text-dim)'">LOGS</a>
+            <div style="display:flex;gap:16px;align-items:center">
+                <a id="versionLink" href="https://github.com/icodeface/wayback-archiver" target="_blank" style="color:var(--color-text-dim);text-decoration:none;font-size:0.75rem;transition:color 0.2s;white-space:nowrap" onmouseover="this.style.color='var(--color-accent)'" onmouseout="this.style.color='var(--color-text-dim)'">v...</a>
+                <a href="/logs" style="color:var(--color-text-dim);text-decoration:none;font-size:0.75rem;transition:color 0.2s;white-space:nowrap" onmouseover="this.style.color='var(--color-text-secondary)'" onmouseout="this.style.color='var(--color-text-dim)'">LOGS</a>
+            </div>
         </header>
 
         <div class="search-section">
@@ -830,6 +833,11 @@
         }
 
         loadPages(1);
+
+        fetch('/api/version').then(r => r.json()).then(d => {
+            const el = document.getElementById('versionLink');
+            if (el && d.version) el.textContent = d.version;
+        }).catch(() => {});
     </script>
 </body>
 </html>

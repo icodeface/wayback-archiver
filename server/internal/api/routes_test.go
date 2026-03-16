@@ -14,7 +14,7 @@ func setupAuthRouter(authCfg *config.AuthConfig) *gin.Engine {
 	r := gin.New()
 	handler := &Handler{} // minimal handler, routes not hit
 
-	SetupRoutes(r, handler, authCfg)
+	SetupRoutes(r, handler, authCfg, "test", "")
 	return r
 }
 
