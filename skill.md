@@ -52,8 +52,7 @@ tar -xzf wayback-server-*.tar.gz
 # Create database (PostgreSQL 默认使用当前系统用户名)
 createdb wayback
 
-# Download and run schema
-curl -O https://raw.githubusercontent.com/icodeface/wayback-archiver/main/server/init_db.sql
+# Run schema (init_db.sql is included in the release archive)
 psql wayback < init_db.sql
 ```
 

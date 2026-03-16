@@ -73,8 +73,7 @@ tar -xzf wayback-server-*.tar.gz
 # 如果你的系统用户名是 alice，以下命令等同于 createdb -U alice wayback
 createdb wayback
 
-# Download and run the schema
-curl -O https://raw.githubusercontent.com/icodeface/wayback-archiver/main/server/init_db.sql
+# Run the schema (init_db.sql is included in the release archive)
 psql wayback < init_db.sql
 ```
 

@@ -41,15 +41,16 @@ jobs:
       - name: Package release artifacts
         run: |
           cp .env.example bin/
+          cp server/init_db.sql bin/
           cd bin
           for f in wayback-server-*; do
             name="${f%.*}"
             ext="${f##*.}"
             if [ "$ext" = "exe" ]; then
-              zip "${name}.zip" "$f" wayback.user.js .env.example
+              zip "${name}.zip" "$f" wayback.user.js .env.example init_db.sql
             else
               chmod +x "$f"
-              tar czf "${name}.tar.gz" "$f" wayback.user.js .env.example
+              tar czf "${name}.tar.gz" "$f" wayback.user.js .env.example init_db.sql
             fi
           done
 

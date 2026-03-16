@@ -71,8 +71,7 @@ tar -xzf wayback-server-*.tar.gz
 ```bash
 createdb -U postgres wayback
 
-# 下载并执行建表脚本
-curl -O https://raw.githubusercontent.com/icodeface/wayback-archiver/main/server/init_db.sql
+# 执行建表脚本（init_db.sql 已包含在 release 压缩包中）
 psql -U postgres wayback < init_db.sql
 ```
 
