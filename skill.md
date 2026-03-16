@@ -23,40 +23,54 @@ Use this skill when the user wants to:
 
 Before using this skill, ensure the Wayback Archiver server is running:
 
-- **Git**
-- **Go** 1.21+
-- **Node.js** 16+
 - **PostgreSQL** 14+
 - **Chrome** or **Firefox** with [Tampermonkey](https://www.tampermonkey.net/) extension (v5.3+)
 
 ## Quick Start
 
-### 1. Clone and Setup
+### 1. Download Pre-built Binaries
+
+Download from [Releases](https://github.com/icodeface/wayback-archiver/releases):
+
+- **Server binary**: `wayback-server-<os>-<arch>.tar.gz` (or `.zip` for Windows)
+- **Userscript**: `wayback.user.js`
+
+Extract the server binary:
 
 ```bash
-git clone https://github.com/icodeface/wayback-archiver.git
-cd wayback-archiver
+# macOS/Linux
+tar -xzf wayback-server-*.tar.gz
 
+# Windows: extract the .zip file
+```
+
+> **Building from source?** See [docs/BUILD.md](https://github.com/icodeface/wayback-archiver/blob/main/docs/BUILD.md).
+
+### 2. Setup Database
+
+```bash
 # Create database (PostgreSQL 默认使用当前系统用户名)
 createdb wayback
-psql wayback < server/init_db.sql
+
+# Download and run schema
+curl -O https://raw.githubusercontent.com/icodeface/wayback-archiver/main/server/init_db.sql
+psql wayback < init_db.sql
 ```
 
-### 2. Start Server
+### 3. Start Server
 
 ```bash
-cp .env.example .env   # 可选，也可以直接使用环境变量
-make build             # 构建服务器 + 用户脚本到 bin/
-./bin/wayback-server
+./wayback-server
 ```
 
-Server runs at `http://localhost:8080` by default. 
+Server runs at `http://localhost:8080` by default.
 
-### 3. Install Browser Script
+### 4. Install Browser Script
 
-The `make build` step above already produces `bin/wayback.user.js`.
-
-Install `browser/dist/wayback.user.js` in Tampermonkey.
+1. Download `wayback.user.js` from [Releases](https://github.com/icodeface/wayback-archiver/releases)
+2. Open Tampermonkey dashboard
+3. Create new script and paste the content
+4. Save and enable
 
 > **Chrome users:** Enable "Allow user scripts" in Tampermonkey's extension settings (right-click icon → Manage extension). Firefox does not require this.
 
@@ -176,13 +190,7 @@ data/
 
 ## Testing
 
-```bash
-# Go unit tests
-make test
-
-# E2E tests (requires server running on localhost:8080)
-make test-e2e
-```
+See [docs/BUILD.md](https://github.com/icodeface/wayback-archiver/blob/main/docs/BUILD.md) for build and test instructions.
 
 ## Troubleshooting
 

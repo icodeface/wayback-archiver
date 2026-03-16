@@ -41,26 +41,48 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go 服务器 ──▶ PostgreSQL
 
 ## 环境要求
 
-- **Go** 1.21+
-- **Node.js** 16+（用于构建用户脚本）
 - **PostgreSQL** 14+
 - **Chrome** 或 **Firefox** + [Tampermonkey](https://www.tampermonkey.net/) 扩展（v5.3+）
 
 ## 快速开始
 
-### 1. 数据库配置
+### 1. 下载预编译二进制
+
+从 [Releases 页面](https://github.com/icodeface/wayback-archiver/releases) 下载最新版本：
+
+- **macOS**: `wayback-server-darwin-amd64.tar.gz`（Intel）或 `wayback-server-darwin-arm64.tar.gz`（Apple Silicon）
+- **Linux**: `wayback-server-linux-amd64.tar.gz` 或 `wayback-server-linux-arm64.tar.gz`
+- **Windows**: `wayback-server-windows-amd64.zip`
+- **用户脚本**: `wayback.user.js`
+
+解压：
+
+```bash
+# macOS/Linux
+tar -xzf wayback-server-*.tar.gz
+
+# Windows: 解压 .zip 文件
+```
+
+> **想从源码构建？** 参见 [docs/BUILD.md](docs/BUILD.md)。
+
+### 2. 数据库配置
 
 ```bash
 createdb -U postgres wayback
-psql -U postgres wayback < server/init_db.sql
+
+# 下载并执行建表脚本
+curl -O https://raw.githubusercontent.com/icodeface/wayback-archiver/main/server/init_db.sql
+psql -U postgres wayback < init_db.sql
 ```
 
-### 2. 启动服务器
+### 3. 启动服务器
 
 ```bash
-cp .env.example .env   # 按需修改配置
-make build                           # 构建服务器 + 用户脚本到 bin/
-./bin/wayback-server
+# 可选：创建 .env 文件自定义配置
+# 可用配置项见下方"配置项"部分
+
+./wayback-server
 ```
 
 服务器默认在 `http://localhost:8080` 启动。
@@ -70,23 +92,20 @@ make build                           # 构建服务器 + 用户脚本到 bin/
 ```bash
 export http_proxy=http://127.0.0.1:7897
 export https_proxy=http://127.0.0.1:7897
-./bin/wayback-server
+./wayback-server
 ```
 
-### 3. 安装用户脚本
+### 4. 安装用户脚本
 
-`make build` 已经生成了 `bin/wayback.user.js`。
-
-然后：
-
-1. 在浏览器中打开 Tampermonkey 管理面板
-2. 创建新脚本
-3. 粘贴 `browser/dist/wayback.user.js` 的内容
-4. 保存并启用
+1. 从 [Releases 页面](https://github.com/icodeface/wayback-archiver/releases) 下载 `wayback.user.js`
+2. 在浏览器中打开 Tampermonkey 管理面板
+3. 点击"创建新脚本"
+4. 粘贴 `wayback.user.js` 的内容
+5. 保存并启用
 
 > **Chrome 用户：** 右键点击 Tampermonkey 图标 → 管理扩展程序，启用"允许用户脚本"开关。Firefox 无需此步骤。
 
-### 4. 开始浏览
+### 5. 开始浏览
 
 就这样。页面加载完成后会自动归档。打开 `http://localhost:8080` 查看你的归档。
 
@@ -184,23 +203,13 @@ data/
         └── <sha256>.css
 ```
 
-## 测试
+## 从源码构建
 
-```bash
-# Go 单元测试
-make test
+参见 [docs/BUILD.md](docs/BUILD.md) 了解构建、交叉编译和测试说明。
 
-# 端到端测试（需要服务器运行在 localhost:8080）
-make test-e2e
-```
+## Agent 集成
 
-## 跨平台构建
-
-```bash
-# 交叉编译所有支持的平台（linux/darwin/windows, amd64/arm64）
-make all
-# 输出到 bin/wayback-server-<os>-<arch>
-```
+本项目包含一个 [Agent skill](skill.md)，可通过自然语言查询和探索你的归档页面。
 
 ## 已知限制
 

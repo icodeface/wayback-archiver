@@ -61,7 +61,7 @@ If you discover a security vulnerability, please:
 - **RECOMMENDED**: Regular backups
 - **RECOMMENDED**: Monitor logs
 
-See [REMOTE_DEPLOYMENT.md](../../REMOTE_DEPLOYMENT.md) for detailed deployment guide.
+See [REMOTE_DEPLOYMENT.md](../REMOTE_DEPLOYMENT.md) for detailed deployment guide.
 
 ## Security Testing
 
