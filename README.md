@@ -41,28 +41,50 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ PostgreSQL (m
 
 ## Prerequisites
 
-- **Go** 1.21+
-- **Node.js** 16+ (for building the userscript)
 - **PostgreSQL** 14+
 - **Chrome** or **Firefox** + [Tampermonkey](https://www.tampermonkey.net/) extension (v5.3+)
 
 ## Quick Start
 
-### 1. Database Setup
+### 1. Download Pre-built Binaries
+
+Download the latest release from the [Releases page](https://github.com/icodeface/wayback-archiver/releases):
+
+- **macOS**: `wayback-server-darwin-amd64.tar.gz` (Intel) or `wayback-server-darwin-arm64.tar.gz` (Apple Silicon)
+- **Linux**: `wayback-server-linux-amd64.tar.gz` or `wayback-server-linux-arm64.tar.gz`
+- **Windows**: `wayback-server-windows-amd64.zip`
+- **Userscript**: `wayback.user.js`
+
+Extract the archive:
+
+```bash
+# macOS/Linux
+tar -xzf wayback-server-*.tar.gz
+
+# Windows: extract the .zip file
+```
+
+> **Building from source?** See [docs/BUILD.md](docs/BUILD.md) for manual compilation instructions.
+
+### 2. Database Setup
 
 ```bash
 # PostgreSQL 默认使用当前系统用户名作为数据库用户
 # 如果你的系统用户名是 alice，以下命令等同于 createdb -U alice wayback
 createdb wayback
-psql wayback < server/init_db.sql
+
+# Download and run the schema
+curl -O https://raw.githubusercontent.com/icodeface/wayback-archiver/main/server/init_db.sql
+psql wayback < init_db.sql
 ```
 
-### 2. Start the Server
+### 3. Start the Server
 
 ```bash
-cp .env.example .env                 # Optional; edit as needed
-make build                           # Builds server + userscript into bin/
-./bin/wayback-server
+# Optional: create .env file for custom configuration
+# See Configuration section below for available options
+
+./wayback-server
 ```
 
 The server starts at `http://localhost:8080` by default.
@@ -72,23 +94,20 @@ If you need a proxy for downloading external resources:
 ```bash
 export http_proxy=http://127.0.0.1:7897
 export https_proxy=http://127.0.0.1:7897
-./bin/wayback-server
+./wayback-server
 ```
 
-### 3. Install the Userscript
+### 4. Install the Userscript
 
-The `make build` step above already produces `bin/wayback.user.js`. 
-
-Then:
-
-1. Open Tampermonkey dashboard in your browser
-2. Create a new script
-3. Paste the contents of `browser/dist/wayback.user.js`
-4. Save and enable
+1. Download `wayback.user.js` from the [Releases page](https://github.com/icodeface/wayback-archiver/releases)
+2. Open Tampermonkey dashboard in your browser
+3. Click "Create a new script"
+4. Paste the contents of `wayback.user.js`
+5. Save and enable
 
 > **Chrome users:** Right-click the Tampermonkey icon → Manage extension, then enable the "Allow user scripts" toggle. Firefox does not require this step.
 
-### 4. Start Browsing
+### 5. Start Browsing
 
 That's it. Pages are automatically archived as soon as they load. Open `http://localhost:8080` to browse your archive.
 
@@ -115,7 +134,7 @@ The server automatically loads `.env` from the working directory if it exists. Y
 
 ## Remote Deployment
 
-For deploying to a remote server, see [REMOTE_DEPLOYMENT.md](REMOTE_DEPLOYMENT.md) for detailed instructions.
+For deploying to a remote server, see [REMOTE_DEPLOYMENT.md](docs/REMOTE_DEPLOYMENT.md) for detailed instructions.
 
 Quick setup:
 
@@ -213,23 +232,13 @@ data/
         └── <sha256>.css
 ```
 
-## Testing
+## Building from Source
 
-```bash
-# Go unit tests
-make test
+See [docs/BUILD.md](docs/BUILD.md) for build instructions, cross-compilation, and testing.
 
-# E2E tests (requires server running on localhost:8080)
-make test-e2e
-```
+## Agent Integration
 
-## Building for Other Platforms
-
-```bash
-# Cross-compile for all supported platforms (linux/darwin/windows, amd64/arm64)
-make all
-# Outputs to bin/wayback-server-<os>-<arch>
-```
+This project includes an [Agent skill](skill.md) for AI-assisted querying and exploration of your archived pages. Use it to search, analyze, and interact with your archive through natural language.
 
 ## Known Limitations
 
