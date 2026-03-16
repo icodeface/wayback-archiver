@@ -45,21 +45,16 @@ psql wayback < server/init_db.sql
 ### 2. Start Server
 
 ```bash
-cd server
 cp .env.example .env   # 可选，也可以直接使用环境变量
-go build -o wayback-server ./cmd/server
-./wayback-server
+make build             # 构建服务器 + 用户脚本到 bin/
+./bin/wayback-server
 ```
 
-Server runs at `http://localhost:8080` by default.
+Server runs at `http://localhost:8080` by default. 
 
 ### 3. Install Browser Script
 
-```bash
-cd browser
-npm install
-npm run build
-```
+The `make build` step above already produces `bin/wayback.user.js`.
 
 Install `browser/dist/wayback.user.js` in Tampermonkey.
 
@@ -77,16 +72,22 @@ When `AUTH_PASSWORD` is set, use HTTP Basic Auth:
 
 ### Endpoints
 
+#### List All Pages
+
+```bash
+curl "http://localhost:8080/api/pages?limit=100&offset=0"
+```
+
 #### Search Pages
 
 ```bash
 curl "http://localhost:8080/api/search?q=$KEYWORD"
 ```
 
-#### List All Pages
+#### Filter by Date Range
 
 ```bash
-curl "http://localhost:8080/api/pages?limit=100&offset=0"
+curl "http://localhost:8080/api/pages?from=2026-03-01&to=2026-03-12"
 ```
 
 #### Get Page Details
@@ -107,12 +108,6 @@ curl "http://localhost:8080/api/pages/$PAGE_ID/content"
 
 ```bash
 curl "http://localhost:8080/api/pages/timeline?url=$ENCODED_URL"
-```
-
-#### Filter by Date Range
-
-```bash
-curl "http://localhost:8080/api/pages?from=2026-03-01&to=2026-03-12"
 ```
 
 #### View Archived Page
@@ -183,10 +178,10 @@ data/
 
 ```bash
 # Go unit tests
-cd server && go test ./... -v
+make test
 
-# E2E tests (requires Chrome)
-cd tests/server && node test_update_feature.js
+# E2E tests (requires server running on localhost:8080)
+make test-e2e
 ```
 
 ## Troubleshooting
@@ -200,9 +195,9 @@ cd tests/server && node test_update_feature.js
 
 ## Configuration
 
-Create `.env` file in `server/` directory (or set environment variables directly):
+Create `.env` file in the project root (or set environment variables directly):
 
-The server automatically loads `.env` file if it exists.
+The server automatically loads `.env` from the working directory if it exists.
 
 ```bash
 # Database

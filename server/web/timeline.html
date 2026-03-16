@@ -239,6 +239,7 @@
         <div class="header">
             <a href="/">← Back to Archives</a>
             <h1>// TIMELINE</h1>
+            <a id="versionLink" href="https://github.com/icodeface/wayback-archiver" target="_blank" style="color:var(--color-text-dim);text-decoration:none;font-size:0.75rem;transition:color 0.2s;white-space:nowrap;position:absolute;right:20px;top:20px" onmouseover="this.style.color='var(--color-accent)'" onmouseout="this.style.color='var(--color-text-dim)'">v...</a>
             <div class="target-url" id="targetUrl"></div>
             <div class="stats" id="stats"></div>
         </div>
@@ -337,6 +338,11 @@
             div.textContent = text;
             return div.innerHTML;
         }
+
+        fetch('/api/version').then(r => r.json()).then(d => {
+            const el = document.getElementById('versionLink');
+            if (el && d.version) el.textContent = d.version;
+        }).catch(() => {});
     </script>
 </body>
 </html>

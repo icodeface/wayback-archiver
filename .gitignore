@@ -16,9 +16,11 @@ tests/browser/*.log
 tests/browser/*.png
 
 # Data directories
-server/data/
+data/
+.env
 
 # Build artifacts
 *.exe
 server/wayback-server
 server/server
+bin/

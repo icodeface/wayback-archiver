@@ -138,6 +138,7 @@
         <div class="title-row">
             <h1>WAYBACK // LOGS</h1>
             <a href="/" class="back-link">← back to archives</a>
+            <a id="versionLink" href="https://github.com/icodeface/wayback-archiver" target="_blank" style="color:var(--color-text-dim);text-decoration:none;font-size:0.75rem;transition:color 0.2s;white-space:nowrap;margin-left:auto" onmouseover="this.style.color='var(--color-accent)'" onmouseout="this.style.color='var(--color-text-dim)'">v...</a>
         </div>
         <div class="controls">
             <input type="text" class="filter-input" id="filterInput" placeholder="filter logs...">
@@ -310,6 +311,11 @@
         }
 
         loadFileList();
+
+        fetch('/api/version').then(r => r.json()).then(d => {
+            const el = document.getElementById('versionLink');
+            if (el && d.version) el.textContent = d.version;
+        }).catch(() => {});
     </script>
 </body>
 </html>
