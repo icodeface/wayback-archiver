@@ -281,7 +281,11 @@
                 renderTimeline(snapshots);
             } catch (error) {
                 console.error('Timeline error:', error);
-                document.getElementById('content').innerHTML = '<div class="empty">Unable to connect to server. Please check if the server is running.</div>';
+                const isNetworkError = error.message.includes('fetch') || error.message.includes('NetworkError');
+                const errorMsg = isNetworkError
+                    ? 'Unable to connect to server. Please check if the server is running.'
+                    : 'Failed to load timeline. Please try again.';
+                document.getElementById('content').innerHTML = `<div class="empty">${errorMsg}</div>`;
             }
         }
 

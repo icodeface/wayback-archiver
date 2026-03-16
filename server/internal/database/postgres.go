@@ -278,7 +278,7 @@ func (db *DB) ListPages(limit, offset int, from, to *time.Time, domain string) (
 	}
 	defer rows.Close()
 
-	var pages []models.Page
+	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
 		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited); err != nil {
@@ -377,7 +377,7 @@ func (db *DB) SearchPages(keyword string, from, to *time.Time, domain string) ([
 	}
 	defer rows.Close()
 
-	var pages []models.Page
+	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
 		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited); err != nil {
@@ -398,7 +398,7 @@ func (db *DB) GetPagesWithoutBodyText() ([]models.Page, error) {
 	}
 	defer rows.Close()
 
-	var pages []models.Page
+	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
 		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited); err != nil {
@@ -514,7 +514,7 @@ func (db *DB) GetPagesByURL(pageURL string) ([]models.Page, error) {
 	}
 	defer rows.Close()
 
-	var pages []models.Page
+	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
 		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited); err != nil {

@@ -622,12 +622,12 @@
                 const data = await response.json();
 
                 // Handle new paginated response format
-                if (data.pages && data.total !== undefined) {
-                    allPages = data.pages;
+                if (data.pages !== undefined && data.total !== undefined) {
+                    allPages = data.pages || [];
                     totalCount = data.total;
                 } else {
                     // Fallback for old format (array)
-                    allPages = data;
+                    allPages = Array.isArray(data) ? data : [];
                     totalCount = allPages.length;
                 }
 
@@ -636,7 +636,12 @@
                 renderPages(allPages);
                 updatePagination();
             } catch (error) {
-                document.getElementById('pageList').innerHTML = '<li class="empty"><div class="empty-icon">[ ! ]</div>Unable to connect to server. Please check if the server is running.</li>';
+                console.error('Failed to load pages:', error);
+                const isNetworkError = error.message.includes('fetch') || error.message.includes('NetworkError');
+                const errorMsg = isNetworkError
+                    ? 'Unable to connect to server. Please check if the server is running.'
+                    : 'Failed to load pages. Please try again.';
+                document.getElementById('pageList').innerHTML = `<li class="empty"><div class="empty-icon">[ ! ]</div>${errorMsg}</li>`;
             }
         }
 
