@@ -19,7 +19,7 @@ server:
 	cd server && go build -ldflags "$(LDFLAGS)" -o ../$(BIN_DIR)/$(BINARY) $(SERVER_PKG)
 
 script:
-	cd browser && npm run build --silent
+	cd browser && VERSION=$(VERSION) npm run build --silent
 	mkdir -p $(BIN_DIR)
 	cp browser/dist/wayback.user.js $(BIN_DIR)/wayback.user.js
 

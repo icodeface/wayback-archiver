@@ -11,6 +11,10 @@ try {
   process.exit(1);
 }
 
+// Version from git tag or environment variable
+const version = process.env.VERSION
+  || execSync('git describe --tags --always --dirty 2>/dev/null || echo "dev"', { encoding: 'utf8' }).trim().replace(/^v/, '');
+
 const distDir = path.join(__dirname, 'dist');
 const outputPath = path.join(distDir, 'wayback.user.js');
 
@@ -33,7 +37,7 @@ const moduleFiles = [
 const header = `// ==UserScript==
 // @name         Wayback Web Archiver
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      ${version}
 // @description  Archive web pages to local server
 // @author       You
 // @match        *://*/*

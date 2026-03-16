@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: server/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: browser/package-lock.json
+
+      - name: Install browser dependencies
+        run: cd browser && npm ci
+
+      - name: Build userscript
+        run: make script
+        env:
+          VERSION: ${{ github.ref_name }}
+
+      - name: Cross-compile all platforms
+        run: make all
+
+      - name: Package release artifacts
+        run: |
+          cp .env.example bin/
+          cd bin
+          for f in wayback-server-*; do
+            name="${f%.*}"
+            ext="${f##*.}"
+            if [ "$ext" = "exe" ]; then
+              zip "${name}.zip" "$f" wayback.user.js .env.example
+            else
+              chmod +x "$f"
+              tar czf "${name}.tar.gz" "$f" wayback.user.js .env.example
+            fi
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            bin/*.tar.gz
+            bin/*.zip
+            bin/wayback.user.js
