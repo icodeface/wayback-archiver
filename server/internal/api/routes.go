@@ -1,10 +1,12 @@
 package api
 
 import (
+	"io/fs"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"wayback/internal/config"
+	"wayback/web"
 )
 
 // SetupRoutes 设置路由
@@ -28,48 +30,13 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig) {
 	})
 
 	// robots.txt（在认证之前，确保爬虫和工具可以访问）
-	r.GET("/robots.txt", func(c *gin.Context) {
-		robotsTxt := `User-agent: Googlebot
-Disallow: /
-
-User-agent: Bingbot
-Disallow: /
-
-User-agent: Slurp
-Disallow: /
-
-User-agent: DuckDuckBot
-Disallow: /
-
-User-agent: Baiduspider
-Disallow: /
-
-User-agent: YandexBot
-Disallow: /
-
-User-agent: Sogou
-Disallow: /
-
-User-agent: Bytespider
-Disallow: /
-
-User-agent: GPTBot
-Disallow: /
-
-User-agent: CCBot
-Disallow: /
-
-User-agent: anthropic-ai
-Disallow: /
-
-User-agent: ClaudeBot
-Disallow: /
-
-User-agent: *
-Allow: /
-`
-		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(robotsTxt))
-	})
+	webFS, _ := fs.Sub(web.StaticFiles, ".")
+	serveFile := func(name string) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			c.FileFromFS(name, http.FS(webFS))
+		}
+	}
+	r.GET("/robots.txt", serveFile("robots.txt"))
 
 	// Basic Auth 中间件（如果启用）
 	if authCfg.Enabled() {
@@ -79,17 +46,14 @@ Allow: /
 		r.Use(gin.BasicAuth(accounts))
 	}
 
-	// Web UI
-	r.StaticFile("/", "./web/index.html")
-	r.StaticFile("/index.html", "./web/index.html")
-	r.StaticFile("/test.html", "./web/test.html")
-	r.StaticFile("/timeline", "./web/timeline.html")
-	r.StaticFile("/timeline.html", "./web/timeline.html")
-	r.StaticFile("/logs", "./web/logs.html")
-	r.StaticFile("/logs.html", "./web/logs.html")
-
-	// favicon
-	r.StaticFile("/favicon.ico", "./web/favicon.ico")
+	// Web UI (embedded)
+	r.GET("/", serveFile("index.html"))
+	r.GET("/index.html", serveFile("index.html"))
+	r.GET("/timeline", serveFile("timeline.html"))
+	r.GET("/timeline.html", serveFile("timeline.html"))
+	r.GET("/logs", serveFile("logs.html"))
+	r.GET("/logs.html", serveFile("logs.html"))
+	r.GET("/favicon.ico", serveFile("favicon.ico"))
 
 	api := r.Group("/api")
 	{
