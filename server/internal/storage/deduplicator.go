@@ -393,8 +393,9 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		}
 	}
 
-	// 重写 HTML 中的资源 URL（先规范化 HTML 中的 ../ 路径）
-	normalizedHTML := NormalizeHTMLURLs(req.HTML)
+	// 重写 HTML 中的资源 URL
+	// 1. 规范化 ../ 路径  2. 解析相对路径为绝对 URL  3. 替换为归档路径
+	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(req.HTML), req.URL)
 	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
 
 	// 更新保存的 HTML 文件（用重写后的内容替换临时内容）
@@ -651,8 +652,8 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		}
 	}
 
-	// 重写 HTML 中的资源 URL（先规范化 HTML 中的 ../ 路径）
-	normalizedHTML := NormalizeHTMLURLs(req.HTML)
+	// 重写 HTML 中的资源 URL
+	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(req.HTML), req.URL)
 	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
 
 	// 更新保存的 HTML 文件

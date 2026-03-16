@@ -207,8 +207,10 @@ func TestRewriteHTML_DotSlashRelativePath(t *testing.T) {
 		"https://newshacker.me/favicon.png": "resources/f9/22/hash.img",
 		"https://newshacker.me/shared.js":   "resources/4d/ee/hash.js",
 	})
+	baseURL := "https://newshacker.me/"
 
 	html := `<link rel="stylesheet" href="./style.css"><link rel="icon" href="./favicon.png"><script src="./shared.js"></script>`
+	html = ResolveRelativeURLs(html, baseURL)
 	result := r.RewriteHTML(html)
 
 	if strings.Contains(result, `"./style.css"`) {
@@ -232,8 +234,10 @@ func TestRewriteHTML_BareRelativePath(t *testing.T) {
 		"https://dash.3ue.co/zh-Hans/main-QVKUS6BA.js":    "resources/87/4b/hash.js",
 		"https://dash.3ue.co/zh-Hans/polyfills-TR5YYZNL.js": "resources/32/bc/hash.js",
 	})
+	baseURL := "https://dash.3ue.co/zh-Hans/"
 
 	html := `<link rel="stylesheet" href="styles-V46MLXWF.css" media="all"><script src="main-QVKUS6BA.js" type="module"></script><link rel="modulepreload" href="polyfills-TR5YYZNL.js">`
+	html = ResolveRelativeURLs(html, baseURL)
 	result := r.RewriteHTML(html)
 
 	if strings.Contains(result, `"styles-V46MLXWF.css"`) {
@@ -346,6 +350,109 @@ func TestRewriteHTML_UnmappedProtocolRelative(t *testing.T) {
 	expected2 := `src='/archive/56/20260314070100mp_/https://cdn.example.com/app.js'`
 	if !strings.Contains(result2, expected2) {
 		t.Errorf("single-quoted protocol-relative URL should be rewritten, expected: %s, got: %s", expected2, result2)
+	}
+}
+
+func TestResolveRelativeURLs(t *testing.T) {
+	baseURL := "https://pub.sakana.ai/doc-to-lora/"
+
+	tests := []struct {
+		name     string
+		html     string
+		expected string
+	}{
+		{
+			name:     "dot-slash subdir path",
+			html:     `<img src="./figs/image.png">`,
+			expected: `<img src="https://pub.sakana.ai/doc-to-lora/figs/image.png">`,
+		},
+		{
+			name:     "bare subdir path",
+			html:     `<link href="css/style.css">`,
+			expected: `<link href="https://pub.sakana.ai/doc-to-lora/css/style.css">`,
+		},
+		{
+			name:     "parent dir path",
+			html:     `<img src="../other/file.png">`,
+			expected: `<img src="https://pub.sakana.ai/other/file.png">`,
+		},
+		{
+			name:     "bare filename",
+			html:     `<img src="image.png">`,
+			expected: `<img src="https://pub.sakana.ai/doc-to-lora/image.png">`,
+		},
+		{
+			name:     "absolute URL unchanged",
+			html:     `<img src="https://cdn.example.com/img.png">`,
+			expected: `<img src="https://cdn.example.com/img.png">`,
+		},
+		{
+			name:     "absolute path unchanged",
+			html:     `<img src="/assets/img.png">`,
+			expected: `<img src="/assets/img.png">`,
+		},
+		{
+			name:     "data URI unchanged",
+			html:     `<img src="data:image/png;base64,abc">`,
+			expected: `<img src="data:image/png;base64,abc">`,
+		},
+		{
+			name:     "single-quoted attribute",
+			html:     `<img src='./figs/image.png'>`,
+			expected: `<img src='https://pub.sakana.ai/doc-to-lora/figs/image.png'>`,
+		},
+		{
+			name:     "url() in CSS",
+			html:     `url("../fonts/font.woff")`,
+			expected: `url("https://pub.sakana.ai/fonts/font.woff")`,
+		},
+		{
+			name:     "query string with &amp;",
+			html:     `<img src="api/data?a=1&amp;b=2">`,
+			expected: `<img src="https://pub.sakana.ai/doc-to-lora/api/data?a=1&b=2">`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ResolveRelativeURLs(tt.html, baseURL)
+			if result != tt.expected {
+				t.Errorf("\nexpected: %s\n     got: %s", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestRewriteHTML_SubdirRelativePath(t *testing.T) {
+	r := newTestRewriter(1713, "20260316102920", map[string]string{
+		"https://pub.sakana.ai/doc-to-lora/figs/image.png":     "resources/ab/cd/hash1.img",
+		"https://pub.sakana.ai/doc-to-lora/css/style.css":      "resources/ab/cd/hash2.css",
+		"https://pub.sakana.ai/doc-to-lora/lib/template.v1.js": "resources/ab/cd/hash3.js",
+	})
+	r.SetBaseURL("https://pub.sakana.ai/doc-to-lora/")
+	baseURL := "https://pub.sakana.ai/doc-to-lora/"
+	archivePrefix := "/archive/1713/20260316102920mp_/"
+
+	// 模拟完整流程：先 ResolveRelativeURLs，再 RewriteHTML
+	html := `<img src="./figs/image.png"> <link href="./css/style.css"> <script src="./lib/template.v1.js"></script>`
+	html = ResolveRelativeURLs(html, baseURL)
+	result := r.RewriteHTML(html)
+
+	if !strings.Contains(result, `src="`+archivePrefix+`https://pub.sakana.ai/doc-to-lora/figs/image.png"`) {
+		t.Errorf("./figs/image.png should be rewritten, got: %s", result)
+	}
+	if !strings.Contains(result, `href="`+archivePrefix+`https://pub.sakana.ai/doc-to-lora/css/style.css"`) {
+		t.Errorf("./css/style.css should be rewritten, got: %s", result)
+	}
+	if !strings.Contains(result, `src="`+archivePrefix+`https://pub.sakana.ai/doc-to-lora/lib/template.v1.js"`) {
+		t.Errorf("./lib/template.v1.js should be rewritten, got: %s", result)
+	}
+
+	// ../path 形式
+	html2 := ResolveRelativeURLs(`<img src="../other/file.png">`, baseURL)
+	// ../other/file.png 解析为 https://pub.sakana.ai/other/file.png，不在映射中，不会被 rewriter 替换
+	if !strings.Contains(html2, `src="https://pub.sakana.ai/other/file.png"`) {
+		t.Errorf("../other/file.png should be resolved to absolute URL, got: %s", html2)
 	}
 }
 
