@@ -124,20 +124,30 @@ SPA 导航时 URL 变化但页面不刷新，需要特殊处理。
 
 ### 检测方式
 
-优先使用 Navigation API（`navigate` 事件，仅 push/replace），fallback 到 `history.pushState`/`replaceState` hook + `popstate` 事件。
+优先使用 Navigation API（`navigate` 事件，处理 push/replace/traverse），fallback 到 `history.pushState`/`replaceState` hook + `popstate` 事件。
+
+注意：`traverse`（后退/前进）导航也必须处理，否则旧页面的 DOM monitor 会继续运行，把新页面内容更新到旧页面 ID。只有 `reload` 被跳过（页面完全重载，脚本会重新初始化）。
 
 ### 导航流程
 
 ```
-URL 变化
+URL 变化（push/replace/traverse）
   ├─ sendCapture()          发送当前页面的快照
   ├─ resetState()           清理状态
   │    ├─ stopDOMChangeMonitor()
   │    ├─ 清空 DOMCollector
-  │    └─ 重建 collectorObserver
-  ├─ 等待 DOM_STABILITY_DELAY
+  │    └─ 取消挂起的 SPA 定时器（防止快速连续跳转时脏数据）
+  ├─ 等待 SPA_TRANSITION_DELAY (500ms)
+  │    └─ 重建 collectorObserver（旧页面 DOM 拆除已完成）
+  ├─ 等待 DOM_STABILITY_DELAY (2s)
   └─ prepareCapture() + sendCapture()   捕获新页面
 ```
+
+**为什么延迟重建 collectorObserver？**
+
+SPA 导航时，框架会拆除旧页面 DOM 并渲染新页面。如果立即重建 collectorObserver，
+旧页面被移除的 DOM 节点会被当作「虚拟滚动移除」收集，最终合并进新页面快照，
+导致数据泄漏（如主页时间线内容混入推文详情页）。
 
 ## 四、服务端处理
 
