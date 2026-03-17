@@ -41,22 +41,16 @@ function initializeArchiver(): void {
   let initialHTMLSize = 0; // Track initial capture size for update quality guard
 
   // Collects nodes removed by virtual scrolling so we can merge them into snapshots
-  // Started immediately so we never miss removals — MIN_NODE_SIZE filters out loading skeletons
   const domCollector = new DOMCollector();
-  let collectorObserver: MutationObserver | null = new MutationObserver((mutations) => {
-    domCollector.handleMutations(mutations);
-  });
-  collectorObserver.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: false,
-    characterData: false,
-  });
+  let collectorObserver: MutationObserver | null = null;
 
   // Track active DOM monitor so we can tear it down on SPA navigation
   let activeObserver: MutationObserver | null = null;
   let monitorTimeoutId: number | null = null;
   let monitorIntervalId: number | null = null;
+  // Track pending SPA transition timers so we can cancel them on rapid re-navigation
+  let spaCollectorTimerId: number | null = null;
+  let spaCaptureTimerId: number | null = null;
 
   async function prepareCapture(): Promise<void> {
     if (isCapturing || hasArchived) {
@@ -283,17 +277,10 @@ function initializeArchiver(): void {
     }, CONFIG.UPDATE_MONITOR_TIMEOUT) as unknown as number;
   }
 
-  function resetState(): void {
-    stopDOMChangeMonitor();
-    captureData = null;
-    isCapturing = false;
-    hasArchived = false;
-    currentPageId = null;
-    // Restart collector for the new page
+  function startCollectorObserver(): void {
     if (collectorObserver) {
       collectorObserver.disconnect();
     }
-    domCollector.clear();
     collectorObserver = new MutationObserver((mutations) => {
       domCollector.handleMutations(mutations);
     });
@@ -305,8 +292,35 @@ function initializeArchiver(): void {
     });
   }
 
+  function resetState(): void {
+    stopDOMChangeMonitor();
+    captureData = null;
+    isCapturing = false;
+    hasArchived = false;
+    currentPageId = null;
+    initialHTMLSize = 0;
+    if (collectorObserver) {
+      collectorObserver.disconnect();
+      collectorObserver = null;
+    }
+    domCollector.clear();
+    // Cancel pending SPA transition timers from a previous navigation
+    if (spaCollectorTimerId !== null) {
+      nativeClearTimeout(spaCollectorTimerId);
+      spaCollectorTimerId = null;
+    }
+    if (spaCaptureTimerId !== null) {
+      nativeClearTimeout(spaCaptureTimerId);
+      spaCaptureTimerId = null;
+    }
+    // Do NOT start collector here — old page DOM is still being torn down by the SPA framework.
+    // Collector will be restarted after SPA_TRANSITION_DELAY, when only the new page's DOM remains.
+  }
+
   // Start capture after initial delay
   console.log('[Wayback] Initializing...');
+  // Start collector immediately for initial page load to catch virtual scroll removals
+  startCollectorObserver();
   nativeSetTimeout(async () => {
     await prepareCapture();
     if (captureData) {
@@ -329,21 +343,27 @@ function initializeArchiver(): void {
   if ((window as unknown as Record<string, unknown>).navigation) {
     (window as unknown as { navigation: { addEventListener: (event: string, handler: (e: { navigationType: string }) => void) => void } })
       .navigation.addEventListener('navigate', (e) => {
-        // Only handle push/replace (SPA navigations), not traverse (back/forward) or reload
-        if (e.navigationType === 'traverse' || e.navigationType === 'reload') {
+        // Skip reload — page will fully reload and script re-initializes
+        if (e.navigationType === 'reload') {
           return;
         }
-        console.log('[Wayback] SPA navigate detected');
+        console.log('[Wayback] SPA navigate detected:', e.navigationType);
         // 等待 sendCapture 完成后再重置状态，防止竞态条件
         sendCapture().then(() => {
           resetState();
-          // Wait for new page to render, then capture
-          nativeSetTimeout(async () => {
+          // Start collector early (after SPA transition completes) to catch virtual scroll removals
+          spaCollectorTimerId = nativeSetTimeout(() => {
+            spaCollectorTimerId = null;
+            startCollectorObserver();
+          }, CONFIG.SPA_TRANSITION_DELAY) as unknown as number;
+          // Wait for new page to fully render, then capture
+          spaCaptureTimerId = nativeSetTimeout(async () => {
+            spaCaptureTimerId = null;
             await prepareCapture();
             if (captureData) {
               await sendCapture();
             }
-          }, CONFIG.DOM_STABILITY_DELAY);
+          }, CONFIG.DOM_STABILITY_DELAY) as unknown as number;
         });
       });
   }
@@ -361,12 +381,19 @@ function initializeArchiver(): void {
     // 等待 sendCapture 完成后再重置状态，防止竞态条件
     sendCapture().then(() => {
       resetState();
-      nativeSetTimeout(async () => {
+      // Start collector early (after SPA transition completes) to catch virtual scroll removals
+      spaCollectorTimerId = nativeSetTimeout(() => {
+        spaCollectorTimerId = null;
+        startCollectorObserver();
+      }, CONFIG.SPA_TRANSITION_DELAY) as unknown as number;
+      // Wait for new page to fully render, then capture
+      spaCaptureTimerId = nativeSetTimeout(async () => {
+        spaCaptureTimerId = null;
         await prepareCapture();
         if (captureData) {
           await sendCapture();
         }
-      }, CONFIG.DOM_STABILITY_DELAY);
+      }, CONFIG.DOM_STABILITY_DELAY) as unknown as number;
     });
   }
 
