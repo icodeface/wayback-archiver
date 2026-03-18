@@ -28,8 +28,8 @@ type DatabaseConfig struct {
 type ServerConfig struct {
 	Host            string
 	Port            int
-	EnableGzip      bool // Enable gzip compression for HTTP responses
-	GzipLevel       int  // Compression level (1-9, 0=default)
+	EnableGzip      bool // Enable gzip compression for HTTP responses (request decompression always enabled)
+	GzipLevel       int  // Compression level (1-9, -1=default)
 }
 
 // StorageConfig holds storage settings
