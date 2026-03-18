@@ -14,7 +14,12 @@ function compressData(data: string): { compressed: string; originalSize: number;
   const compressedSize = compressed.length;
 
   // Convert Uint8Array to base64 string for GM_xmlhttpRequest
-  const base64 = btoa(String.fromCharCode.apply(null, Array.from(compressed)));
+  // Use loop instead of apply() to avoid stack overflow on large data
+  let binary = '';
+  for (let i = 0; i < compressed.length; i++) {
+    binary += String.fromCharCode(compressed[i]);
+  }
+  const base64 = btoa(binary);
 
   return { compressed: base64, originalSize, compressedSize };
 }
