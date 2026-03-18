@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"wayback/internal/api"
@@ -105,6 +106,9 @@ func main() {
 		log.Printf("[HTTP] %s %s from %s", c.Request.Method, c.Request.URL.Path, c.ClientIP())
 		c.Next()
 	})
+
+	// 添加 gzip 压缩中间件
+	r.Use(gzip.Gzip(gzip.DefaultCompression))
 
 	api.SetupRoutes(r, handler, &cfg.Auth, Version, BuildTime)
 
