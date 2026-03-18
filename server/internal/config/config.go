@@ -26,8 +26,10 @@ type DatabaseConfig struct {
 
 // ServerConfig holds HTTP server settings
 type ServerConfig struct {
-	Host string
-	Port int
+	Host            string
+	Port            int
+	EnableGzip      bool // Enable gzip compression for HTTP responses
+	GzipLevel       int  // Compression level (1-9, 0=default)
 }
 
 // StorageConfig holds storage settings
@@ -66,8 +68,10 @@ func LoadFromEnv() (*Config, error) {
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
 		Server: ServerConfig{
-			Host: getEnv("SERVER_HOST", "127.0.0.1"),
-			Port: getEnvInt("SERVER_PORT", 8080),
+			Host:       getEnv("SERVER_HOST", "127.0.0.1"),
+			Port:       getEnvInt("SERVER_PORT", 8080),
+			EnableGzip: getEnvBool("ENABLE_GZIP", true),  // 默认启用
+			GzipLevel:  getEnvInt("GZIP_LEVEL", -1),      // -1 = DefaultCompression
 		},
 		Storage: StorageConfig{
 			DataDir: getEnv("DATA_DIR", "./data"),
@@ -102,6 +106,16 @@ func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
+		}
+	}
+	return defaultValue
+}
+
+// getEnvBool retrieves a boolean environment variable or returns a default value
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
 		}
 	}
 	return defaultValue
