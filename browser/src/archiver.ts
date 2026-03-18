@@ -1,16 +1,37 @@
 // Archiver - sends captured data to the server
 
+import * as pako from 'pako';
 import { CONFIG } from './config';
 import { CaptureData, ArchiveResponse } from './types';
+
+/**
+ * Compresses data using gzip and converts to base64 for transmission.
+ * Returns both the compressed data and compression stats.
+ */
+function compressData(data: string): { compressed: string; originalSize: number; compressedSize: number } {
+  const originalSize = data.length;
+  const compressed = pako.gzip(data);
+  const compressedSize = compressed.length;
+
+  // Convert Uint8Array to base64 string for GM_xmlhttpRequest
+  const base64 = btoa(String.fromCharCode.apply(null, Array.from(compressed)));
+
+  return { compressed: base64, originalSize, compressedSize };
+}
 
 /**
  * Sends the captured page data to the local archiving server.
  */
 export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse> {
-  console.log('[Wayback] >>> Sending to server...');
+  const jsonData = JSON.stringify(captureData);
+  const { compressed, originalSize, compressedSize } = compressData(jsonData);
+  const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
+
+  console.log(`[Wayback] >>> Sending to server (${originalSize} bytes → ${compressedSize} bytes, ${compressionRatio}% reduction)...`);
 
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'Content-Encoding': 'gzip'
   };
 
   // Add Basic Auth header if password is configured
@@ -24,7 +45,8 @@ export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse>
       method: 'POST',
       url: CONFIG.SERVER_URL,
       headers,
-      data: JSON.stringify(captureData),
+      data: compressed,
+      binary: true,
       timeout: CONFIG.REQUEST_TIMEOUT,
       onload: (response) => {
         if (response.status === 200) {
@@ -57,12 +79,16 @@ export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse>
  * Sends an update request for an existing page.
  */
 export function updateOnServer(pageId: number, captureData: CaptureData): Promise<ArchiveResponse> {
-  const dataSize = JSON.stringify(captureData).length;
-  console.log(`[Wayback] >>> Updating page ${pageId} on server (${dataSize} bytes)...`);
+  const jsonData = JSON.stringify(captureData);
+  const { compressed, originalSize, compressedSize } = compressData(jsonData);
+  const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
+
+  console.log(`[Wayback] >>> Updating page ${pageId} on server (${originalSize} bytes → ${compressedSize} bytes, ${compressionRatio}% reduction)...`);
   const startTime = Date.now();
 
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'Content-Encoding': 'gzip'
   };
 
   // Add Basic Auth header if password is configured
@@ -76,7 +102,8 @@ export function updateOnServer(pageId: number, captureData: CaptureData): Promis
       method: 'PUT',
       url: `${CONFIG.SERVER_URL}/${pageId}`,
       headers,
-      data: JSON.stringify(captureData),
+      data: compressed,
+      binary: true,
       timeout: CONFIG.REQUEST_TIMEOUT,
       onload: (response) => {
         const elapsed = Date.now() - startTime;
