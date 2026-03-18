@@ -146,22 +146,22 @@ export https_proxy=http://127.0.0.1:7897
 | `DATA_DIR` | `./data` | HTML 和资源的存储目录 |
 | `LOG_DIR` | `./data/logs` | 日志文件目录 |
 | `AUTH_PASSWORD` | *（空）* | HTTP Basic Auth 密码（为空时关闭认证，用户名固定为 `wayback`） |
-| `ENABLE_COMPRESSION` | `false` | 启用 gzip 压缩。**远程部署时推荐启用** |
-| `COMPRESSION_LEVEL` | `-1` | 压缩级别：1（最快）到 9（最佳），-1（默认/平衡） |
+| `COMPRESSION_LEVEL` | `-1` | 压缩级别：1（最快）到 9（最佳），-1（默认/平衡）。响应压缩始终启用，根据 Accept-Encoding 自动协商 |
 
 ### 压缩设置
 
-**本地部署**（默认）：保持压缩关闭
-- localhost 传输已经很快
-- 无压缩/解压缩的 CPU 开销
-- `ENABLE_COMPRESSION=false`（客户端和服务端）
+**服务端（响应）**：始终启用，自动协商
+- 支持 gzip 的客户端（如浏览器）自动获得压缩响应
+- 不支持 gzip 的客户端自动获得非压缩响应
+- 无需配置，自动工作
 
-**远程部署**：启用压缩以大幅节省带宽
-- 上传减少 95%+（大型 HTML 快照）
-- 下载减少 60-70%（API 响应）
-- 编辑 `browser/src/config.ts`：设置 `ENABLE_COMPRESSION: true`
-- 编辑 `.env`：设置 `ENABLE_COMPRESSION=true`
-- 重新构建脚本：`cd browser && npm run build`
+**客户端（上传）**：在 `browser/src/config.ts` 中配置
+- **本地部署**（默认）：保持 `ENABLE_COMPRESSION: false`
+  - localhost 传输已经很快
+  - 无压缩的 CPU 开销
+- **远程部署**：设置 `ENABLE_COMPRESSION: true`
+  - 上传减少 95%+（大型 HTML 快照）
+  - 重新构建脚本：`cd browser && npm run build`
 
 ## API
 
