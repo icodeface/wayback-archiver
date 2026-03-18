@@ -152,6 +152,22 @@ The server automatically loads `.env` from the working directory if it exists. Y
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
 | `LOG_DIR` | `./data/logs` | Log file directory |
 | `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`). **REQUIRED for remote deployment** |
+| `ENABLE_COMPRESSION` | `false` | Enable gzip compression for HTTP responses. **Recommended for remote deployment** |
+| `COMPRESSION_LEVEL` | `-1` | Compression level: 1 (fastest) to 9 (best), -1 (default/balanced) |
+
+### Compression Settings
+
+**For local deployment** (default): Keep compression disabled
+- Localhost transfer is already fast
+- No CPU overhead from compression/decompression
+- `ENABLE_COMPRESSION=false` (both client and server)
+
+**For remote deployment**: Enable compression for significant bandwidth savings
+- 95%+ reduction for uploads (large HTML snapshots)
+- 60-70% reduction for downloads (API responses)
+- Edit `browser/src/config.ts`: set `ENABLE_COMPRESSION: true`
+- Edit `.env`: set `ENABLE_COMPRESSION=true`
+- Rebuild userscript: `cd browser && npm run build`
 
 ## Remote Deployment
 
@@ -164,10 +180,12 @@ Quick setup:
 ALLOWED_ORIGINS=https://your-domain.com,null
 AUTH_PASSWORD=your_secure_password
 SERVER_HOST=0.0.0.0
+ENABLE_COMPRESSION=true  # Enable compression for remote deployment
 
 # Browser config.ts
 SERVER_URL: 'https://your-domain.com/api/archive'
 AUTH_PASSWORD: 'your_secure_password'
+ENABLE_COMPRESSION: true  # Enable compression for remote deployment
 ```
 
 **Security Notes:**
@@ -175,6 +193,11 @@ AUTH_PASSWORD: 'your_secure_password'
 - Set a strong `AUTH_PASSWORD`
 - Limit `ALLOWED_ORIGINS` to trusted domains only
 - Both CORS and Basic Auth are required for security (defense in depth)
+
+**Performance Notes:**
+- Enable `ENABLE_COMPRESSION` on both client and server for remote deployment
+- Reduces bandwidth usage by 60-95% (especially for large HTML snapshots)
+- Minimal CPU overhead, significant network savings
 
 ## API
 
