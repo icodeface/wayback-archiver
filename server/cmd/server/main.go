@@ -107,7 +107,7 @@ func main() {
 		c.Next()
 	})
 
-	// 添加请求解压缩中间件（始终启用，因为客户端总是发送压缩数据）
+	// 添加请求解压缩中间件（始终启用，因为客户端可能发送压缩数据）
 	r.Use(func(c *gin.Context) {
 		if c.Request.Header.Get("Content-Encoding") == "gzip" {
 			gzip.DefaultDecompressHandle(c)
@@ -115,13 +115,13 @@ func main() {
 		c.Next()
 	})
 
-	// 添加响应压缩中间件（可通过 ENABLE_GZIP=false 环境变量禁用）
-	if cfg.Server.EnableGzip {
-		compressionLevel := cfg.Server.GzipLevel
+	// 添加响应压缩中间件（可通过 ENABLE_COMPRESSION=false 环境变量禁用）
+	if cfg.Server.EnableCompression {
+		compressionLevel := cfg.Server.CompressionLevel
 		if compressionLevel == -1 {
 			compressionLevel = gzip.DefaultCompression
 		}
-		log.Printf("Gzip response compression enabled (level: %d)", compressionLevel)
+		log.Printf("Response compression enabled (level: %d)", compressionLevel)
 
 		// 排除已压缩的文件类型，避免浪费 CPU
 		r.Use(gzip.Gzip(
@@ -136,7 +136,7 @@ func main() {
 			}),
 		))
 	} else {
-		log.Println("Gzip response compression disabled (request decompression still active)")
+		log.Println("Response compression disabled (request decompression still active)")
 	}
 
 	api.SetupRoutes(r, handler, &cfg.Auth, Version, BuildTime)

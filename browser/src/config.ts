@@ -3,6 +3,7 @@
 export const CONFIG = {
   SERVER_URL: 'http://localhost:8080/api/archive',
   AUTH_PASSWORD: '',                    // Set this to enable HTTP Basic Auth
+  ENABLE_COMPRESSION: false,            // Enable gzip compression for uploads (recommended for remote deployments)
   DOM_STABILITY_DELAY: 2000,        // ms to wait before starting capture
   SPA_TRANSITION_DELAY: 500,        // ms to wait after SPA navigation before starting collector (shorter than DOM_STABILITY_DELAY)
   MUTATION_OBSERVER_TIMEOUT: 10000, // max ms to wait for DOM stability

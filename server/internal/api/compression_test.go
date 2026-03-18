@@ -336,3 +336,146 @@ func TestGzipDecompression_WithoutContentEncoding(t *testing.T) {
 	}
 }
 
+// Test mixed scenario: uncompressed request, compressed response
+func TestMixedCompression_UncompressedRequestCompressedResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+
+	// Request decompression middleware (always active)
+	r.Use(func(c *gin.Context) {
+		if c.Request.Header.Get("Content-Encoding") == "gzip" {
+			gzipMiddleware.DefaultDecompressHandle(c)
+		}
+		c.Next()
+	})
+
+	// Response compression middleware (configurable)
+	r.Use(gzipMiddleware.Gzip(gzipMiddleware.DefaultCompression))
+
+	var receivedBody string
+	r.POST("/api/archive", func(c *gin.Context) {
+		body, _ := io.ReadAll(c.Request.Body)
+		receivedBody = string(body)
+		c.JSON(http.StatusOK, gin.H{"status": "success", "received_size": len(body)})
+	})
+
+	// Send uncompressed request
+	testData := `{"url":"https://example.com","title":"Test"}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/archive", strings.NewReader(testData))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	// No Content-Encoding header (uncompressed request)
+	r.ServeHTTP(w, req)
+
+	// Server should receive uncompressed data
+	if receivedBody != testData {
+		t.Errorf("server received wrong data.\nExpected: %s\nGot: %s", testData, receivedBody)
+	}
+
+	// Response should be compressed
+	if w.Header().Get("Content-Encoding") != "gzip" {
+		t.Error("response should be compressed")
+	}
+}
+
+// Test configuration: compression disabled on server
+func TestCompressionDisabled_ServerSide(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+
+	// Request decompression middleware (always active)
+	r.Use(func(c *gin.Context) {
+		if c.Request.Header.Get("Content-Encoding") == "gzip" {
+			gzipMiddleware.DefaultDecompressHandle(c)
+		}
+		c.Next()
+	})
+
+	// Response compression disabled (no gzip middleware)
+
+	var receivedBody string
+	r.POST("/api/archive", func(c *gin.Context) {
+		body, _ := io.ReadAll(c.Request.Body)
+		receivedBody = string(body)
+		c.JSON(http.StatusOK, gin.H{"status": "success"})
+	})
+
+	// Client sends compressed request
+	testData := `{"url":"https://example.com","title":"Test"}`
+	var compressedBuf bytes.Buffer
+	gzipWriter := gzip.NewWriter(&compressedBuf)
+	gzipWriter.Write([]byte(testData))
+	gzipWriter.Close()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/archive", &compressedBuf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Accept-Encoding", "gzip")
+	r.ServeHTTP(w, req)
+
+	// Server should decompress and receive original data
+	if receivedBody != testData {
+		t.Errorf("server failed to decompress.\nExpected: %s\nGot: %s", testData, receivedBody)
+	}
+
+	// Response should NOT be compressed (compression disabled)
+	if w.Header().Get("Content-Encoding") == "gzip" {
+		t.Error("response should not be compressed when compression is disabled")
+	}
+}
+
+// Test configuration: both client and server compression enabled
+func TestCompressionEnabled_BothSides(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+
+	// Request decompression middleware
+	r.Use(func(c *gin.Context) {
+		if c.Request.Header.Get("Content-Encoding") == "gzip" {
+			gzipMiddleware.DefaultDecompressHandle(c)
+		}
+		c.Next()
+	})
+
+	// Response compression middleware
+	r.Use(gzipMiddleware.Gzip(gzipMiddleware.DefaultCompression))
+
+	var receivedBody string
+	r.POST("/api/archive", func(c *gin.Context) {
+		body, _ := io.ReadAll(c.Request.Body)
+		receivedBody = string(body)
+		// Return large response to ensure compression
+		largeResponse := strings.Repeat(`{"status":"ok"}`, 100)
+		c.String(http.StatusOK, largeResponse)
+	})
+
+	// Client sends compressed request
+	testData := `{"url":"https://example.com","title":"Test","html":"` + strings.Repeat("<div>content</div>", 100) + `"}`
+	var compressedBuf bytes.Buffer
+	gzipWriter := gzip.NewWriter(&compressedBuf)
+	gzipWriter.Write([]byte(testData))
+	gzipWriter.Close()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/archive", &compressedBuf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Accept-Encoding", "gzip")
+	r.ServeHTTP(w, req)
+
+	// Server should decompress request
+	if receivedBody != testData {
+		t.Error("server failed to decompress request")
+	}
+
+	// Response should be compressed
+	if w.Header().Get("Content-Encoding") != "gzip" {
+		t.Error("response should be compressed")
+	}
+
+	t.Logf("Request: %d bytes (compressed: %d bytes)", len(testData), compressedBuf.Len())
+	t.Logf("Response compressed: %d bytes", w.Body.Len())
+}
+

@@ -29,15 +29,23 @@ function compressData(data: string): { compressed: string; originalSize: number;
  */
 export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse> {
   const jsonData = JSON.stringify(captureData);
-  const { compressed, originalSize, compressedSize } = compressData(jsonData);
-  const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
 
-  console.log(`[Wayback] >>> Sending to server (${originalSize} bytes → ${compressedSize} bytes, ${compressionRatio}% reduction)...`);
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Content-Encoding': 'gzip'
+  let data: string;
+  let headers: Record<string, string> = {
+    'Content-Type': 'application/json'
   };
+
+  // Compress if enabled (recommended for remote deployments)
+  if (CONFIG.ENABLE_COMPRESSION) {
+    const { compressed, originalSize, compressedSize } = compressData(jsonData);
+    const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
+    console.log(`[Wayback] >>> Sending to server (${originalSize} bytes → ${compressedSize} bytes, ${compressionRatio}% reduction)...`);
+    data = compressed;
+    headers['Content-Encoding'] = 'gzip';
+  } else {
+    console.log(`[Wayback] >>> Sending to server (${jsonData.length} bytes, uncompressed)...`);
+    data = jsonData;
+  }
 
   // Add Basic Auth header if password is configured
   if (CONFIG.AUTH_PASSWORD) {
@@ -50,8 +58,8 @@ export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse>
       method: 'POST',
       url: CONFIG.SERVER_URL,
       headers,
-      data: compressed,
-      binary: true,
+      data: data,
+      binary: CONFIG.ENABLE_COMPRESSION,
       timeout: CONFIG.REQUEST_TIMEOUT,
       onload: (response) => {
         if (response.status === 200) {
@@ -85,16 +93,24 @@ export function sendToServer(captureData: CaptureData): Promise<ArchiveResponse>
  */
 export function updateOnServer(pageId: number, captureData: CaptureData): Promise<ArchiveResponse> {
   const jsonData = JSON.stringify(captureData);
-  const { compressed, originalSize, compressedSize } = compressData(jsonData);
-  const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
-
-  console.log(`[Wayback] >>> Updating page ${pageId} on server (${originalSize} bytes → ${compressedSize} bytes, ${compressionRatio}% reduction)...`);
   const startTime = Date.now();
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Content-Encoding': 'gzip'
+  let data: string;
+  let headers: Record<string, string> = {
+    'Content-Type': 'application/json'
   };
+
+  // Compress if enabled (recommended for remote deployments)
+  if (CONFIG.ENABLE_COMPRESSION) {
+    const { compressed, originalSize, compressedSize } = compressData(jsonData);
+    const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
+    console.log(`[Wayback] >>> Updating page ${pageId} on server (${originalSize} bytes → ${compressedSize} bytes, ${compressionRatio}% reduction)...`);
+    data = compressed;
+    headers['Content-Encoding'] = 'gzip';
+  } else {
+    console.log(`[Wayback] >>> Updating page ${pageId} on server (${jsonData.length} bytes, uncompressed)...`);
+    data = jsonData;
+  }
 
   // Add Basic Auth header if password is configured
   if (CONFIG.AUTH_PASSWORD) {
@@ -107,8 +123,8 @@ export function updateOnServer(pageId: number, captureData: CaptureData): Promis
       method: 'PUT',
       url: `${CONFIG.SERVER_URL}/${pageId}`,
       headers,
-      data: compressed,
-      binary: true,
+      data: data,
+      binary: CONFIG.ENABLE_COMPRESSION,
       timeout: CONFIG.REQUEST_TIMEOUT,
       onload: (response) => {
         const elapsed = Date.now() - startTime;
