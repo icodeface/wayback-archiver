@@ -1,6 +1,8 @@
 // Archiver - sends captured data to the server
 
-import * as pako from 'pako';
+// pako is loaded via @require in Tampermonkey header
+declare const pako: any;
+
 import { CONFIG } from './config';
 import { CaptureData, ArchiveResponse } from './types';
 
