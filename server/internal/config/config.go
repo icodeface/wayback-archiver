@@ -26,10 +26,9 @@ type DatabaseConfig struct {
 
 // ServerConfig holds HTTP server settings
 type ServerConfig struct {
-	Host               string
-	Port               int
-	EnableCompression  bool // Enable gzip compression for HTTP responses (request decompression always enabled)
-	CompressionLevel   int  // Compression level (1-9, -1=default)
+	Host             string
+	Port             int
+	CompressionLevel int // Compression level (1-9, -1=default). Response compression always enabled, auto-negotiated via Accept-Encoding
 }
 
 // StorageConfig holds storage settings
@@ -68,10 +67,9 @@ func LoadFromEnv() (*Config, error) {
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
 		Server: ServerConfig{
-			Host:              getEnv("SERVER_HOST", "127.0.0.1"),
-			Port:              getEnvInt("SERVER_PORT", 8080),
-			EnableCompression: getEnvBool("ENABLE_COMPRESSION", false), // 默认关闭（本地部署）
-			CompressionLevel:  getEnvInt("COMPRESSION_LEVEL", -1),      // -1 = DefaultCompression
+			Host:             getEnv("SERVER_HOST", "127.0.0.1"),
+			Port:             getEnvInt("SERVER_PORT", 8080),
+			CompressionLevel: getEnvInt("COMPRESSION_LEVEL", -1), // -1 = DefaultCompression
 		},
 		Storage: StorageConfig{
 			DataDir: getEnv("DATA_DIR", "./data"),

@@ -120,29 +120,25 @@ func main() {
 		c.Next()
 	})
 
-	// 添加响应压缩中间件（可通过 ENABLE_COMPRESSION=false 环境变量禁用）
-	if cfg.Server.EnableCompression {
-		compressionLevel := cfg.Server.CompressionLevel
-		if compressionLevel == -1 {
-			compressionLevel = gzip.DefaultCompression
-		}
-		log.Printf("Response compression enabled (level: %d)", compressionLevel)
-
-		// 排除已压缩的文件类型，避免浪费 CPU
-		r.Use(gzip.Gzip(
-			compressionLevel,
-			gzip.WithExcludedExtensions([]string{
-				".png", ".gif", ".jpeg", ".jpg", // 图片（默认已排除，这里显式声明）
-				".webp", ".svg", ".ico",         // 其他图片格式
-				".mp4", ".webm", ".avi",         // 视频
-				".mp3", ".ogg", ".wav",          // 音频
-				".zip", ".gz", ".tar", ".rar",   // 压缩包
-				".woff", ".woff2", ".ttf",       // 字体文件
-			}),
-		))
-	} else {
-		log.Println("Response compression disabled (request decompression still active)")
+	// 添加响应压缩中间件（始终启用，根据 Accept-Encoding 自动协商）
+	compressionLevel := cfg.Server.CompressionLevel
+	if compressionLevel == -1 {
+		compressionLevel = gzip.DefaultCompression
 	}
+	log.Printf("Response compression enabled (level: %d, auto-negotiated via Accept-Encoding)", compressionLevel)
+
+	// 排除已压缩的文件类型，避免浪费 CPU
+	r.Use(gzip.Gzip(
+		compressionLevel,
+		gzip.WithExcludedExtensions([]string{
+			".png", ".gif", ".jpeg", ".jpg", // 图片（默认已排除，这里显式声明）
+			".webp", ".svg", ".ico",         // 其他图片格式
+			".mp4", ".webm", ".avi",         // 视频
+			".mp3", ".ogg", ".wav",          // 音频
+			".zip", ".gz", ".tar", ".rar",   // 压缩包
+			".woff", ".woff2", ".ttf",       // 字体文件
+		}),
+	))
 
 	api.SetupRoutes(r, handler, &cfg.Auth, Version, BuildTime)
 
