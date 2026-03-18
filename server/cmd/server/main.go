@@ -111,6 +111,11 @@ func main() {
 	r.Use(func(c *gin.Context) {
 		if c.Request.Header.Get("Content-Encoding") == "gzip" {
 			gzip.DefaultDecompressHandle(c)
+			if c.IsAborted() {
+				// 只在失败时记录日志
+				log.Printf("[Decompression] Failed to decompress %s %s: %v", c.Request.Method, c.Request.URL.Path, c.Errors.Last())
+				return
+			}
 		}
 		c.Next()
 	})

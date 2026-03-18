@@ -7,7 +7,7 @@ import { CONFIG } from './config';
 import { CaptureData, ArchiveResponse } from './types';
 
 /**
- * Compresses data using gzip and converts to base64 for transmission.
+ * Compresses data using gzip and returns binary string for transmission.
  * Returns both the compressed data and compression stats.
  */
 function compressData(data: string): { compressed: string; originalSize: number; compressedSize: number } {
@@ -15,15 +15,14 @@ function compressData(data: string): { compressed: string; originalSize: number;
   const compressed = pako.gzip(data);
   const compressedSize = compressed.length;
 
-  // Convert Uint8Array to base64 string for GM_xmlhttpRequest
-  // Use loop instead of apply() to avoid stack overflow on large data
+  // Convert Uint8Array to binary string for GM_xmlhttpRequest
+  // Each character's charCode represents one byte
   let binary = '';
   for (let i = 0; i < compressed.length; i++) {
     binary += String.fromCharCode(compressed[i]);
   }
-  const base64 = btoa(binary);
 
-  return { compressed: base64, originalSize, compressedSize };
+  return { compressed: binary, originalSize, compressedSize };
 }
 
 /**
