@@ -20,8 +20,8 @@ func setupRouterWithGzip() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	// Add gzip middleware (same as production)
-	r.Use(gzipMiddleware.Gzip(gzipMiddleware.DefaultCompression))
+	// Add gzip middleware with request decompression support (same as production)
+	r.Use(gzipMiddleware.Gzip(gzipMiddleware.DefaultCompression, gzipMiddleware.WithDecompressFn(gzipMiddleware.DefaultDecompressHandle)))
 
 	handler := &Handler{} // minimal handler
 	authCfg := &config.AuthConfig{Password: ""}
@@ -204,3 +204,135 @@ func TestGzipCompression_MultipleEncodings(t *testing.T) {
 		t.Errorf("expected gzip encoding, got %q", contentEncoding)
 	}
 }
+
+// Test request body decompression
+func TestGzipDecompression_RequestBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(gzipMiddleware.Gzip(gzipMiddleware.DefaultCompression, gzipMiddleware.WithDecompressFn(gzipMiddleware.DefaultDecompressHandle)))
+
+	// Create a route that echoes back the request body
+	var receivedBody string
+	r.POST("/echo", func(c *gin.Context) {
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			c.String(http.StatusBadRequest, "failed to read body")
+			return
+		}
+		receivedBody = string(body)
+		c.String(http.StatusOK, receivedBody)
+	})
+
+	// Compress the request body
+	originalData := `{"url":"https://example.com","title":"Test Page","html":"<html><body>Large content here...</body></html>"}`
+	var compressedBuf bytes.Buffer
+	gzipWriter := gzip.NewWriter(&compressedBuf)
+	_, err := gzipWriter.Write([]byte(originalData))
+	if err != nil {
+		t.Fatalf("failed to compress data: %v", err)
+	}
+	gzipWriter.Close()
+
+	// Send compressed request
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/echo", &compressedBuf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	// Server should have decompressed and received the original data
+	if receivedBody != originalData {
+		t.Errorf("server received wrong data.\nExpected: %s\nGot: %s", originalData, receivedBody)
+	}
+
+	t.Logf("Original size: %d bytes, Compressed size: %d bytes (%.1f%% reduction)",
+		len(originalData), compressedBuf.Len(),
+		(1-float64(compressedBuf.Len())/float64(len(originalData)))*100)
+}
+
+func TestGzipDecompression_LargeRequestBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(gzipMiddleware.Gzip(gzipMiddleware.DefaultCompression, gzipMiddleware.WithDecompressFn(gzipMiddleware.DefaultDecompressHandle)))
+
+	var receivedSize int
+	r.POST("/upload", func(c *gin.Context) {
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			c.String(http.StatusBadRequest, "failed to read body")
+			return
+		}
+		receivedSize = len(body)
+		c.String(http.StatusOK, "ok")
+	})
+
+	// Create a large payload (simulating a large HTML snapshot)
+	largeData := strings.Repeat(`<div class="content">Lorem ipsum dolor sit amet, consectetur adipiscing elit.</div>`, 500)
+	originalSize := len(largeData)
+
+	// Compress it
+	var compressedBuf bytes.Buffer
+	gzipWriter := gzip.NewWriter(&compressedBuf)
+	gzipWriter.Write([]byte(largeData))
+	gzipWriter.Close()
+	compressedSize := compressedBuf.Len()
+
+	// Send compressed request
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/upload", &compressedBuf)
+	req.Header.Set("Content-Encoding", "gzip")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	// Server should have received the full decompressed data
+	if receivedSize != originalSize {
+		t.Errorf("server received %d bytes, expected %d bytes", receivedSize, originalSize)
+	}
+
+	compressionRatio := (1 - float64(compressedSize)/float64(originalSize)) * 100
+	t.Logf("Request compression: %d bytes → %d bytes (%.1f%% reduction)",
+		originalSize, compressedSize, compressionRatio)
+
+	// Should achieve significant compression for repetitive HTML
+	if compressionRatio < 50 {
+		t.Errorf("compression ratio too low: %.1f%% (expected >= 50%%)", compressionRatio)
+	}
+}
+
+func TestGzipDecompression_WithoutContentEncoding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(gzipMiddleware.Gzip(gzipMiddleware.DefaultCompression, gzipMiddleware.WithDecompressFn(gzipMiddleware.DefaultDecompressHandle)))
+
+	var receivedBody string
+	r.POST("/echo", func(c *gin.Context) {
+		body, _ := io.ReadAll(c.Request.Body)
+		receivedBody = string(body)
+		c.String(http.StatusOK, receivedBody)
+	})
+
+	// Send uncompressed request (no Content-Encoding header)
+	originalData := `{"test":"data"}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/echo", strings.NewReader(originalData))
+	req.Header.Set("Content-Type", "application/json")
+	// No Content-Encoding header
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	// Should pass through uncompressed data unchanged
+	if receivedBody != originalData {
+		t.Errorf("uncompressed data was modified.\nExpected: %s\nGot: %s", originalData, receivedBody)
+	}
+}
+

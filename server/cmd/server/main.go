@@ -107,8 +107,8 @@ func main() {
 		c.Next()
 	})
 
-	// 添加 gzip 压缩中间件
-	r.Use(gzip.Gzip(gzip.DefaultCompression))
+	// 添加 gzip 压缩中间件（支持请求和响应双向压缩）
+	r.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithDecompressFn(gzip.DefaultDecompressHandle)))
 
 	api.SetupRoutes(r, handler, &cfg.Auth, Version, BuildTime)
 
