@@ -11,20 +11,22 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"wayback/internal/config"
 	"wayback/internal/database"
 	"wayback/internal/models"
 )
 
 const (
-	resourceCacheTTL       = 2 * time.Hour
-	resourceProcessWorkers = 8
+	resourceCacheTTL = 2 * time.Hour
 )
 
 type resourceCacheEntry struct {
 	resourceID int64
 	data       []byte
+	size       int64 // len(data) 用于统计缓存大小
 	cachedAt   time.Time
 }
 
@@ -33,82 +35,145 @@ type Deduplicator struct {
 	storage       *FileStorage
 	cssParser     *CSSParser
 	htmlExtractor *HTMLResourceExtractor
-	cache         sync.Map // url -> *resourceCacheEntry
+	cache         sync.Map  // url -> *resourceCacheEntry
 	deletionQueue *DeletionQueue
+	config        config.ResourceConfig
+	cacheBytes    atomic.Int64 // 当前缓存占用字节数
+	globalSem     chan struct{} // 全局并发下载信号量，跨所有页面共享
 }
 
-func NewDeduplicator(db *database.DB, storage *FileStorage) *Deduplicator {
+func NewDeduplicator(db *database.DB, storage *FileStorage, cfg config.ResourceConfig) *Deduplicator {
 	return &Deduplicator{
 		db:            db,
 		storage:       storage,
 		cssParser:     NewCSSParser(),
 		htmlExtractor: NewHTMLResourceExtractor(),
 		deletionQueue: NewDeletionQueue(storage.baseDir),
+		config:        cfg,
+		globalSem:     make(chan struct{}, cfg.Workers),
 	}
 }
 
+// cacheMaxBytes 返回缓存大小上限（字节）
+func (d *Deduplicator) cacheMaxBytes() int64 {
+	return int64(d.config.CacheSizeMB) * 1024 * 1024
+}
+
+// cacheStore 缓存资源，超出大小限制时淘汰最旧的条目
+func (d *Deduplicator) cacheStore(key string, resourceID int64, data []byte) {
+	entrySize := int64(len(data))
+
+	// 如果单个条目就超过缓存上限，不缓存
+	if entrySize > d.cacheMaxBytes() {
+		return
+	}
+
+	// 如果 key 已存在，先减去旧条目大小
+	if old, loaded := d.cache.Load(key); loaded {
+		d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
+	}
+
+	// 淘汰过期和超量条目
+	for d.cacheBytes.Load()+entrySize > d.cacheMaxBytes() {
+		evicted := false
+		var oldestKey any
+		var oldestTime time.Time
+
+		d.cache.Range(func(k, v any) bool {
+			entry := v.(*resourceCacheEntry)
+			// 优先淘汰过期的
+			if time.Since(entry.cachedAt) >= resourceCacheTTL {
+				d.cache.Delete(k)
+				d.cacheBytes.Add(-entry.size)
+				evicted = true
+				return false // 淘汰一个后重新检查
+			}
+			// 记录最旧的
+			if oldestKey == nil || entry.cachedAt.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = entry.cachedAt
+			}
+			return true
+		})
+
+		if !evicted {
+			// 没有过期的可淘汰，淘汰最旧的
+			if oldestKey != nil {
+				if old, loaded := d.cache.LoadAndDelete(oldestKey); loaded {
+					d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
+				}
+			} else {
+				break // 缓存为空但仍然超限，不应该发生
+			}
+		}
+	}
+
+	entry := &resourceCacheEntry{
+		resourceID: resourceID,
+		data:       data,
+		size:       entrySize,
+		cachedAt:   time.Now(),
+	}
+	d.cache.Store(key, entry)
+	d.cacheBytes.Add(entrySize)
+}
+
 // ProcessResource 处理单个资源：下载、去重、存储
+// 小文件（≤ streamThreshold）保留在内存并缓存 data；大文件流式写入临时文件，data 返回 nil
 func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, pageURL string, headers map[string]string) (int64, []byte, error) {
 	// 检查缓存（仅当没有提供 base64 内容时）
 	if base64Content == "" {
 		if entry, ok := d.cache.Load(url); ok {
 			cached := entry.(*resourceCacheEntry)
 			if time.Since(cached.cachedAt) < resourceCacheTTL {
-				// 缓存命中仍需更新 last_seen
 				if err := d.db.UpdateResourceLastSeen(cached.resourceID); err != nil {
 					log.Printf("Failed to update last_seen for cached resource: %v", err)
 				}
 				return cached.resourceID, cached.data, nil
 			}
-			// 缓存过期，删除
 			d.cache.Delete(url)
+			d.cacheBytes.Add(-cached.size)
 		}
 	}
 
-	var data []byte
+	var data []byte    // 小文件有值，大文件 nil
+	var tmpPath string // 大文件临时文件路径，小文件空
 	var hash string
-	var err error
+	var fileSize int64
 
-	// 如果提供了 base64 内容，直接使用
 	if base64Content != "" {
+		var err error
 		data, err = base64.StdEncoding.DecodeString(base64Content)
 		if err != nil {
 			return 0, nil, fmt.Errorf("base64 decode failed: %w", err)
 		}
-		// 计算哈希
 		hashBytes := sha256.Sum256(data)
 		hash = hex.EncodeToString(hashBytes[:])
+		fileSize = int64(len(data))
 	} else {
-		// 否则下载资源并计算哈希
-		data, hash, err = d.storage.DownloadResource(url, pageURL, headers)
+		streamThreshold := int64(d.config.StreamThresholdKB) * 1024
+		var err error
+		data, hash, tmpPath, err = d.storage.DownloadResource(url, pageURL, headers, streamThreshold)
 		if err != nil {
 			log.Printf("Download failed for %s: %v, trying fallback", url, err)
-			// 兜底1：查找最近一次成功下载的相同 URL 资源
-			existing, dbErr := d.db.GetResourceByURL(url)
-			// 兜底2：如果精确 URL 找不到，按路径匹配（忽略查询参数差异）
-			// 场景：HTML 中引用 /assets/combo.css?t=177346860，但 DB 中存的是 ?t=1773462600
-			if (dbErr != nil || existing == nil) && strings.Contains(url, "?") {
-				urlPath := url[:strings.IndexByte(url, '?')]
-				existing, dbErr = d.db.GetResourceByURLLike(urlPath + "%")
-				if existing != nil {
-					log.Printf("Fallback: found resource by URL path match: %s -> %s", url, existing.URL)
-				}
-			}
-			if dbErr != nil || existing == nil {
-				return 0, nil, fmt.Errorf("download failed and no fallback: %w", err)
-			}
-			// 读取已存储的文件内容
-			fileData, readErr := d.storage.ReadResource(existing.FilePath)
-			if readErr != nil {
-				return 0, nil, fmt.Errorf("download failed and fallback read failed: %w", err)
-			}
-			log.Printf("Fallback: reusing previous resource (ID: %d) for: %s", existing.ID, url)
-			if updateErr := d.db.UpdateResourceLastSeen(existing.ID); updateErr != nil {
-				log.Printf("Failed to update last_seen for fallback resource: %v", updateErr)
-			}
-			d.cache.Store(url, &resourceCacheEntry{resourceID: existing.ID, data: fileData, cachedAt: time.Now()})
-			return existing.ID, fileData, nil
+			return d.processResourceFallback(url, err)
 		}
+		if data != nil {
+			fileSize = int64(len(data))
+		} else if tmpPath != "" {
+			if info, statErr := os.Stat(tmpPath); statErr == nil {
+				fileSize = info.Size()
+			}
+		}
+	}
+
+	// 确保大文件临时文件最终被清理（SaveResourceFromFile 成功后会置空 tmpPath）
+	if tmpPath != "" {
+		defer func() {
+			if tmpPath != "" {
+				os.Remove(tmpPath)
+			}
+		}()
 	}
 
 	// 检查是否已有相同 URL 的资源记录
@@ -116,17 +181,15 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 	if err != nil {
 		return 0, nil, fmt.Errorf("db query by url failed: %w", err)
 	}
-
 	if existingByURL != nil {
-		// 同 URL 已存在，更新最后见到时间
 		if err := d.db.UpdateResourceLastSeen(existingByURL.ID); err != nil {
 			return 0, nil, err
 		}
-		d.cache.Store(url, &resourceCacheEntry{resourceID: existingByURL.ID, data: data, cachedAt: time.Now()})
+		d.cacheStore(url, existingByURL.ID, data) // data 为 nil 时不缓存内容
 		return existingByURL.ID, data, nil
 	}
 
-	// 检查是否有相同哈希的资源（不同 URL，内容相同）
+	// 检查是否有相同哈希的资源
 	existingByHash, err := d.db.GetResourceByHash(hash)
 	if err != nil {
 		return 0, nil, fmt.Errorf("db query by hash failed: %w", err)
@@ -134,26 +197,56 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 
 	var filePath string
 	if existingByHash != nil {
-		// 内容相同但 URL 不同，复用文件，创建新 DB 记录
 		filePath = existingByHash.FilePath
 		log.Printf("Same content (hash: %s) different URL, reusing file: %s", hash[:16], url)
+	} else if tmpPath != "" {
+		// 大文件：从临时文件移动到资源目录（零拷贝）
+		filePath, err = d.storage.SaveResourceFromFile(tmpPath, hash, resourceType)
+		if err != nil {
+			return 0, nil, fmt.Errorf("save from file failed: %w", err)
+		}
+		tmpPath = "" // 已被移走，阻止 defer 删除
 	} else {
-		// 全新资源，保存文件
+		// 小文件：从内存写入
 		filePath, err = d.storage.SaveResource(data, hash, resourceType)
 		if err != nil {
 			return 0, nil, fmt.Errorf("save failed: %w", err)
 		}
 	}
 
-	// 创建数据库记录（使用 ON CONFLICT 防止竞态）
-	resourceID, err := d.db.CreateResourceIfNotExists(url, hash, resourceType, filePath, int64(len(data)))
+	resourceID, err := d.db.CreateResourceIfNotExists(url, hash, resourceType, filePath, fileSize)
 	if err != nil {
 		return 0, nil, fmt.Errorf("db insert failed: %w", err)
 	}
 
 	log.Printf("New resource record (hash: %s): %s", hash[:16], url)
-	d.cache.Store(url, &resourceCacheEntry{resourceID: resourceID, data: data, cachedAt: time.Now()})
+	d.cacheStore(url, resourceID, data) // 小文件缓存 data，大文件 data=nil 不占内存
 	return resourceID, data, nil
+}
+
+// processResourceFallback 下载失败时的兜底逻辑
+func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (int64, []byte, error) {
+	existing, dbErr := d.db.GetResourceByURL(url)
+	if (dbErr != nil || existing == nil) && strings.Contains(url, "?") {
+		urlPath := url[:strings.IndexByte(url, '?')]
+		existing, dbErr = d.db.GetResourceByURLLike(urlPath + "%")
+		if existing != nil {
+			log.Printf("Fallback: found resource by URL path match: %s -> %s", url, existing.URL)
+		}
+	}
+	if dbErr != nil || existing == nil {
+		return 0, nil, fmt.Errorf("download failed and no fallback: %w", downloadErr)
+	}
+	fileData, readErr := d.storage.ReadResource(existing.FilePath)
+	if readErr != nil {
+		return 0, nil, fmt.Errorf("download failed and fallback read failed: %w", downloadErr)
+	}
+	log.Printf("Fallback: reusing previous resource (ID: %d) for: %s", existing.ID, url)
+	if updateErr := d.db.UpdateResourceLastSeen(existing.ID); updateErr != nil {
+		log.Printf("Failed to update last_seen for fallback resource: %v", updateErr)
+	}
+	d.cacheStore(url, existing.ID, fileData)
+	return existing.ID, fileData, nil
 }
 
 // ProcessCapture 处理完整的页面捕获，返回 (pageID, action, error)
@@ -238,13 +331,21 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	}
 
 	resultsCh := make(chan resourceResult, len(allResources))
-	sem := make(chan struct{}, resourceProcessWorkers)
+	sem := d.globalSem // 全局信号量，跨所有页面共享
 	var wg sync.WaitGroup
+	startTime := time.Now()
 
 	for _, res := range allResources {
 		wg.Add(1)
 		go func(res models.ResourceReference) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("PANIC recovered in resource goroutine for %s: %v", res.URL, r)
+					resultsCh <- resourceResult{res: res, err: fmt.Errorf("panic: %v", r)}
+				}
+			}()
+
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
@@ -286,8 +387,21 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	}
 	var cssWorkItems []cssWork
 
+	processedCount := 0
+	failedCount := 0
+	lastLogTime := time.Now()
+
 	for result := range resultsCh {
+		processedCount++
+
+		// 每处理 50 个资源或每 10 秒输出一次进度
+		if processedCount%50 == 0 || time.Since(lastLogTime) > 10*time.Second {
+			log.Printf("Resource processing progress: %d/%d completed (failed: %d)", processedCount, len(allResources), failedCount)
+			lastLogTime = time.Now()
+		}
+
 		if result.err != nil {
+			failedCount++
 			log.Printf("Failed to process resource %s: %v", result.res.URL, result.err)
 			continue
 		}
@@ -296,14 +410,27 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		rewriter.AddMapping(result.res.URL, result.filePath)
 
 		// 收集需要处理的 CSS 文件
-		if result.res.Type == "css" && result.data != nil {
-			cssWorkItems = append(cssWorkItems, cssWork{
-				cssContent: string(result.data),
-				cssURL:     result.res.URL,
-				filePath:   result.filePath,
-			})
+		if result.res.Type == "css" {
+			cssData := result.data
+			// 大文件流式落盘后 data 为 nil，需要从磁盘读回以提取子资源
+			if cssData == nil && result.filePath != "" {
+				if fileData, readErr := d.storage.ReadResource(result.filePath); readErr == nil {
+					cssData = fileData
+				} else {
+					log.Printf("Failed to read CSS file for sub-resource extraction: %s: %v", result.filePath, readErr)
+				}
+			}
+			if cssData != nil {
+				cssWorkItems = append(cssWorkItems, cssWork{
+					cssContent: string(cssData),
+					cssURL:     result.res.URL,
+					filePath:   result.filePath,
+				})
+			}
 		}
 	}
+
+	log.Printf("Resource processing completed: %d succeeded, %d failed, took %v", len(resourceIDs), failedCount, time.Since(startTime))
 
 	// 处理 CSS 中引用的资源（收集所有子资源后并行处理）
 	type cssSubResource struct {
@@ -496,13 +623,20 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 
 	resultsCh := make(chan resourceResult, len(allResources))
-	sem := make(chan struct{}, resourceProcessWorkers)
+	sem := d.globalSem // 全局信号量，跨所有页面共享
 	var wg sync.WaitGroup
 
 	for _, res := range allResources {
 		wg.Add(1)
 		go func(res models.ResourceReference) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[Update] PANIC recovered in resource goroutine for %s: %v", res.URL, r)
+					resultsCh <- resourceResult{res: res, err: fmt.Errorf("panic: %v", r)}
+				}
+			}()
+
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
@@ -543,8 +677,12 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 	var cssWorkItems []cssWork
 
+	updateProcessed := 0
+	updateFailed := 0
 	for result := range resultsCh {
+		updateProcessed++
 		if result.err != nil {
+			updateFailed++
 			log.Printf("[Update] Failed to process resource %s: %v", result.res.URL, result.err)
 			continue
 		}
@@ -552,15 +690,25 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		resourceIDs = append(resourceIDs, result.resourceID)
 		rewriter.AddMapping(result.res.URL, result.filePath)
 
-		if result.res.Type == "css" && result.data != nil {
-			cssWorkItems = append(cssWorkItems, cssWork{
-				cssContent: string(result.data),
-				cssURL:     result.res.URL,
-				filePath:   result.filePath,
-			})
+		if result.res.Type == "css" {
+			cssData := result.data
+			if cssData == nil && result.filePath != "" {
+				if fileData, readErr := d.storage.ReadResource(result.filePath); readErr == nil {
+					cssData = fileData
+				} else {
+					log.Printf("[Update] Failed to read CSS file for sub-resource extraction: %s: %v", result.filePath, readErr)
+				}
+			}
+			if cssData != nil {
+				cssWorkItems = append(cssWorkItems, cssWork{
+					cssContent: string(cssData),
+					cssURL:     result.res.URL,
+					filePath:   result.filePath,
+				})
+			}
 		}
 	}
-	log.Printf("[Update] Processed %d resources in %v", len(resourceIDs), time.Since(processStart))
+	log.Printf("[Update] Processed %d resources (%d failed) in %v", len(resourceIDs), updateFailed, time.Since(processStart))
 
 	// 处理 CSS 中引用的资源
 	type cssSubResource struct {

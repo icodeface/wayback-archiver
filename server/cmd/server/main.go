@@ -49,6 +49,16 @@ func main() {
 	defer logger.Close()
 	log.Println("Logging initialized:", cfg.Storage.LogDir)
 
+	// 打印启动配置摘要（不包含密码等敏感信息）
+	log.Printf("Version: %s (built: %s)", Version, BuildTime)
+	log.Printf("Database: %s@%s:%d/%s (sslmode=%s)",
+		cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName, cfg.Database.SSLMode)
+	log.Printf("Storage: data=%s, logs=%s", cfg.Storage.DataDir, cfg.Storage.LogDir)
+	log.Printf("Server: %s:%d, compression_level=%d", cfg.Server.Host, cfg.Server.Port, cfg.Server.CompressionLevel)
+	log.Printf("Auth: %v", cfg.Auth.Enabled())
+	log.Printf("Resource: workers=%d, cache=%dMB, download_timeout=%ds, stream_threshold=%dKB",
+		cfg.Resource.Workers, cfg.Resource.CacheSizeMB, cfg.Resource.DownloadTimeout, cfg.Resource.StreamThresholdKB)
+
 	// 连接数据库
 	db, err := database.New(
 		cfg.Database.Host,
@@ -64,10 +74,17 @@ func main() {
 	log.Println("Database connected")
 
 	// 初始化存储
-	fileStorage := storage.NewFileStorage(cfg.Storage.DataDir)
+	fileStorage := storage.NewFileStorage(cfg.Storage.DataDir, cfg.Resource.DownloadTimeout)
+
+	// 清理上次进程崩溃/OOM kill 残留的临时文件
+	if n, err := fileStorage.CleanupTmp(); err != nil {
+		log.Printf("Warning: tmp cleanup failed: %v", err)
+	} else if n > 0 {
+		log.Printf("Cleaned up %d orphaned temp files", n)
+	}
 
 	// 初始化去重器
-	dedup := storage.NewDeduplicator(db, fileStorage)
+	dedup := storage.NewDeduplicator(db, fileStorage, cfg.Resource)
 
 	// 清理被替换的旧版本 HTML 文件（启动时执行一次）
 	const htmlRetentionDays = 7 // 旧版本保留 7 天

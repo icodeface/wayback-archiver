@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"wayback/internal/config"
 	"wayback/internal/database"
 	"wayback/internal/models"
 	"wayback/internal/storage"
@@ -23,7 +24,11 @@ func setupTestHandler(t *testing.T) (*Handler, func()) {
 
 	dataDir := t.TempDir()
 	fs := storage.NewFileStorage(dataDir)
-	dedup := storage.NewDeduplicator(db, fs)
+	dedup := storage.NewDeduplicator(db, fs, config.ResourceConfig{
+		Workers:         4,
+		CacheSizeMB:     100,
+		DownloadTimeout: 30,
+	})
 	handler := NewHandler(dedup, db, dataDir, nil)
 
 	cleanup := func() {

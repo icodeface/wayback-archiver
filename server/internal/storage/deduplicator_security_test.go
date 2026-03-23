@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"wayback/internal/config"
 	"wayback/internal/database"
 	"wayback/internal/models"
 )
@@ -52,7 +53,11 @@ func TestProcessCapture_ContentDeduplication(t *testing.T) {
 	skipIfNoDB(t, db)
 
 	fs := NewFileStorage(t.TempDir())
-	dedup := NewDeduplicator(db, fs)
+	dedup := NewDeduplicator(db, fs, config.ResourceConfig{
+		Workers:         4,
+		CacheSizeMB:     100,
+		DownloadTimeout: 30,
+	})
 
 	testURL := fmt.Sprintf("http://test-dedup-%d.example.com", time.Now().Unix())
 	testHTML := "<html><body>Test content</body></html>"

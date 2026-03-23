@@ -141,7 +141,7 @@ func TestDownloadResource_SSRFProtection(t *testing.T) {
 	fs := NewFileStorage(t.TempDir())
 
 	// 尝试访问内网地址
-	_, _, err := fs.DownloadResource("http://127.0.0.1:8080/admin", "", nil)
+	_, _, _, err := fs.DownloadResource("http://127.0.0.1:8080/admin", "", nil, 2*1024*1024)
 	if err == nil {
 		t.Fatal("Expected SSRF protection to block localhost")
 	}
@@ -163,7 +163,7 @@ func BenchmarkDownloadResource(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, err := fs.DownloadResource(server.URL, "", nil)
+		_, _, _, err := fs.DownloadResource(server.URL, "", nil, 2*1024*1024)
 		if err != nil {
 			b.Fatal(err)
 		}
