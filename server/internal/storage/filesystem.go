@@ -222,8 +222,8 @@ func (fs *FileStorage) DownloadResource(resourceURL string, pageURL string, head
 	// 使用 LimitReader 限制读取大小
 	limitedReader := io.LimitReader(resp.Body, maxResourceSize+1)
 
-	// 已知大文件：直接流式写磁盘，内存占用 ≈ 0
-	if resp.ContentLength > streamThreshold {
+	// 已知大文件 或 阈值为 0（全部落盘）：直接流式写磁盘，内存占用 ≈ 0
+	if resp.ContentLength > streamThreshold || streamThreshold <= 0 {
 		return fs.downloadToFile(limitedReader)
 	}
 

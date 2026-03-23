@@ -20,7 +20,7 @@ func TestCacheStore_BasicStoreAndRetrieve(t *testing.T) {
 	d := newTestDeduplicator(100) // 100MB cache
 
 	data := []byte("hello world")
-	d.cacheStore("key1", 42, data)
+	d.cacheStore("key1", 42, "resources/ab/cd/key1.bin", data)
 
 	entry, ok := d.cache.Load("key1")
 	if !ok {
@@ -42,13 +42,13 @@ func TestCacheStore_BasicStoreAndRetrieve(t *testing.T) {
 func TestCacheStore_OverwriteUpdatesSize(t *testing.T) {
 	d := newTestDeduplicator(100)
 
-	d.cacheStore("key1", 1, []byte("short"))
+	d.cacheStore("key1", 1, "", []byte("short"))
 	if d.cacheBytes.Load() != 5 {
 		t.Fatalf("cacheBytes = %d, want 5", d.cacheBytes.Load())
 	}
 
 	// 覆盖同一个 key，数据更大
-	d.cacheStore("key1", 1, []byte("much longer data"))
+	d.cacheStore("key1", 1, "", []byte("much longer data"))
 	if d.cacheBytes.Load() != 16 {
 		t.Errorf("cacheBytes = %d, want 16 (after overwrite)", d.cacheBytes.Load())
 	}
@@ -60,11 +60,11 @@ func TestCacheStore_EvictsOldestWhenFull(t *testing.T) {
 
 	// 写入 500KB
 	data500k := make([]byte, 500*1024)
-	d.cacheStore("first", 1, data500k)
+	d.cacheStore("first", 1, "", data500k)
 
 	// 再写入 400KB，仍在限制内
 	data400k := make([]byte, 400*1024)
-	d.cacheStore("second", 2, data400k)
+	d.cacheStore("second", 2, "", data400k)
 
 	// 此时总计 900KB < 1MB，两个都应该在
 	if _, ok := d.cache.Load("first"); !ok {
@@ -76,7 +76,7 @@ func TestCacheStore_EvictsOldestWhenFull(t *testing.T) {
 
 	// 再写入 200KB，总计 1100KB > 1MB，应该淘汰最旧的 "first"
 	data200k := make([]byte, 200*1024)
-	d.cacheStore("third", 3, data200k)
+	d.cacheStore("third", 3, "", data200k)
 
 	if _, ok := d.cache.Load("first"); ok {
 		t.Error("expected 'first' to be evicted (oldest)")
@@ -103,10 +103,10 @@ func TestCacheStore_EvictsExpiredFirst(t *testing.T) {
 	d.cacheBytes.Add(expiredEntry.size)
 
 	// 插入一个新的未过期条目
-	d.cacheStore("fresh", 2, make([]byte, 400*1024))
+	d.cacheStore("fresh", 2, "", make([]byte, 400*1024))
 
 	// 再插入一个，总共超出限制，应该优先淘汰过期的
-	d.cacheStore("newest", 3, make([]byte, 200*1024))
+	d.cacheStore("newest", 3, "", make([]byte, 200*1024))
 
 	if _, ok := d.cache.Load("expired"); ok {
 		t.Error("expected 'expired' to be evicted first (TTL expired)")
@@ -124,7 +124,7 @@ func TestCacheStore_SkipsOversizedEntry(t *testing.T) {
 
 	// 单个条目超过整个缓存容量
 	huge := make([]byte, 2*1024*1024) // 2MB
-	d.cacheStore("huge", 1, huge)
+	d.cacheStore("huge", 1, "", huge)
 
 	if _, ok := d.cache.Load("huge"); ok {
 		t.Error("expected oversized entry to not be cached")
@@ -137,9 +137,9 @@ func TestCacheStore_SkipsOversizedEntry(t *testing.T) {
 func TestCacheStore_SizeTrackingAccurate(t *testing.T) {
 	d := newTestDeduplicator(100)
 
-	d.cacheStore("a", 1, make([]byte, 100))
-	d.cacheStore("b", 2, make([]byte, 200))
-	d.cacheStore("c", 3, make([]byte, 300))
+	d.cacheStore("a", 1, "", make([]byte, 100))
+	d.cacheStore("b", 2, "", make([]byte, 200))
+	d.cacheStore("c", 3, "", make([]byte, 300))
 
 	expected := int64(100 + 200 + 300)
 	if d.cacheBytes.Load() != expected {
@@ -147,7 +147,7 @@ func TestCacheStore_SizeTrackingAccurate(t *testing.T) {
 	}
 
 	// 覆盖 b 为更小的数据
-	d.cacheStore("b", 2, make([]byte, 50))
+	d.cacheStore("b", 2, "", make([]byte, 50))
 	expected = int64(100 + 50 + 300)
 	if d.cacheBytes.Load() != expected {
 		t.Errorf("cacheBytes = %d, want %d after overwrite", d.cacheBytes.Load(), expected)
@@ -162,7 +162,7 @@ func TestCacheStore_ConcurrentAccess(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		go func(i int) {
 			data := make([]byte, 10*1024) // 10KB each
-			d.cacheStore(string(rune('A'+i%26))+string(rune('0'+i/26)), int64(i), data)
+			d.cacheStore(string(rune('A'+i%26))+string(rune('0'+i/26)), int64(i), "", data)
 			done <- struct{}{}
 		}(i)
 	}
@@ -187,7 +187,7 @@ func TestCacheStore_NilDataLargeFile(t *testing.T) {
 	d := newTestDeduplicator(100)
 
 	// 大文件流式落盘后 data 为 nil，cacheStore 应该正常处理
-	d.cacheStore("large-file-url", 42, nil)
+	d.cacheStore("large-file-url", 42, "", nil)
 
 	entry, ok := d.cache.Load("large-file-url")
 	if !ok {
@@ -215,7 +215,7 @@ func TestCacheStore_NilDataCacheHitReturnsNil(t *testing.T) {
 	d := newTestDeduplicator(100)
 
 	// 模拟大文件缓存 entry（data 为 nil）
-	d.cacheStore("css-url", 10, nil)
+	d.cacheStore("css-url", 10, "", nil)
 
 	// 缓存命中时应返回 nil data 和正确的 resourceID
 	entry, ok := d.cache.Load("css-url")

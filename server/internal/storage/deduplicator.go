@@ -25,6 +25,7 @@ const (
 
 type resourceCacheEntry struct {
 	resourceID int64
+	filePath   string
 	data       []byte
 	size       int64 // len(data) 用于统计缓存大小
 	cachedAt   time.Time
@@ -60,7 +61,7 @@ func (d *Deduplicator) cacheMaxBytes() int64 {
 }
 
 // cacheStore 缓存资源，超出大小限制时淘汰最旧的条目
-func (d *Deduplicator) cacheStore(key string, resourceID int64, data []byte) {
+func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string, data []byte) {
 	entrySize := int64(len(data))
 
 	// 如果单个条目就超过缓存上限，不缓存
@@ -110,6 +111,7 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, data []byte) {
 
 	entry := &resourceCacheEntry{
 		resourceID: resourceID,
+		filePath:   filePath,
 		data:       data,
 		size:       entrySize,
 		cachedAt:   time.Now(),
@@ -119,8 +121,9 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, data []byte) {
 }
 
 // ProcessResource 处理单个资源：下载、去重、存储
+// 返回 (resourceID, filePath, data, error)
 // 小文件（≤ streamThreshold）保留在内存并缓存 data；大文件流式写入临时文件，data 返回 nil
-func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, pageURL string, headers map[string]string) (int64, []byte, error) {
+func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, pageURL string, headers map[string]string) (int64, string, []byte, error) {
 	// 检查缓存（仅当没有提供 base64 内容时）
 	if base64Content == "" {
 		if entry, ok := d.cache.Load(url); ok {
@@ -129,7 +132,7 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 				if err := d.db.UpdateResourceLastSeen(cached.resourceID); err != nil {
 					log.Printf("Failed to update last_seen for cached resource: %v", err)
 				}
-				return cached.resourceID, cached.data, nil
+				return cached.resourceID, cached.filePath, cached.data, nil
 			}
 			d.cache.Delete(url)
 			d.cacheBytes.Add(-cached.size)
@@ -145,7 +148,7 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 		var err error
 		data, err = base64.StdEncoding.DecodeString(base64Content)
 		if err != nil {
-			return 0, nil, fmt.Errorf("base64 decode failed: %w", err)
+			return 0, "", nil, fmt.Errorf("base64 decode failed: %w", err)
 		}
 		hashBytes := sha256.Sum256(data)
 		hash = hex.EncodeToString(hashBytes[:])
@@ -179,20 +182,20 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 	// 检查是否已有相同 URL 的资源记录
 	existingByURL, err := d.db.GetResourceByURL(url)
 	if err != nil {
-		return 0, nil, fmt.Errorf("db query by url failed: %w", err)
+		return 0, "", nil, fmt.Errorf("db query by url failed: %w", err)
 	}
 	if existingByURL != nil {
 		if err := d.db.UpdateResourceLastSeen(existingByURL.ID); err != nil {
-			return 0, nil, err
+			return 0, "", nil, err
 		}
-		d.cacheStore(url, existingByURL.ID, data) // data 为 nil 时不缓存内容
-		return existingByURL.ID, data, nil
+		d.cacheStore(url, existingByURL.ID, existingByURL.FilePath, data)
+		return existingByURL.ID, existingByURL.FilePath, data, nil
 	}
 
 	// 检查是否有相同哈希的资源
 	existingByHash, err := d.db.GetResourceByHash(hash)
 	if err != nil {
-		return 0, nil, fmt.Errorf("db query by hash failed: %w", err)
+		return 0, "", nil, fmt.Errorf("db query by hash failed: %w", err)
 	}
 
 	var filePath string
@@ -203,29 +206,29 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 		// 大文件：从临时文件移动到资源目录（零拷贝）
 		filePath, err = d.storage.SaveResourceFromFile(tmpPath, hash, resourceType)
 		if err != nil {
-			return 0, nil, fmt.Errorf("save from file failed: %w", err)
+			return 0, "", nil, fmt.Errorf("save from file failed: %w", err)
 		}
 		tmpPath = "" // 已被移走，阻止 defer 删除
 	} else {
 		// 小文件：从内存写入
 		filePath, err = d.storage.SaveResource(data, hash, resourceType)
 		if err != nil {
-			return 0, nil, fmt.Errorf("save failed: %w", err)
+			return 0, "", nil, fmt.Errorf("save failed: %w", err)
 		}
 	}
 
 	resourceID, err := d.db.CreateResourceIfNotExists(url, hash, resourceType, filePath, fileSize)
 	if err != nil {
-		return 0, nil, fmt.Errorf("db insert failed: %w", err)
+		return 0, "", nil, fmt.Errorf("db insert failed: %w", err)
 	}
 
 	log.Printf("New resource record (hash: %s): %s", hash[:16], url)
-	d.cacheStore(url, resourceID, data) // 小文件缓存 data，大文件 data=nil 不占内存
-	return resourceID, data, nil
+	d.cacheStore(url, resourceID, filePath, data)
+	return resourceID, filePath, data, nil
 }
 
 // processResourceFallback 下载失败时的兜底逻辑
-func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (int64, []byte, error) {
+func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (int64, string, []byte, error) {
 	existing, dbErr := d.db.GetResourceByURL(url)
 	if (dbErr != nil || existing == nil) && strings.Contains(url, "?") {
 		urlPath := url[:strings.IndexByte(url, '?')]
@@ -235,18 +238,18 @@ func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (i
 		}
 	}
 	if dbErr != nil || existing == nil {
-		return 0, nil, fmt.Errorf("download failed and no fallback: %w", downloadErr)
+		return 0, "", nil, fmt.Errorf("download failed and no fallback: %w", downloadErr)
 	}
 	fileData, readErr := d.storage.ReadResource(existing.FilePath)
 	if readErr != nil {
-		return 0, nil, fmt.Errorf("download failed and fallback read failed: %w", downloadErr)
+		return 0, "", nil, fmt.Errorf("download failed and fallback read failed: %w", downloadErr)
 	}
 	log.Printf("Fallback: reusing previous resource (ID: %d) for: %s", existing.ID, url)
 	if updateErr := d.db.UpdateResourceLastSeen(existing.ID); updateErr != nil {
 		log.Printf("Failed to update last_seen for fallback resource: %v", updateErr)
 	}
-	d.cacheStore(url, existing.ID, fileData)
-	return existing.ID, fileData, nil
+	d.cacheStore(url, existing.ID, existing.FilePath, fileData)
+	return existing.ID, existing.FilePath, fileData, nil
 }
 
 // ProcessCapture 处理完整的页面捕获，返回 (pageID, action, error)
@@ -349,19 +352,9 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			resourceID, data, err := d.ProcessResource(res.URL, res.Type, res.Content, req.URL, req.Headers)
+			resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, res.Content, req.URL, req.Headers)
 			if err != nil {
 				resultsCh <- resourceResult{res: res, err: err}
-				return
-			}
-
-			resource, err := d.db.GetResourceByID(resourceID)
-			if err != nil {
-				resultsCh <- resourceResult{res: res, err: fmt.Errorf("get resource info: %w", err)}
-				return
-			}
-			if resource == nil {
-				resultsCh <- resourceResult{res: res, err: fmt.Errorf("resource not found in DB (ID: %d)", resourceID)}
 				return
 			}
 
@@ -369,7 +362,7 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 				res:        res,
 				resourceID: resourceID,
 				data:       data,
-				filePath:   resource.FilePath,
+				filePath:   filePath,
 			}
 		}(res)
 	}
@@ -471,22 +464,16 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				subResourceID, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), "", req.URL, req.Headers)
+				subResourceID, subFilePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), "", req.URL, req.Headers)
 				if err != nil {
 					subResultsCh <- cssSubResult{sub: sub, err: err}
-					return
-				}
-
-				subResource, err := d.db.GetResourceByID(subResourceID)
-				if err != nil {
-					subResultsCh <- cssSubResult{sub: sub, err: fmt.Errorf("get CSS sub-resource info: %w", err)}
 					return
 				}
 
 				subResultsCh <- cssSubResult{
 					sub:      sub,
 					resID:    subResourceID,
-					filePath: subResource.FilePath,
+					filePath: subFilePath,
 				}
 			}(sub)
 		}
@@ -640,19 +627,9 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			resourceID, data, err := d.ProcessResource(res.URL, res.Type, res.Content, req.URL, req.Headers)
+			resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, res.Content, req.URL, req.Headers)
 			if err != nil {
 				resultsCh <- resourceResult{res: res, err: err}
-				return
-			}
-
-			resource, err := d.db.GetResourceByID(resourceID)
-			if err != nil {
-				resultsCh <- resourceResult{res: res, err: fmt.Errorf("get resource info: %w", err)}
-				return
-			}
-			if resource == nil {
-				resultsCh <- resourceResult{res: res, err: fmt.Errorf("resource not found in DB (ID: %d)", resourceID)}
 				return
 			}
 
@@ -660,7 +637,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 				res:        res,
 				resourceID: resourceID,
 				data:       data,
-				filePath:   resource.FilePath,
+				filePath:   filePath,
 			}
 		}(res)
 	}
@@ -750,22 +727,16 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				subResourceID, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), "", req.URL, req.Headers)
+				subResourceID, subFilePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), "", req.URL, req.Headers)
 				if err != nil {
 					subResultsCh <- cssSubResult{sub: sub, err: err}
-					return
-				}
-
-				subResource, err := d.db.GetResourceByID(subResourceID)
-				if err != nil {
-					subResultsCh <- cssSubResult{sub: sub, err: fmt.Errorf("get CSS sub-resource info: %w", err)}
 					return
 				}
 
 				subResultsCh <- cssSubResult{
 					sub:      sub,
 					resID:    subResourceID,
-					filePath: subResource.FilePath,
+					filePath: subFilePath,
 				}
 			}(sub)
 		}
