@@ -151,3 +151,35 @@ func TestDetectResourceConfig_CacheNotExceedMemory(t *testing.T) {
 		t.Errorf("CacheSizeMB = %d, exceeds total memory %dMB", cfg.CacheSizeMB, totalMem)
 	}
 }
+
+func TestDetectResourceConfig_NegativeStreamThreshold(t *testing.T) {
+	// 负值应被安全边界修正为 0
+	t.Setenv("RESOURCE_STREAM_THRESHOLD_KB", "-100")
+
+	cfg := detectResourceConfig()
+
+	if cfg.StreamThresholdKB != 0 {
+		t.Errorf("StreamThresholdKB = %d, want 0 (negative should be clamped to 0)", cfg.StreamThresholdKB)
+	}
+}
+
+func TestDetectResourceConfig_LargeWorkers(t *testing.T) {
+	t.Setenv("RESOURCE_WORKERS", "1000")
+
+	cfg := detectResourceConfig()
+
+	// 应该接受大值（不设上限，由用户决定）
+	if cfg.Workers != 1000 {
+		t.Errorf("Workers = %d, want 1000", cfg.Workers)
+	}
+}
+
+func TestDetectResourceConfig_StreamThresholdCustom(t *testing.T) {
+	t.Setenv("RESOURCE_STREAM_THRESHOLD_KB", "512")
+
+	cfg := detectResourceConfig()
+
+	if cfg.StreamThresholdKB != 512 {
+		t.Errorf("StreamThresholdKB = %d, want 512", cfg.StreamThresholdKB)
+	}
+}

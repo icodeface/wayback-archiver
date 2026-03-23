@@ -1,6 +1,10 @@
 package storage
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -243,4 +247,385 @@ func TestSaveResourceFromFile_ThenReadResource(t *testing.T) {
 	if string(data) != cssContent {
 		t.Errorf("ReadResource content mismatch: got %q, want %q", string(data), cssContent)
 	}
+}
+
+func TestDownloadToFile_SmallData(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+	content := []byte("hello world from downloadToFile")
+
+	data, hash, tmpPath, err := fs.downloadToFile(bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("downloadToFile failed: %v", err)
+	}
+
+	// data 应为 nil（流式写入磁盘）
+	if data != nil {
+		t.Errorf("expected nil data, got %d bytes", len(data))
+	}
+
+	// hash 应正确
+	expected := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(expected[:])
+	if hash != expectedHash {
+		t.Errorf("hash = %s, want %s", hash, expectedHash)
+	}
+
+	// tmpPath 应存在且内容正确
+	if tmpPath == "" {
+		t.Fatal("expected non-empty tmpPath")
+	}
+	saved, err := os.ReadFile(tmpPath)
+	if err != nil {
+		t.Fatalf("failed to read tmp file: %v", err)
+	}
+	if !bytes.Equal(saved, content) {
+		t.Errorf("tmp file content mismatch")
+	}
+
+	// 清理
+	os.Remove(tmpPath)
+}
+
+func TestDownloadToFile_EmptyReader(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+
+	data, hash, tmpPath, err := fs.downloadToFile(bytes.NewReader(nil))
+	if err != nil {
+		t.Fatalf("downloadToFile failed: %v", err)
+	}
+	if data != nil {
+		t.Error("expected nil data")
+	}
+	if hash == "" {
+		t.Error("expected non-empty hash for empty content")
+	}
+	if tmpPath == "" {
+		t.Fatal("expected non-empty tmpPath")
+	}
+
+	// 文件应为空
+	info, _ := os.Stat(tmpPath)
+	if info.Size() != 0 {
+		t.Errorf("expected empty file, got %d bytes", info.Size())
+	}
+
+	os.Remove(tmpPath)
+}
+
+func TestDownloadToFile_ErrorReader(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+
+	// 读取时返回错误的 reader
+	errReader := &errorAfterReader{data: []byte("partial"), failAfter: 3}
+	_, _, tmpPath, err := fs.downloadToFile(errReader)
+
+	if err == nil {
+		t.Error("expected error from downloadToFile with failing reader")
+	}
+	// 出错时应清理临时文件（defer 中 os.Remove）
+	if tmpPath != "" {
+		if _, statErr := os.Stat(tmpPath); !os.IsNotExist(statErr) {
+			t.Error("expected tmp file to be cleaned up on error")
+			os.Remove(tmpPath)
+		}
+	}
+}
+
+func TestDownloadBuffered_SmallFile(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+	content := []byte("small content within threshold")
+	threshold := int64(1024) // 1KB 阈值
+
+	data, hash, tmpPath, err := fs.downloadBuffered(bytes.NewReader(content), threshold)
+	if err != nil {
+		t.Fatalf("downloadBuffered failed: %v", err)
+	}
+
+	// 小文件应留在内存
+	if data == nil {
+		t.Fatal("expected data in memory for small file")
+	}
+	if !bytes.Equal(data, content) {
+		t.Error("data content mismatch")
+	}
+
+	// hash 应正确
+	expected := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(expected[:])
+	if hash != expectedHash {
+		t.Errorf("hash = %s, want %s", hash, expectedHash)
+	}
+
+	// 不应有临时文件
+	if tmpPath != "" {
+		t.Errorf("expected no tmpPath for small file, got %s", tmpPath)
+	}
+}
+
+func TestDownloadBuffered_LargeFile(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+	content := make([]byte, 5*1024) // 5KB
+	for i := range content {
+		content[i] = byte(i % 256)
+	}
+	threshold := int64(1024) // 1KB 阈值
+
+	data, hash, tmpPath, err := fs.downloadBuffered(bytes.NewReader(content), threshold)
+	if err != nil {
+		t.Fatalf("downloadBuffered failed: %v", err)
+	}
+
+	// 大文件应溢出到磁盘
+	if data != nil {
+		t.Error("expected nil data for large file (should be on disk)")
+	}
+
+	// hash 应正确
+	expected := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(expected[:])
+	if hash != expectedHash {
+		t.Errorf("hash = %s, want %s", hash, expectedHash)
+	}
+
+	// tmpPath 应存在且内容正确
+	if tmpPath == "" {
+		t.Fatal("expected non-empty tmpPath for large file")
+	}
+	saved, err := os.ReadFile(tmpPath)
+	if err != nil {
+		t.Fatalf("failed to read tmp file: %v", err)
+	}
+	if !bytes.Equal(saved, content) {
+		t.Error("tmp file content mismatch")
+	}
+
+	os.Remove(tmpPath)
+}
+
+func TestDownloadBuffered_ExactlyThresholdPlusOne(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+	threshold := int64(100)
+	// 恰好 threshold+1 字节，应溢出到磁盘
+	content := make([]byte, threshold+1)
+	for i := range content {
+		content[i] = byte('A' + i%26)
+	}
+
+	data, hash, tmpPath, err := fs.downloadBuffered(bytes.NewReader(content), threshold)
+	if err != nil {
+		t.Fatalf("downloadBuffered failed: %v", err)
+	}
+
+	if data != nil {
+		t.Error("expected nil data when size = threshold+1")
+	}
+	if tmpPath == "" {
+		t.Fatal("expected tmpPath when size = threshold+1")
+	}
+
+	// 验证内容完整性
+	saved, _ := os.ReadFile(tmpPath)
+	if !bytes.Equal(saved, content) {
+		t.Error("tmp file content mismatch at boundary")
+	}
+
+	// 验证哈希
+	expected := sha256.Sum256(content)
+	if hash != hex.EncodeToString(expected[:]) {
+		t.Error("hash mismatch at boundary")
+	}
+
+	os.Remove(tmpPath)
+}
+
+func TestDownloadBuffered_ExactlyThreshold(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+	threshold := int64(100)
+	// 恰好 threshold 字节，应留在内存
+	content := make([]byte, threshold)
+	for i := range content {
+		content[i] = byte('X')
+	}
+
+	data, _, tmpPath, err := fs.downloadBuffered(bytes.NewReader(content), threshold)
+	if err != nil {
+		t.Fatalf("downloadBuffered failed: %v", err)
+	}
+
+	if data == nil {
+		t.Fatal("expected data in memory when size = threshold")
+	}
+	if tmpPath != "" {
+		t.Error("expected no tmpPath when size = threshold")
+		os.Remove(tmpPath)
+	}
+	if !bytes.Equal(data, content) {
+		t.Error("data content mismatch at exact threshold")
+	}
+}
+
+func TestDownloadBuffered_EmptyReader(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+
+	data, hash, tmpPath, err := fs.downloadBuffered(bytes.NewReader(nil), 1024)
+	if err != nil {
+		t.Fatalf("downloadBuffered failed on empty: %v", err)
+	}
+
+	// 空内容应留在内存
+	if data == nil {
+		t.Error("expected non-nil data slice for empty content")
+	}
+	if len(data) != 0 {
+		t.Errorf("expected empty data, got %d bytes", len(data))
+	}
+	if tmpPath != "" {
+		t.Error("expected no tmpPath for empty content")
+	}
+	if hash == "" {
+		t.Error("expected non-empty hash for empty content")
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "src.txt")
+	dstPath := filepath.Join(dir, "dst.txt")
+
+	content := []byte("copy file test content")
+	if err := os.WriteFile(srcPath, content, 0644); err != nil {
+		t.Fatalf("failed to write src: %v", err)
+	}
+
+	if err := copyFile(srcPath, dstPath); err != nil {
+		t.Fatalf("copyFile failed: %v", err)
+	}
+
+	// 验证目标文件内容
+	dstData, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("failed to read dst: %v", err)
+	}
+	if !bytes.Equal(dstData, content) {
+		t.Error("dst content mismatch")
+	}
+
+	// 验证源文件仍在
+	if _, err := os.Stat(srcPath); err != nil {
+		t.Error("src file should still exist after copy")
+	}
+}
+
+func TestCopyFile_SrcNotExist(t *testing.T) {
+	dir := t.TempDir()
+	err := copyFile(filepath.Join(dir, "nonexistent"), filepath.Join(dir, "dst"))
+	if err == nil {
+		t.Error("expected error for non-existent source")
+	}
+}
+
+func TestNewFileStorage_DefaultTimeout(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+	if fs.httpClient.Timeout.Seconds() != 30 {
+		t.Errorf("default timeout = %v, want 30s", fs.httpClient.Timeout)
+	}
+}
+
+func TestNewFileStorage_CustomTimeout(t *testing.T) {
+	fs := NewFileStorage(t.TempDir(), 60)
+	if fs.httpClient.Timeout.Seconds() != 60 {
+		t.Errorf("custom timeout = %v, want 60s", fs.httpClient.Timeout)
+	}
+}
+
+func TestNewFileStorage_ZeroTimeoutUsesDefault(t *testing.T) {
+	fs := NewFileStorage(t.TempDir(), 0)
+	// 0 不满足 downloadTimeout[0] > 0，使用默认值 30
+	if fs.httpClient.Timeout.Seconds() != 30 {
+		t.Errorf("zero timeout = %v, want 30s (default)", fs.httpClient.Timeout)
+	}
+}
+
+func TestGetExtension(t *testing.T) {
+	tests := []struct {
+		resourceType string
+		expected     string
+	}{
+		{"image", ".img"},
+		{"css", ".css"},
+		{"js", ".js"},
+		{"font", ".font"},
+		{"other", ".bin"},
+		{"video", ".bin"},
+		{"", ".bin"},
+	}
+
+	for _, tt := range tests {
+		ext := getExtension(tt.resourceType)
+		if ext != tt.expected {
+			t.Errorf("getExtension(%q) = %q, want %q", tt.resourceType, ext, tt.expected)
+		}
+	}
+}
+
+// errorAfterReader 读取前 failAfter 个字节后返回错误
+type errorAfterReader struct {
+	data      []byte
+	failAfter int
+	read      int
+}
+
+func (r *errorAfterReader) Read(p []byte) (n int, err error) {
+	if r.read >= r.failAfter {
+		return 0, io.ErrUnexpectedEOF
+	}
+	remaining := r.failAfter - r.read
+	if remaining > len(p) {
+		remaining = len(p)
+	}
+	if remaining > len(r.data)-r.read {
+		remaining = len(r.data) - r.read
+	}
+	if remaining <= 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	copy(p, r.data[r.read:r.read+remaining])
+	r.read += remaining
+	return remaining, nil
+}
+
+func TestDownloadBuffered_ErrorDuringSpill(t *testing.T) {
+	fs := NewFileStorage(t.TempDir())
+	threshold := int64(10)
+
+	// 创建一个会在读取超过 threshold 后返回错误的 reader
+	// 先提供 threshold+1 字节（触发溢出），然后在后续读取中出错
+	prefix := make([]byte, threshold+1)
+	for i := range prefix {
+		prefix[i] = 'A'
+	}
+
+	errReader := io.MultiReader(
+		bytes.NewReader(prefix),
+		&failingReader{},
+	)
+
+	_, _, tmpPath, err := fs.downloadBuffered(errReader, threshold)
+	if err == nil {
+		t.Error("expected error during spill to disk")
+	}
+	// 临时文件应已清理
+	if tmpPath != "" {
+		if _, statErr := os.Stat(tmpPath); !os.IsNotExist(statErr) {
+			os.Remove(tmpPath)
+			t.Error("expected tmp file to be cleaned up on error")
+		}
+	}
+}
+
+// failingReader 总是返回错误
+type failingReader struct{}
+
+func (r *failingReader) Read(p []byte) (n int, err error) {
+	return 0, io.ErrUnexpectedEOF
 }

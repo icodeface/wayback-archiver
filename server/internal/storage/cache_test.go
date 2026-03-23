@@ -231,3 +231,98 @@ func TestCacheStore_NilDataCacheHitReturnsNil(t *testing.T) {
 		t.Error("expected nil data from cache for large file")
 	}
 }
+
+func TestCacheStore_FilePathStored(t *testing.T) {
+	d := newTestDeduplicator(100)
+
+	d.cacheStore("url1", 1, "resources/ab/cd/hash1.css", []byte("body{}"))
+	d.cacheStore("url2", 2, "resources/ef/gh/hash2.bin", nil)
+
+	// 验证 filePath 正确存储
+	entry1, ok := d.cache.Load("url1")
+	if !ok {
+		t.Fatal("expected entry for url1")
+	}
+	if entry1.(*resourceCacheEntry).filePath != "resources/ab/cd/hash1.css" {
+		t.Errorf("filePath = %q, want %q", entry1.(*resourceCacheEntry).filePath, "resources/ab/cd/hash1.css")
+	}
+
+	entry2, ok := d.cache.Load("url2")
+	if !ok {
+		t.Fatal("expected entry for url2")
+	}
+	if entry2.(*resourceCacheEntry).filePath != "resources/ef/gh/hash2.bin" {
+		t.Errorf("filePath = %q, want %q", entry2.(*resourceCacheEntry).filePath, "resources/ef/gh/hash2.bin")
+	}
+}
+
+func TestCacheStore_OverwriteUpdatesFilePath(t *testing.T) {
+	d := newTestDeduplicator(100)
+
+	d.cacheStore("url1", 1, "resources/old/path.bin", []byte("old"))
+
+	// 覆盖同 key，filePath 也应更新
+	d.cacheStore("url1", 2, "resources/new/path.bin", []byte("new"))
+
+	entry, ok := d.cache.Load("url1")
+	if !ok {
+		t.Fatal("expected entry")
+	}
+	cached := entry.(*resourceCacheEntry)
+	if cached.filePath != "resources/new/path.bin" {
+		t.Errorf("filePath = %q, want %q", cached.filePath, "resources/new/path.bin")
+	}
+	if cached.resourceID != 2 {
+		t.Errorf("resourceID = %d, want 2", cached.resourceID)
+	}
+}
+
+func TestCacheStore_ExpiredEntryCleansCacheBytes(t *testing.T) {
+	d := newTestDeduplicator(100)
+
+	// 手动插入过期条目
+	expired := &resourceCacheEntry{
+		resourceID: 1,
+		data:       make([]byte, 100),
+		size:       100,
+		cachedAt:   time.Now().Add(-3 * time.Hour),
+	}
+	d.cache.Store("expired-key", expired)
+	d.cacheBytes.Add(100)
+
+	// 通过 ProcessResource 的缓存命中路径，过期条目应被删除且 cacheBytes 减少
+	// 直接测试：加载过期条目，验证 cacheStore 清理逻辑
+	// 存一个新条目（不触发淘汰，因为 100MB >> 100 bytes）
+	d.cacheStore("new-key", 2, "", make([]byte, 50))
+
+	// 此时两个条目都在（还没触发淘汰）
+	if d.cacheBytes.Load() != 150 {
+		t.Errorf("cacheBytes = %d, want 150", d.cacheBytes.Load())
+	}
+
+	// 模拟缓存命中时发现过期并手动删除（类似 ProcessResource 中的逻辑）
+	if entry, ok := d.cache.Load("expired-key"); ok {
+		cached := entry.(*resourceCacheEntry)
+		if time.Since(cached.cachedAt) >= resourceCacheTTL {
+			d.cache.Delete("expired-key")
+			d.cacheBytes.Add(-cached.size)
+		}
+	}
+
+	if d.cacheBytes.Load() != 50 {
+		t.Errorf("cacheBytes after expiry cleanup = %d, want 50", d.cacheBytes.Load())
+	}
+}
+
+func TestCacheMaxBytes(t *testing.T) {
+	d := newTestDeduplicator(10)
+	expected := int64(10 * 1024 * 1024)
+	if d.cacheMaxBytes() != expected {
+		t.Errorf("cacheMaxBytes() = %d, want %d", d.cacheMaxBytes(), expected)
+	}
+
+	d2 := newTestDeduplicator(1)
+	if d2.cacheMaxBytes() != 1024*1024 {
+		t.Errorf("cacheMaxBytes() = %d, want %d", d2.cacheMaxBytes(), 1024*1024)
+	}
+}
