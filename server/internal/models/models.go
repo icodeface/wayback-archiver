@@ -35,9 +35,8 @@ type CaptureRequest struct {
 }
 
 type ResourceReference struct {
-	Type    string `json:"type"`
-	URL     string `json:"url"`
-	Content string `json:"content"` // base64 编码的内容（可选）
+	Type string `json:"type"`
+	URL  string `json:"url"`
 }
 
 const (

@@ -2,7 +2,6 @@ package storage
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -123,20 +122,18 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string,
 // ProcessResource 处理单个资源：下载、去重、存储
 // 返回 (resourceID, filePath, data, error)
 // 小文件（≤ streamThreshold）保留在内存并缓存 data；大文件流式写入临时文件，data 返回 nil
-func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, pageURL string, headers map[string]string) (int64, string, []byte, error) {
-	// 检查缓存（仅当没有提供 base64 内容时）
-	if base64Content == "" {
-		if entry, ok := d.cache.Load(url); ok {
-			cached := entry.(*resourceCacheEntry)
-			if time.Since(cached.cachedAt) < resourceCacheTTL {
-				if err := d.db.UpdateResourceLastSeen(cached.resourceID); err != nil {
-					log.Printf("Failed to update last_seen for cached resource: %v", err)
-				}
-				return cached.resourceID, cached.filePath, cached.data, nil
+func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string, headers map[string]string) (int64, string, []byte, error) {
+	// 检查缓存
+	if entry, ok := d.cache.Load(url); ok {
+		cached := entry.(*resourceCacheEntry)
+		if time.Since(cached.cachedAt) < resourceCacheTTL {
+			if err := d.db.UpdateResourceLastSeen(cached.resourceID); err != nil {
+				log.Printf("Failed to update last_seen for cached resource: %v", err)
 			}
-			d.cache.Delete(url)
-			d.cacheBytes.Add(-cached.size)
+			return cached.resourceID, cached.filePath, cached.data, nil
 		}
+		d.cache.Delete(url)
+		d.cacheBytes.Add(-cached.size)
 	}
 
 	var data []byte    // 小文件有值，大文件 nil
@@ -144,29 +141,18 @@ func (d *Deduplicator) ProcessResource(url, resourceType, base64Content string, 
 	var hash string
 	var fileSize int64
 
-	if base64Content != "" {
-		var err error
-		data, err = base64.StdEncoding.DecodeString(base64Content)
-		if err != nil {
-			return 0, "", nil, fmt.Errorf("base64 decode failed: %w", err)
-		}
-		hashBytes := sha256.Sum256(data)
-		hash = hex.EncodeToString(hashBytes[:])
+	streamThreshold := int64(d.config.StreamThresholdKB) * 1024
+	var err error
+	data, hash, tmpPath, err = d.storage.DownloadResource(url, pageURL, headers, streamThreshold)
+	if err != nil {
+		log.Printf("Download failed for %s: %v, trying fallback", url, err)
+		return d.processResourceFallback(url, err)
+	}
+	if data != nil {
 		fileSize = int64(len(data))
-	} else {
-		streamThreshold := int64(d.config.StreamThresholdKB) * 1024
-		var err error
-		data, hash, tmpPath, err = d.storage.DownloadResource(url, pageURL, headers, streamThreshold)
-		if err != nil {
-			log.Printf("Download failed for %s: %v, trying fallback", url, err)
-			return d.processResourceFallback(url, err)
-		}
-		if data != nil {
-			fileSize = int64(len(data))
-		} else if tmpPath != "" {
-			if info, statErr := os.Stat(tmpPath); statErr == nil {
-				fileSize = info.Size()
-			}
+	} else if tmpPath != "" {
+		if info, statErr := os.Stat(tmpPath); statErr == nil {
+			fileSize = info.Size()
 		}
 	}
 
@@ -352,7 +338,7 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, res.Content, req.URL, req.Headers)
+			resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, req.URL, req.Headers)
 			if err != nil {
 				resultsCh <- resourceResult{res: res, err: err}
 				return
@@ -464,7 +450,7 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				subResourceID, subFilePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), "", req.URL, req.Headers)
+				subResourceID, subFilePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), req.URL, req.Headers)
 				if err != nil {
 					subResultsCh <- cssSubResult{sub: sub, err: err}
 					return
@@ -627,7 +613,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, res.Content, req.URL, req.Headers)
+			resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, req.URL, req.Headers)
 			if err != nil {
 				resultsCh <- resourceResult{res: res, err: err}
 				return
@@ -727,7 +713,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				subResourceID, subFilePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), "", req.URL, req.Headers)
+				subResourceID, subFilePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), req.URL, req.Headers)
 				if err != nil {
 					subResultsCh <- cssSubResult{sub: sub, err: err}
 					return
