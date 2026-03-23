@@ -222,50 +222,29 @@ func (fs *FileStorage) DownloadResource(resourceURL string, pageURL string, head
 	// 使用 LimitReader 限制读取大小
 	limitedReader := io.LimitReader(resp.Body, maxResourceSize+1)
 
-	// 已知大文件（Content-Length 超过阈值）：流式写入临时文件
+	// 已知大文件：直接流式写磁盘，内存占用 ≈ 0
 	if resp.ContentLength > streamThreshold {
 		return fs.downloadToFile(limitedReader)
 	}
 
-	// 未知大小或小文件：先读入内存
-	memData, readErr := io.ReadAll(limitedReader)
-	if readErr != nil {
-		return nil, "", "", readErr
-	}
-
-	if int64(len(memData)) > maxResourceSize {
-		return nil, "", "", fmt.Errorf("resource exceeds size limit: %d bytes (max: %d)", len(memData), maxResourceSize)
-	}
-
-	// 实际大小超过阈值（Content-Length 未知的情况）：写入临时文件释放内存
-	if int64(len(memData)) > streamThreshold {
+	// 已知小文件（Content-Length ≤ 阈值）：直接读入内存
+	if resp.ContentLength >= 0 {
+		memData, readErr := io.ReadAll(limitedReader)
+		if readErr != nil {
+			return nil, "", "", readErr
+		}
+		if int64(len(memData)) > maxResourceSize {
+			return nil, "", "", fmt.Errorf("resource exceeds size limit: %d bytes (max: %d)", len(memData), maxResourceSize)
+		}
 		hashBytes := sha256.Sum256(memData)
-		hashStr := hex.EncodeToString(hashBytes[:])
-
-		tmpDir := filepath.Join(fs.baseDir, "tmp")
-		if mkErr := os.MkdirAll(tmpDir, 0755); mkErr != nil {
-			return nil, "", "", mkErr
-		}
-		tmpFile, tmpErr := os.CreateTemp(tmpDir, "dl-*.tmp")
-		if tmpErr != nil {
-			return nil, "", "", tmpErr
-		}
-		if _, wErr := tmpFile.Write(memData); wErr != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
-			return nil, "", "", wErr
-		}
-		tmpFile.Close()
-		return nil, hashStr, tmpFile.Name(), nil
+		return memData, hex.EncodeToString(hashBytes[:]), "", nil
 	}
 
-	// 小文件：留在内存
-	hashBytes := sha256.Sum256(memData)
-	hashStr := hex.EncodeToString(hashBytes[:])
-	return memData, hashStr, "", nil
+	// Content-Length 未知：先读到内存，超过阈值后溢出到磁盘
+	return fs.downloadBuffered(limitedReader, streamThreshold)
 }
 
-// downloadToFile 流式下载到临时文件，边写边算哈希
+// downloadToFile 流式下载到临时文件，边写边算哈希，内存占用 ≈ 0
 func (fs *FileStorage) downloadToFile(reader io.Reader) (data []byte, hash string, tmpPath string, err error) {
 	tmpDir := filepath.Join(fs.baseDir, "tmp")
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
@@ -291,6 +270,64 @@ func (fs *FileStorage) downloadToFile(reader io.Reader) (data []byte, hash strin
 
 	if written > maxResourceSize {
 		return nil, "", "", fmt.Errorf("resource exceeds size limit: %d bytes (max: %d)", written, maxResourceSize)
+	}
+
+	hashStr := hex.EncodeToString(hasher.Sum(nil))
+	return nil, hashStr, tmpFile.Name(), nil
+}
+
+// downloadBuffered 先读到内存，超过阈值后溢出到磁盘
+// 小文件全程在内存中完成；大文件在超过阈值的瞬间切换到磁盘流式写入
+func (fs *FileStorage) downloadBuffered(reader io.Reader, threshold int64) (data []byte, hash string, tmpPath string, err error) {
+	// 先读 threshold+1 字节到内存
+	buf := make([]byte, threshold+1)
+	n, readErr := io.ReadFull(reader, buf)
+
+	if readErr == io.ErrUnexpectedEOF || readErr == io.EOF {
+		// 读完了，实际大小 ≤ 阈值，全部在内存中
+		memData := buf[:n]
+		hashBytes := sha256.Sum256(memData)
+		return memData, hex.EncodeToString(hashBytes[:]), "", nil
+	}
+	if readErr != nil {
+		return nil, "", "", readErr
+	}
+
+	// 超过阈值，切换到磁盘：把已读的 buffer 写入临时文件，再流式写入剩余数据
+	tmpDir := filepath.Join(fs.baseDir, "tmp")
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return nil, "", "", err
+	}
+
+	tmpFile, tmpErr := os.CreateTemp(tmpDir, "dl-*.tmp")
+	if tmpErr != nil {
+		return nil, "", "", tmpErr
+	}
+	defer func() {
+		tmpFile.Close()
+		if err != nil {
+			os.Remove(tmpFile.Name())
+		}
+	}()
+
+	hasher := sha256.New()
+
+	// 写入已读的 buffer
+	hasher.Write(buf[:n])
+	if _, wErr := tmpFile.Write(buf[:n]); wErr != nil {
+		return nil, "", "", wErr
+	}
+	buf = nil // 释放 buffer 内存
+
+	// 流式写入剩余数据
+	written, copyErr := io.Copy(tmpFile, io.TeeReader(reader, hasher))
+	if copyErr != nil {
+		return nil, "", "", copyErr
+	}
+
+	totalSize := int64(n) + written
+	if totalSize > maxResourceSize {
+		return nil, "", "", fmt.Errorf("resource exceeds size limit: %d bytes (max: %d)", totalSize, maxResourceSize)
 	}
 
 	hashStr := hex.EncodeToString(hasher.Sum(nil))
