@@ -27,6 +27,7 @@ var (
 	// Path patterns
 	archivePathRe = regexp.MustCompile(`/archive/resources/`)
 
-	// Meta refresh pattern
+	// Meta patterns
 	metaRefreshRe = regexp.MustCompile(`(?i)<meta[^>]*http-equiv=["']?refresh["']?[^>]*>`)
+	metaCSPRe     = regexp.MustCompile(`(?i)<meta[^>]*http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>`)
 )
