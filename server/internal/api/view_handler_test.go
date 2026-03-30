@@ -312,3 +312,63 @@ func TestFixScrollAnimationOpacity_LeadingWhitespace(t *testing.T) {
 		t.Errorf("color should be preserved, got: %s", result)
 	}
 }
+
+// --- CSP meta 标签移除测试 ---
+
+func TestRemoveCSPMeta(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "upgrade-insecure-requests",
+			input: `<head><meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests"><title>Test</title></head>`,
+			want:  `<head><title>Test</title></head>`,
+		},
+		{
+			name:  "single quotes",
+			input: `<head><meta http-equiv='Content-Security-Policy' content='upgrade-insecure-requests'><title>Test</title></head>`,
+			want:  `<head><title>Test</title></head>`,
+		},
+		{
+			name:  "no quotes on http-equiv",
+			input: `<head><meta http-equiv=Content-Security-Policy content="upgrade-insecure-requests"><title>Test</title></head>`,
+			want:  `<head><title>Test</title></head>`,
+		},
+		{
+			name:  "case insensitive",
+			input: `<head><META HTTP-EQUIV="Content-Security-Policy" CONTENT="upgrade-insecure-requests"></head>`,
+			want:  `<head></head>`,
+		},
+		{
+			name:  "complex CSP directive",
+			input: `<head><meta http-equiv="Content-Security-Policy" content="default-src 'self'; upgrade-insecure-requests"></head>`,
+			want:  `<head></head>`,
+		},
+		{
+			name:  "preserves other meta tags",
+			input: `<head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests"><meta name="viewport" content="width=device-width"></head>`,
+			want:  `<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>`,
+		},
+		{
+			name:  "weibo real case with operaUserStyle",
+			input: `<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests"><style type="text/css" id="operaUserStyle"></style>`,
+			want:  `<style type="text/css" id="operaUserStyle"></style>`,
+		},
+		{
+			name:  "no CSP meta — unchanged",
+			input: `<head><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"></head>`,
+			want:  `<head><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"></head>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := metaCSPRe.ReplaceAllString(tt.input, "")
+			if result != tt.want {
+				t.Errorf("got  %q\nwant %q", result, tt.want)
+			}
+		})
+	}
+}

@@ -100,6 +100,10 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	baseTagRe := regexp.MustCompile(`(?i)<base\s[^>]*>`)
 	modifiedHTML = baseTagRe.ReplaceAllString(modifiedHTML, "")
 
+	// 移除 CSP meta 标签 — upgrade-insecure-requests 会导致 Opera 等浏览器
+	// 将 http://内网IP/archive/... 升级为 https，导致资源无法加载
+	modifiedHTML = metaCSPRe.ReplaceAllString(modifiedHTML, "")
+
 	// 移除所有 <script> 标签
 	modifiedHTML = scriptTagRe.ReplaceAllString(modifiedHTML, "")
 
