@@ -114,7 +114,7 @@ Rebuild:
 make script
 ```
 
-Load the extension from `bin/wayback.user.js`.
+Load the extension from `bin/wayback-userscript.js`.
 
 **Note**: The Tampermonkey script is configured with `@connect *` to allow connections to any domain, making it work seamlessly with both local and remote servers.
 

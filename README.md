@@ -75,7 +75,7 @@ Download the latest release from the [Releases page](https://github.com/icodefac
 - **macOS**: `wayback-server-darwin-amd64.tar.gz` (Intel) or `wayback-server-darwin-arm64.tar.gz` (Apple Silicon)
 - **Linux**: `wayback-server-linux-amd64.tar.gz` or `wayback-server-linux-arm64.tar.gz`
 - **Windows**: `wayback-server-windows-amd64.zip`
-- **Userscript**: `wayback.user.js`
+- **Userscript**: `wayback-userscript.js`
 
 Extract the archive:
 
@@ -120,10 +120,10 @@ export https_proxy=http://127.0.0.1:7897
 
 ### 4. Install the Userscript
 
-1. Download `wayback.user.js` from the [Releases page](https://github.com/icodeface/wayback-archiver/releases)
+1. Download `wayback-userscript.js` from the [Releases page](https://github.com/icodeface/wayback-archiver/releases)
 2. Open Tampermonkey dashboard in your browser
 3. Click "Create a new script"
-4. Paste the contents of `wayback.user.js`
+4. Paste the contents of `wayback-userscript.js`
 5. Save and enable
 
 > **Chrome users:** Right-click the Tampermonkey icon → Manage extension, then enable the "Allow user scripts" toggle. Firefox does not require this step.
@@ -131,6 +131,8 @@ export https_proxy=http://127.0.0.1:7897
 ### 5. Start Browsing
 
 That's it. Pages are automatically archived as soon as they load. Open `http://localhost:8080` to browse your archive.
+
+> **Puppeteer Integration:** For automated archiving, see [docs/PUPPETEER.md](docs/PUPPETEER.md).
 
 ## Configuration
 

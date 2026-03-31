@@ -2,7 +2,7 @@
   "name": "wayback-browser",
   "version": "1.0.0",
   "description": "Wayback browser-side Tampermonkey script",
-  "main": "dist/wayback.user.js",
+  "main": "dist/wayback-userscript.js",
   "scripts": {
     "build": "tsc && node build.js",
     "watch": "tsc --watch"

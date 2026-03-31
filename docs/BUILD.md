@@ -25,7 +25,7 @@ make build
 
 This compiles:
 - Go server binary → `bin/wayback-server`
-- Tampermonkey userscript → `bin/wayback.user.js`
+- Tampermonkey userscript → `bin/wayback-userscript.js`
 
 ### 3. Build Server Only
 
@@ -71,7 +71,7 @@ npm install
 node build.js
 ```
 
-Output: `browser/dist/wayback.user.js`
+Output: `browser/dist/wayback-userscript.js`
 
 ## Testing
 

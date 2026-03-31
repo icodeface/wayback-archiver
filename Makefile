@@ -21,7 +21,8 @@ server:
 script:
 	cd browser && VERSION=$(VERSION) npm run build --silent
 	mkdir -p $(BIN_DIR)
-	cp browser/dist/wayback.user.js $(BIN_DIR)/wayback.user.js
+	cp browser/dist/wayback-userscript.js $(BIN_DIR)/wayback-userscript.js
+	cp browser/dist/wayback-puppeteer.js $(BIN_DIR)/wayback-puppeteer.js
 
 # Cross-compile all platforms + script
 all: script

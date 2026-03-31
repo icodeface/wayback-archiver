@@ -35,7 +35,7 @@ WORKDIR /app
 # Copy binaries
 COPY --from=server-builder /build/server/wayback-server /app/
 RUN mkdir -p /app/bin
-COPY --from=script-builder /build/browser/dist/wayback.user.js /app/bin/
+COPY --from=script-builder /build/browser/dist/wayback-userscript.js /app/bin/
 
 # Copy database initialization files
 COPY server/init_db.sql /app/
