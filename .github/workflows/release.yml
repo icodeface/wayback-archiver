@@ -47,10 +47,10 @@ jobs:
             name="${f%.*}"
             ext="${f##*.}"
             if [ "$ext" = "exe" ]; then
-              zip "${name}.zip" "$f" wayback.user.js .env.example init_db.sql
+              zip "${name}.zip" "$f" wayback-userscript.js wayback-puppeteer.js .env.example init_db.sql
             else
               chmod +x "$f"
-              tar czf "${name}.tar.gz" "$f" wayback.user.js .env.example init_db.sql
+              tar czf "${name}.tar.gz" "$f" wayback-userscript.js wayback-puppeteer.js .env.example init_db.sql
             fi
           done
 
@@ -61,4 +61,5 @@ jobs:
           files: |
             bin/*.tar.gz
             bin/*.zip
-            bin/wayback.user.js
+            bin/wayback-userscript.js
+            bin/wayback-puppeteer.js

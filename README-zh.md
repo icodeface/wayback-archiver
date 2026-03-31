@@ -75,7 +75,7 @@ docker compose logs -f wayback
 - **macOS**: `wayback-server-darwin-amd64.tar.gz`（Intel）或 `wayback-server-darwin-arm64.tar.gz`（Apple Silicon）
 - **Linux**: `wayback-server-linux-amd64.tar.gz` 或 `wayback-server-linux-arm64.tar.gz`
 - **Windows**: `wayback-server-windows-amd64.zip`
-- **用户脚本**: `wayback.user.js`
+- **用户脚本**: `wayback-userscript.js`
 
 解压：
 
@@ -118,10 +118,10 @@ export https_proxy=http://127.0.0.1:7897
 
 ### 4. 安装用户脚本
 
-1. 从 [Releases 页面](https://github.com/icodeface/wayback-archiver/releases) 下载 `wayback.user.js`
+1. 从 [Releases 页面](https://github.com/icodeface/wayback-archiver/releases) 下载 `wayback-userscript.js`
 2. 在浏览器中打开 Tampermonkey 管理面板
 3. 点击"创建新脚本"
-4. 粘贴 `wayback.user.js` 的内容
+4. 粘贴 `wayback-userscript.js` 的内容
 5. 保存并启用
 
 > **Chrome 用户：** 右键点击 Tampermonkey 图标 → 管理扩展程序，启用"允许用户脚本"开关。Firefox 无需此步骤。
@@ -129,6 +129,8 @@ export https_proxy=http://127.0.0.1:7897
 ### 5. 开始浏览
 
 就这样。页面加载完成后会自动归档。打开 `http://localhost:8080` 查看你的归档。
+
+> **Puppeteer 集成：** 自动化归档请参考 [docs/PUPPETEER.md](docs/PUPPETEER.md)。
 
 ## 配置项
 

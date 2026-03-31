@@ -33,7 +33,7 @@ Before using this skill, ensure the Wayback Archiver server is running:
 Download from [Releases](https://github.com/icodeface/wayback-archiver/releases):
 
 - **Server binary**: `wayback-server-<os>-<arch>.tar.gz` (or `.zip` for Windows)
-- **Userscript**: `wayback.user.js`
+- **Userscript**: `wayback-userscript.js`
 
 Extract the server binary:
 
@@ -66,7 +66,7 @@ Server runs at `http://localhost:8080` by default.
 
 ### 4. Install Browser Script
 
-1. Download `wayback.user.js` from [Releases](https://github.com/icodeface/wayback-archiver/releases)
+1. Download `wayback-userscript.js` from [Releases](https://github.com/icodeface/wayback-archiver/releases)
 2. Open Tampermonkey dashboard
 3. Create new script and paste the content
 4. Save and enable

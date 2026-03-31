@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 // 读取编译后的脚本
-const scriptPath = path.join(__dirname, 'browser/dist/wayback.user.js');
+const scriptPath = path.join(__dirname, 'browser/dist/wayback-userscript.js');
 const userScript = fs.readFileSync(scriptPath, 'utf8');
 
 // 提取脚本内容（去掉 UserScript 头部）

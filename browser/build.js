@@ -16,10 +16,12 @@ const version = process.env.VERSION
   || execSync('git describe --tags --always --dirty 2>/dev/null || echo "dev"', { encoding: 'utf8' }).trim().replace(/^v/, '');
 
 const distDir = path.join(__dirname, 'dist');
-const outputPath = path.join(distDir, 'wayback.user.js');
+const userscriptPath = path.join(distDir, 'wayback-userscript.js');
+const puppeteerPath = path.join(distDir, 'wayback-puppeteer.js');
+const pakoPath = path.join(__dirname, 'node_modules/pako/dist/pako.min.js');
 
 // Module files to bundle in dependency order
-const moduleFiles = [
+const userscriptModules = [
   'config.js',
   'types.js',
   'page-filter.js',
@@ -31,6 +33,16 @@ const moduleFiles = [
   'dom-collector.js',
   'archiver.js',
   'main.js',
+];
+
+const puppeteerModules = [
+  'config.js',
+  'types.js',
+  'page-filter.js',
+  'page-freezer.js',
+  'style-inliner.js',
+  'dom-collector.js',
+  'puppeteer.js',
 ];
 
 // Tampermonkey header
@@ -58,34 +70,44 @@ const footer = `
 })();
 `;
 
-// Read and process each module file
-let bundledContent = '';
-
-for (const moduleFile of moduleFiles) {
-  const filePath = path.join(distDir, moduleFile);
-  if (!fs.existsSync(filePath)) {
-    console.warn(`Warning: Module file not found: ${moduleFile}`);
-    continue;
+function bundleModules(moduleFiles) {
+  let bundledContent = '';
+  for (const moduleFile of moduleFiles) {
+    const filePath = path.join(distDir, moduleFile);
+    if (!fs.existsSync(filePath)) {
+      console.warn(`Warning: Module file not found: ${moduleFile}`);
+      continue;
+    }
+    let content = fs.readFileSync(filePath, 'utf8');
+    content = content.replace(/^import\s+.*?from\s+['"][^'"]+['"];?\s*$/gm, '');
+    content = content.replace(/^export\s+\{[^}]*\};?\s*$/gm, '');
+    content = content.replace(/^export\s+(default\s+)?/gm, '');
+    content = content.replace(/^"use strict";\s*/gm, '');
+    content = content.replace(/^Object\.defineProperty\(exports,\s*"__esModule",\s*\{[^}]*\}\);\s*/gm, '');
+    content = content.replace(/^exports\.\w+\s*=\s*\w+;\s*$/gm, '');
+    content = content.replace(/^\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==\s*/m, '');
+    bundledContent += `// === ${moduleFile} ===\n${content.trim()}\n\n`;
   }
-
-  let content = fs.readFileSync(filePath, 'utf8');
-
-  // Remove TypeScript/ES module imports and exports
-  content = content.replace(/^import\s+.*?from\s+['"][^'"]+['"];?\s*$/gm, '');
-  content = content.replace(/^export\s+\{[^}]*\};?\s*$/gm, '');
-  content = content.replace(/^export\s+(default\s+)?/gm, '');
-  content = content.replace(/^"use strict";\s*/gm, '');
-  content = content.replace(/^Object\.defineProperty\(exports,\s*"__esModule",\s*\{[^}]*\}\);\s*/gm, '');
-  content = content.replace(/^exports\.\w+\s*=\s*\w+;\s*$/gm, '');
-
-  // Remove Tampermonkey header if present
-  content = content.replace(/^\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==\s*/m, '');
-
-  bundledContent += `// === ${moduleFile} ===\n${content.trim()}\n\n`;
+  return bundledContent;
 }
 
-const finalContent = header + bundledContent + footer;
+// Build userscript
+const userscriptContent = header + bundleModules(userscriptModules) + footer;
+fs.writeFileSync(userscriptPath, userscriptContent, 'utf8');
+console.log('\n✓ Build complete: wayback-userscript.js');
+console.log(`✓ Bundle size: ${userscriptContent.length} bytes`);
 
-fs.writeFileSync(outputPath, finalContent, 'utf8');
-console.log('\n✓ Build complete: wayback.user.js');
-console.log(`✓ Bundle size: ${finalContent.length} bytes`);
+// Build Puppeteer bundle with pako embedded
+const pakoContent = fs.readFileSync(pakoPath, 'utf8');
+const puppeteerContent = `(function() {
+'use strict';
+
+// === pako.min.js ===
+${pakoContent}
+
+${bundleModules(puppeteerModules)}
+})();
+`;
+fs.writeFileSync(puppeteerPath, puppeteerContent, 'utf8');
+console.log('✓ Build complete: wayback-puppeteer.js');
+console.log(`✓ Bundle size: ${puppeteerContent.length} bytes`);
