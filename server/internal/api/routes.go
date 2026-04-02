@@ -74,6 +74,8 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, ve
 				"repo":       "https://github.com/icodeface/wayback-archiver",
 			})
 		})
+		api.GET("/debug/memstats", handler.MemStats)
+		api.POST("/debug/gc", handler.ForceGC)
 		api.POST("/archive", handler.ArchivePage)
 		api.PUT("/archive/:id", handler.UpdatePage)
 		api.GET("/pages", handler.ListPages)

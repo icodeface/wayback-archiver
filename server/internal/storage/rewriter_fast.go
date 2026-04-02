@@ -7,6 +7,21 @@ import (
 	"strings"
 )
 
+// Pre-compiled regexes for ResolveRelativeURLs and RewriteHTMLFast
+var (
+	resolveAttrDQRe    = regexp.MustCompile(`(\s(?:src|href|poster))="([^"]*)"`)
+	resolveAttrSQRe    = regexp.MustCompile(`(\s(?:src|href|poster))='([^']*)'`)
+	resolveURLRe       = regexp.MustCompile(`url\(["']?([^"')]+)["']?\)`)
+	resolveSrcsetRe    = regexp.MustCompile(`(?i)(\s(?:image)?srcset)="([^"]+)"`)
+	unmappedAttrDQRe   = regexp.MustCompile(`(\s(?:src|href|poster|srcset))="(/[^"/][^"]*)"`)
+	unmappedAttrSQRe   = regexp.MustCompile(`(\s(?:src|href|poster|srcset))='(/[^'/][^']*)'`)
+	unmappedProtoRelDQ = regexp.MustCompile(`(\s(?:src|href|poster|srcset))="(//[^"]+)"`)
+	unmappedProtoRelSQ = regexp.MustCompile(`(\s(?:src|href|poster|srcset))='(//[^']+)'`)
+	unmappedURLAbsRe   = regexp.MustCompile(`url\(["']?(/[^"')]+)["']?\)`)
+	srcsetDQRe         = regexp.MustCompile(`(?i)((?:image)?srcset)="([^"]+)"`)
+	srcsetSQRe         = regexp.MustCompile(`(?i)((?:image)?srcset)='([^']+)'`)
+)
+
 // appendURLPairs 为给定的 URL 字符串生成所有属性形式的替换对
 // 覆盖 src/href/poster/srcset 属性（双引号）和 url() 的三种引号形式
 func appendURLPairs(pairs []string, urlStr, localURL string) []string {
@@ -50,9 +65,8 @@ func ResolveRelativeURLs(html, baseURL string) string {
 	}
 
 	// 1. src/href/poster 属性（双引号）
-	attrDQ := regexp.MustCompile(`(\s(?:src|href|poster))="([^"]*)"`)
-	html = attrDQ.ReplaceAllStringFunc(html, func(match string) string {
-		sub := attrDQ.FindStringSubmatch(match)
+	html = resolveAttrDQRe.ReplaceAllStringFunc(html, func(match string) string {
+		sub := resolveAttrDQRe.FindStringSubmatch(match)
 		if len(sub) < 3 {
 			return match
 		}
@@ -64,9 +78,8 @@ func ResolveRelativeURLs(html, baseURL string) string {
 	})
 
 	// 2. src/href/poster 属性（单引号）
-	attrSQ := regexp.MustCompile(`(\s(?:src|href|poster))='([^']*)'`)
-	html = attrSQ.ReplaceAllStringFunc(html, func(match string) string {
-		sub := attrSQ.FindStringSubmatch(match)
+	html = resolveAttrSQRe.ReplaceAllStringFunc(html, func(match string) string {
+		sub := resolveAttrSQRe.FindStringSubmatch(match)
 		if len(sub) < 3 {
 			return match
 		}
@@ -78,9 +91,8 @@ func ResolveRelativeURLs(html, baseURL string) string {
 	})
 
 	// 3. url() 中的相对路径
-	urlRe := regexp.MustCompile(`url\(["']?([^"')]+)["']?\)`)
-	html = urlRe.ReplaceAllStringFunc(html, func(match string) string {
-		sub := urlRe.FindStringSubmatch(match)
+	html = resolveURLRe.ReplaceAllStringFunc(html, func(match string) string {
+		sub := resolveURLRe.FindStringSubmatch(match)
 		if len(sub) < 2 {
 			return match
 		}
@@ -92,9 +104,8 @@ func ResolveRelativeURLs(html, baseURL string) string {
 	})
 
 	// 4. srcset 中的相对路径（多值，逗号分隔）
-	srcsetRe := regexp.MustCompile(`(?i)(\s(?:image)?srcset)="([^"]+)"`)
-	html = srcsetRe.ReplaceAllStringFunc(html, func(match string) string {
-		sub := srcsetRe.FindStringSubmatch(match)
+	html = resolveSrcsetRe.ReplaceAllStringFunc(html, func(match string) string {
+		sub := resolveSrcsetRe.FindStringSubmatch(match)
 		if len(sub) < 3 {
 			return match
 		}
@@ -209,12 +220,6 @@ func (r *URLRewriter) rewriteUnmappedAbsolutePaths(html string) string {
 	}
 	baseHost := parsed.Scheme + "://" + parsed.Host
 
-	attrDQ := regexp.MustCompile(`(\s(?:src|href|poster|srcset))="(/[^"/][^"]*)"`)
-	attrSQ := regexp.MustCompile(`(\s(?:src|href|poster|srcset))='(/[^'/][^']*)'`)
-	protoRelDQ := regexp.MustCompile(`(\s(?:src|href|poster|srcset))="(//[^"]+)"`)
-	protoRelSQ := regexp.MustCompile(`(\s(?:src|href|poster|srcset))='(//[^']+)'`)
-	urlRe := regexp.MustCompile(`url\(["']?(/[^"')]+)["']?\)`)
-
 	rewriteAttr := func(re *regexp.Regexp, quote string, buildURL func(string) string) string {
 		return re.ReplaceAllStringFunc(html, func(match string) string {
 			sub := re.FindStringSubmatch(match)
@@ -230,24 +235,24 @@ func (r *URLRewriter) rewriteUnmappedAbsolutePaths(html string) string {
 	}
 
 	// 协议相对 URL
-	html = rewriteAttr(protoRelDQ, `"`, func(p string) string {
+	html = rewriteAttr(unmappedProtoRelDQ, `"`, func(p string) string {
 		return fmt.Sprintf("/archive/%d/%smp_/https:%s", r.pageID, r.timestamp, p)
 	})
-	html = rewriteAttr(protoRelSQ, `'`, func(p string) string {
+	html = rewriteAttr(unmappedProtoRelSQ, `'`, func(p string) string {
 		return fmt.Sprintf("/archive/%d/%smp_/https:%s", r.pageID, r.timestamp, p)
 	})
 
 	// 绝对路径
-	html = rewriteAttr(attrDQ, `"`, func(p string) string {
+	html = rewriteAttr(unmappedAttrDQRe, `"`, func(p string) string {
 		return fmt.Sprintf("/archive/%d/%smp_/%s", r.pageID, r.timestamp, baseHost+p)
 	})
-	html = rewriteAttr(attrSQ, `'`, func(p string) string {
+	html = rewriteAttr(unmappedAttrSQRe, `'`, func(p string) string {
 		return fmt.Sprintf("/archive/%d/%smp_/%s", r.pageID, r.timestamp, baseHost+p)
 	})
 
 	// url() 中的绝对路径
-	html = urlRe.ReplaceAllStringFunc(html, func(match string) string {
-		sub := urlRe.FindStringSubmatch(match)
+	html = unmappedURLAbsRe.ReplaceAllStringFunc(html, func(match string) string {
+		sub := unmappedURLAbsRe.FindStringSubmatch(match)
 		if len(sub) < 2 {
 			return match
 		}
@@ -298,9 +303,8 @@ func (r *URLRewriter) rewriteMultiValueSrcset(html string) string {
 		}
 	}
 
-	srcsetDQ := regexp.MustCompile(`(?i)((?:image)?srcset)="([^"]+)"`)
-	html = srcsetDQ.ReplaceAllStringFunc(html, func(match string) string {
-		sub := srcsetDQ.FindStringSubmatch(match)
+	html = srcsetDQRe.ReplaceAllStringFunc(html, func(match string) string {
+		sub := srcsetDQRe.FindStringSubmatch(match)
 		if len(sub) < 3 {
 			return match
 		}
@@ -310,9 +314,8 @@ func (r *URLRewriter) rewriteMultiValueSrcset(html string) string {
 		}
 		return sub[1] + `="` + rewritten + `"`
 	})
-	srcsetSQ := regexp.MustCompile(`(?i)((?:image)?srcset)='([^']+)'`)
-	return srcsetSQ.ReplaceAllStringFunc(html, func(match string) string {
-		sub := srcsetSQ.FindStringSubmatch(match)
+	return srcsetSQRe.ReplaceAllStringFunc(html, func(match string) string {
+		sub := srcsetSQRe.FindStringSubmatch(match)
 		if len(sub) < 3 {
 			return match
 		}

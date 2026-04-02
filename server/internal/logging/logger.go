@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -29,7 +30,7 @@ type Logger struct {
 	file     *os.File
 	curDate  string
 	curSeq   int
-	curSize  int64
+	curSize  atomic.Int64
 	stopCh   chan struct{}
 	writer   io.Writer
 }
@@ -84,7 +85,7 @@ func (l *Logger) rotate() error {
 		l.curDate = today
 		l.curSeq = 1
 		needRotate = true
-	} else if l.file != nil && l.curSize >= maxLogSize {
+	} else if l.file != nil && l.curSize.Load() >= maxLogSize {
 		// Same day but file too large, increment sequence
 		l.curSeq++
 		needRotate = true
@@ -107,7 +108,7 @@ func (l *Logger) rotate() error {
 		info, err := os.Stat(filename)
 		if os.IsNotExist(err) {
 			// File doesn't exist, use this sequence
-			l.curSize = 0
+			l.curSize.Store(0)
 			break
 		}
 		if err != nil {
@@ -116,7 +117,7 @@ func (l *Logger) rotate() error {
 		// File exists, check if it's under size limit
 		if info.Size() < maxLogSize {
 			// Can append to this file
-			l.curSize = info.Size()
+			l.curSize.Store(info.Size())
 			break
 		}
 		// File is full, try next sequence
@@ -131,11 +132,10 @@ func (l *Logger) rotate() error {
 
 	l.file = f
 
-	// Create a writer that tracks size
+	// Create a writer that tracks size (lock-free via atomic)
 	l.writer = &sizeTrackingWriter{
 		writer: f,
 		size:   &l.curSize,
-		mu:     &l.mu,
 	}
 
 	// Redirect stdlib log and gin to both stdout and file
@@ -151,19 +151,18 @@ func (l *Logger) getFilename(date string, seq int) string {
 	return filepath.Join(l.dir, fmt.Sprintf("%s%s.%03d%s", filePrefix, date, seq, fileSuffix))
 }
 
-// sizeTrackingWriter wraps an io.Writer and tracks bytes written
+// sizeTrackingWriter wraps an io.Writer and tracks bytes written.
+// Uses atomic operations instead of mutex to avoid deadlock with log.SetOutput
+// (rotate holds l.mu → calls log.SetOutput → log's internal mutex → Write → l.mu → deadlock).
 type sizeTrackingWriter struct {
 	writer io.Writer
-	size   *int64
-	mu     *sync.Mutex
+	size   *atomic.Int64
 }
 
 func (w *sizeTrackingWriter) Write(p []byte) (n int, err error) {
 	n, err = w.writer.Write(p)
 	if n > 0 {
-		w.mu.Lock()
-		*w.size += int64(n)
-		w.mu.Unlock()
+		w.size.Add(int64(n))
 	}
 	return
 }

@@ -235,27 +235,30 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 // removeExternalResources 移除HTML中的外部资源引用
 func removeExternalResources(html string) string {
 	// 移除外部字体预连接和DNS预取
-	preconnectRe := regexp.MustCompile(`(?i)<link[^>]*rel=["'](preconnect|dns-prefetch)["'][^>]*>`)
 	html = preconnectRe.ReplaceAllString(html, "")
 
 	// 移除外部字体链接（匹配常见的字体CDN）
-	externalFontRe := regexp.MustCompile(`(?i)<link[^>]*href=["']https?://[^"']*\.(googleapis\.com|gstatic\.com|fonts\.net|typekit\.net)[^"']*["'][^>]*>`)
 	html = externalFontRe.ReplaceAllString(html, "")
 
 	// 移除外部CSS CDN链接（匹配常见的CDN域名）
-	externalCSSRe := regexp.MustCompile(`(?i)<link[^>]*rel=["']stylesheet["'][^>]*href=["']https?://[^"']*(cdn\.|cloudflare\.|jsdelivr\.|unpkg\.|cdnjs\.)[^"']*["'][^>]*>`)
 	html = externalCSSRe.ReplaceAllString(html, "")
 
 	// 移除外部script CDN
-	externalScriptRe := regexp.MustCompile(`(?i)<script[^>]*src=["']https?://[^"']*(cdn\.|cloudflare\.|jsdelivr\.|unpkg\.|cdnjs\.)[^"']*["'][^>]*>.*?</script>`)
 	html = externalScriptRe.ReplaceAllString(html, "")
 
 	// 移除CSS中的外部@import（匹配http/https开头的）
-	externalImportRe := regexp.MustCompile(`(?i)@import\s+url\(["']?https?://[^"')]*["']?\);?`)
 	html = externalImportRe.ReplaceAllString(html, "")
 
 	return html
 }
+
+var (
+	preconnectRe     = regexp.MustCompile(`(?i)<link[^>]*rel=["'](preconnect|dns-prefetch)["'][^>]*>`)
+	externalFontRe   = regexp.MustCompile(`(?i)<link[^>]*href=["']https?://[^"']*\.(googleapis\.com|gstatic\.com|fonts\.net|typekit\.net)[^"']*["'][^>]*>`)
+	externalCSSRe    = regexp.MustCompile(`(?i)<link[^>]*rel=["']stylesheet["'][^>]*href=["']https?://[^"']*(cdn\.|cloudflare\.|jsdelivr\.|unpkg\.|cdnjs\.)[^"']*["'][^>]*>`)
+	externalScriptRe = regexp.MustCompile(`(?i)<script[^>]*src=["']https?://[^"']*(cdn\.|cloudflare\.|jsdelivr\.|unpkg\.|cdnjs\.)[^"']*["'][^>]*>.*?</script>`)
+	externalImportRe = regexp.MustCompile(`(?i)@import\s+url\(["']?https?://[^"')]*["']?\);?`)
+)
 
 // injectAntiRefreshScript 注入脚本来阻止页面刷新和导航
 func injectAntiRefreshScript(html string) string {

@@ -39,6 +39,7 @@ type Deduplicator struct {
 	deletionQueue *DeletionQueue
 	config        config.ResourceConfig
 	cacheBytes    atomic.Int64 // 当前缓存占用字节数
+	cacheMu       sync.Mutex   // 保护缓存淘汰逻辑，防止并发 cacheStore 导致超限
 	globalSem     chan struct{} // 全局并发下载信号量，跨所有页面共享
 }
 
@@ -67,6 +68,10 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string,
 	if entrySize > d.cacheMaxBytes() {
 		return
 	}
+
+	// 加锁保护淘汰逻辑，防止并发 cacheStore 导致缓存大小超限
+	d.cacheMu.Lock()
+	defer d.cacheMu.Unlock()
 
 	// 如果 key 已存在，先减去旧条目大小
 	if old, loaded := d.cache.Load(key); loaded {
@@ -242,9 +247,10 @@ func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (i
 func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string, error) {
 	capturedAt := time.Now()
 
-	// 计算 HTML 内容哈希
-	htmlHash := sha256.Sum256([]byte(req.HTML))
-	contentHash := hex.EncodeToString(htmlHash[:])
+	// 计算 HTML 内容哈希（流式写入，避免拷贝 []byte(req.HTML)）
+	hasher := sha256.New()
+	hasher.Write([]byte(req.HTML))
+	contentHash := hex.EncodeToString(hasher.Sum(nil))
 
 	// 检查是否存在相同 URL 和内容哈希的页面
 	existingPage, err := d.db.GetPageByURLAndHash(req.URL, contentHash)
@@ -497,6 +503,7 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	// 1. 规范化 ../ 路径  2. 解析相对路径为绝对 URL  3. 替换为归档路径
 	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(req.HTML), req.URL)
 	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
+	normalizedHTML = "" // 释放中间结果
 
 	// 更新保存的 HTML 文件（用重写后的内容替换临时内容）
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
@@ -525,9 +532,10 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		return "", fmt.Errorf("page not found: %d", pageID)
 	}
 
-	// 2. 计算新内容哈希
-	htmlHash := sha256.Sum256([]byte(req.HTML))
-	newContentHash := hex.EncodeToString(htmlHash[:])
+	// 2. 计算新内容哈希（流式写入，避免拷贝 []byte(req.HTML)）
+	hasher := sha256.New()
+	hasher.Write([]byte(req.HTML))
+	newContentHash := hex.EncodeToString(hasher.Sum(nil))
 
 	// 3. 如果内容未变化，仅更新时间
 	if newContentHash == page.ContentHash {
@@ -760,6 +768,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	// 重写 HTML 中的资源 URL
 	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(req.HTML), req.URL)
 	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
+	normalizedHTML = "" // 释放中间结果
 
 	// 更新保存的 HTML 文件
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
