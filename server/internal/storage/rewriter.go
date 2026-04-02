@@ -8,12 +8,16 @@ import (
 	"strings"
 )
 
+// Pre-compiled regexes for NormalizeHTMLURLs
+var (
+	normalizeURLDQRe = regexp.MustCompile(`((?:src|href|poster)=")(https?://[^"]+)"`)
+	normalizeURLSQRe = regexp.MustCompile(`((?:src|href|poster)=')(https?://[^']+)'`)
+)
+
 // NormalizeHTMLURLs 规范化 HTML 中所有包含 ../ 的绝对 URL
 // 例如：https://example.com/path/../file.css -> https://example.com/file.css
 func NormalizeHTMLURLs(html string) string {
 	// 匹配 src/href/poster 属性中的绝对 URL（双引号和单引号分别匹配）
-	urlRegexDQ := regexp.MustCompile(`((?:src|href|poster)=")(https?://[^"]+)"`)
-	urlRegexSQ := regexp.MustCompile(`((?:src|href|poster)=')(https?://[^']+)'`)
 
 	normalize := func(match string, re *regexp.Regexp, quote string) string {
 		parts := re.FindStringSubmatch(match)
@@ -37,11 +41,11 @@ func NormalizeHTMLURLs(html string) string {
 		return attrPrefix + normalized.String() + quote
 	}
 
-	result := urlRegexDQ.ReplaceAllStringFunc(html, func(match string) string {
-		return normalize(match, urlRegexDQ, `"`)
+	result := normalizeURLDQRe.ReplaceAllStringFunc(html, func(match string) string {
+		return normalize(match, normalizeURLDQRe, `"`)
 	})
-	result = urlRegexSQ.ReplaceAllStringFunc(result, func(match string) string {
-		return normalize(match, urlRegexSQ, `'`)
+	result = normalizeURLSQRe.ReplaceAllStringFunc(result, func(match string) string {
+		return normalize(match, normalizeURLSQRe, `'`)
 	})
 
 	return result

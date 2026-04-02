@@ -97,7 +97,6 @@ func (h *Handler) ViewPage(c *gin.Context) {
 
 	// 移除 <base> 标签 — 归档页面的资源路径已重写为本地路径，
 	// <base href="https://原始域名/"> 会导致浏览器将 /archive/... 解析到原始域名
-	baseTagRe := regexp.MustCompile(`(?i)<base\s[^>]*>`)
 	modifiedHTML = baseTagRe.ReplaceAllString(modifiedHTML, "")
 
 	// 移除 CSP meta 标签 — upgrade-insecure-requests 会导致 Opera 等浏览器
@@ -114,17 +113,13 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	// 移除内联事件处理器
 	// 使用两个独立正则分别处理双引号和单引号包裹的属性值，
 	// 避免 [^"']* 在遇到嵌套引号时提前终止匹配（如 onclick="window.open('...')"）
-	eventHandlerDQ := regexp.MustCompile(`(?i)\s+on\w+\s*=\s*"[^"]*"`)
-	eventHandlerSQ := regexp.MustCompile(`(?i)\s+on\w+\s*=\s*'[^']*'`)
-	modifiedHTML = eventHandlerDQ.ReplaceAllString(modifiedHTML, "")
-	modifiedHTML = eventHandlerSQ.ReplaceAllString(modifiedHTML, "")
+	modifiedHTML = eventHandlerDQRe.ReplaceAllString(modifiedHTML, "")
+	modifiedHTML = eventHandlerSQRe.ReplaceAllString(modifiedHTML, "")
 
 	// 移除 javascript: 协议的链接
-	jsProtocolRe := regexp.MustCompile(`(?i)href\s*=\s*["']javascript:[^"']*["']`)
 	modifiedHTML = jsProtocolRe.ReplaceAllString(modifiedHTML, `href="#"`)
 
 	// 移除 loading="lazy"，归档页面禁用了 JS，懒加载可能无法正常触发
-	lazyLoadRe := regexp.MustCompile(`(?i)\s+loading\s*=\s*["']lazy["']`)
 	modifiedHTML = lazyLoadRe.ReplaceAllString(modifiedHTML, "")
 
 	// 隐藏 <video> 元素 — 归档不保存视频源文件，空 video 标签会渲染为大黑块
@@ -197,19 +192,8 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 			return
 		}
 
-		content, err := os.ReadFile(safePath)
-		if err != nil {
-			log.Printf("[Proxy] Failed to read local file %s: %v", safePath, err)
-			c.String(http.StatusNotFound, "Resource not found")
-			return
-		}
-
-		// 根据文件扩展名检测 Content-Type
-		contentType := detectContentTypeByPath(safePath)
-		c.Header("Content-Type", contentType)
-		c.Header("Cache-Control", "public, max-age=31536000")
-
-		c.Data(http.StatusOK, contentType, content)
+		// 流式响应，避免将整个文件加载到内存
+		serveFileStreaming(c, safePath)
 		return
 	}
 
@@ -297,19 +281,22 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 
 	// 读取文件
 	filePath := filepath.Join(h.dataDir, resource.FilePath)
-	content, err := os.ReadFile(filePath)
+
+	// 设置Content-Type（需要在 serveFileStreaming 之前，因为 ServeContent 会用文件扩展名推断）
+	contentType := detectContentType(resource)
+	c.Header("Content-Type", contentType)
+	c.Header("Cache-Control", "public, max-age=31536000")
+
+	// 流式响应，避免将整个文件加载到内存
+	f, err := os.Open(filePath)
 	if err != nil {
 		log.Printf("[Proxy] Failed to read file %s: %v", filePath, err)
 		c.String(http.StatusInternalServerError, "Failed to read file")
 		return
 	}
-
-	// 设置Content-Type
-	contentType := detectContentType(resource)
-	c.Header("Content-Type", contentType)
-	c.Header("Cache-Control", "public, max-age=31536000")
-
-	c.Data(http.StatusOK, contentType, content)
+	defer f.Close()
+	stat, _ := f.Stat()
+	http.ServeContent(c.Writer, c.Request, filepath.Base(filePath), stat.ModTime(), f)
 }
 
 // detectContentType 检测资源的Content-Type
@@ -534,16 +521,28 @@ func (h *Handler) ServeLocalResource(c *gin.Context) {
 		return
 	}
 
-	content, err := os.ReadFile(safePath)
+	serveFileStreaming(c, safePath)
+}
+
+// serveFileStreaming 流式提供文件，避免将整个文件加载到内存
+func serveFileStreaming(c *gin.Context, filePath string) {
+	f, err := os.Open(filePath)
 	if err != nil {
 		c.String(http.StatusNotFound, "Resource not found")
 		return
 	}
+	defer f.Close()
 
-	contentType := detectContentTypeByPath(safePath)
+	stat, err := f.Stat()
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Failed to stat file")
+		return
+	}
+
+	contentType := detectContentTypeByPath(filePath)
 	c.Header("Content-Type", contentType)
 	c.Header("Cache-Control", "public, max-age=31536000")
-	c.Data(http.StatusOK, contentType, content)
+	http.ServeContent(c.Writer, c.Request, filepath.Base(filePath), stat.ModTime(), f)
 }
 
 // fixUnrewrittenSrcset 修复未重写的 srcset 协议相对 URL
@@ -553,7 +552,6 @@ func fixUnrewrittenSrcset(html string) string {
 	// 删除 <picture> 标签内的 <source> 元素
 	// <source> 提供 avif/webp 等现代格式，但 srcset 未重写会导致加载失败
 	// <img> 的 src 已被正确重写，删除 <source> 后浏览器会回退到 <img>
-	sourceTagRe := regexp.MustCompile(`(?is)<source[^>]*>`)
 	html = sourceTagRe.ReplaceAllString(html, "")
 
 	return html
@@ -563,7 +561,6 @@ func fixUnrewrittenSrcset(html string) string {
 // 只隐藏既没有 src 属性、内部也没有 <source> 子元素的 video（空壳会渲染为黑块）
 func hideVideoElements(html string) string {
 	// 匹配完整的 <video>...</video> 或自闭合 <video/>
-	videoBlockRe := regexp.MustCompile(`(?is)<video\b([^>]*)>(.*?)</video>|<video\b([^>]*)/>`)
 	html = videoBlockRe.ReplaceAllStringFunc(html, func(match string) string {
 		// 有 src 属性 → 保留（不管是本地还是外部）
 		if srcAttrRe.MatchString(match) {
@@ -583,14 +580,14 @@ func hideVideoElements(html string) string {
 // 这些覆盖层在正常页面中由 JS 在加载完成后隐藏，但归档页面没有 JS，会永远遮挡内容
 // 例如 X.com 的 #placeholder（黑色背景 + X logo）和 #ScriptLoadFailure（错误提示）
 var (
-	openDivRe  = regexp.MustCompile(`(?i)<div\b`)
-	closeDivRe = regexp.MustCompile(`(?i)</div>`)
+	openDivRe           = regexp.MustCompile(`(?i)<div\b`)
+	closeDivRe          = regexp.MustCompile(`(?i)</div>`)
+	placeholderDivRe    = regexp.MustCompile(`(?i)<div\b[^>]*\bid="placeholder"[^>]*>`)
+	scriptLoadFailDivRe = regexp.MustCompile(`(?i)<div\b[^>]*\bid="ScriptLoadFailure"[^>]*>`)
 )
 
 func removeLoadingOverlays(html string) string {
-	for _, id := range []string{"placeholder", "ScriptLoadFailure"} {
-		// Find the opening tag with this id
-		re := regexp.MustCompile(`(?i)<div\b[^>]*\bid="` + id + `"[^>]*>`)
+	for _, re := range []*regexp.Regexp{placeholderDivRe, scriptLoadFailDivRe} {
 		loc := re.FindStringIndex(html)
 		if loc == nil {
 			continue

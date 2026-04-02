@@ -30,4 +30,13 @@ var (
 	// Meta patterns
 	metaRefreshRe = regexp.MustCompile(`(?i)<meta[^>]*http-equiv=["']?refresh["']?[^>]*>`)
 	metaCSPRe     = regexp.MustCompile(`(?i)<meta[^>]*http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>`)
+
+	// ViewPage patterns (previously compiled per-request)
+	baseTagRe        = regexp.MustCompile(`(?i)<base\s[^>]*>`)
+	eventHandlerDQRe = regexp.MustCompile(`(?i)\s+on\w+\s*=\s*"[^"]*"`)
+	eventHandlerSQRe = regexp.MustCompile(`(?i)\s+on\w+\s*=\s*'[^']*'`)
+	jsProtocolRe     = regexp.MustCompile(`(?i)href\s*=\s*["']javascript:[^"']*["']`)
+	lazyLoadRe       = regexp.MustCompile(`(?i)\s+loading\s*=\s*["']lazy["']`)
+	sourceTagRe      = regexp.MustCompile(`(?is)<source[^>]*>`)
+	videoBlockRe     = regexp.MustCompile(`(?is)<video\b([^>]*)>(.*?)</video>|<video\b([^>]*)/>`)
 )

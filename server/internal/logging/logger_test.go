@@ -2,6 +2,7 @@ package logging
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"testing"
@@ -38,9 +39,7 @@ func TestConcurrentWrites(t *testing.T) {
 	wg.Wait()
 
 	// Verify curSize is updated correctly
-	logger.mu.Lock()
-	finalSize := logger.curSize
-	logger.mu.Unlock()
+	finalSize := logger.curSize.Load()
 
 	if finalSize <= 0 {
 		t.Errorf("Expected curSize > 0, got %d", finalSize)
@@ -121,7 +120,7 @@ func TestSizeTracking(t *testing.T) {
 	}
 
 	logger.mu.Lock()
-	actualSize := logger.curSize
+	actualSize := logger.curSize.Load()
 	logger.mu.Unlock()
 
 	if actualSize != expectedSize {
@@ -143,7 +142,7 @@ func TestRotationResetSize(t *testing.T) {
 	logger.writer.Write([]byte("initial data\n"))
 
 	logger.mu.Lock()
-	initialSize := logger.curSize
+	initialSize := logger.curSize.Load()
 	logger.mu.Unlock()
 
 	if initialSize == 0 {
@@ -165,7 +164,7 @@ func TestRotationResetSize(t *testing.T) {
 	n, _ := logger.writer.Write([]byte(newData))
 
 	logger.mu.Lock()
-	newSize := logger.curSize
+	newSize := logger.curSize.Load()
 	logger.mu.Unlock()
 
 	// After rotation, curSize should be close to the new write size
@@ -189,7 +188,7 @@ func TestSizeRotationResetsSize(t *testing.T) {
 
 	// Simulate file exceeding maxLogSize by setting curSize directly
 	logger.mu.Lock()
-	logger.curSize = maxLogSize + 1
+	logger.curSize.Store(maxLogSize + 1)
 	logger.mu.Unlock()
 
 	// First rotate: should create a new file
@@ -203,9 +202,7 @@ func TestSizeRotationResetsSize(t *testing.T) {
 	}
 
 	// curSize should be 0 after rotating to a brand-new file
-	logger.mu.Lock()
-	sizeAfterRotate := logger.curSize
-	logger.mu.Unlock()
+	sizeAfterRotate := logger.curSize.Load()
 
 	if sizeAfterRotate != 0 {
 		t.Errorf("Expected curSize=0 after size rotation, got %d", sizeAfterRotate)
@@ -236,7 +233,7 @@ func TestRepeatedSizeRotationNoEmptyFiles(t *testing.T) {
 
 	// Simulate file exceeding maxLogSize
 	logger.mu.Lock()
-	logger.curSize = maxLogSize + 1
+	logger.curSize.Store(maxLogSize + 1)
 	logger.mu.Unlock()
 
 	// Rotate once (creates new file)
@@ -275,3 +272,59 @@ func TestRepeatedSizeRotationNoEmptyFiles(t *testing.T) {
 		t.Errorf("Expected 2 log files, got %d", logCount)
 	}
 }
+
+// TestNoDeadlock_ConcurrentLogAndRotate 模拟午夜死锁场景：
+// rotate() 持有 l.mu 并调用 log.SetOutput()，与此同时 log.Printf 通过
+// sizeTrackingWriter.Write 尝试获取 l.mu → 使用 atomic 前会死锁。
+func TestNoDeadlock_ConcurrentLogAndRotate(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	logger, err := Setup(tmpDir)
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	defer logger.Close()
+
+	done := make(chan struct{})
+	timeout := time.After(5 * time.Second)
+
+	// Goroutine 1: 高频调用 log.Printf（模拟 HTML cleanup goroutine）
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				log.Printf("simulated cleanup log message %d", time.Now().UnixNano())
+			}
+		}
+	}()
+
+	// Goroutine 2: 高频 rotate（模拟午夜轮转 + ticker）
+	go func() {
+		for i := 0; i < 50; i++ {
+			select {
+			case <-done:
+				return
+			default:
+				// 强制触发 rotation：改日期
+				logger.mu.Lock()
+				logger.curDate = fmt.Sprintf("2020-01-%02d", (i%28)+1)
+				logger.mu.Unlock()
+
+				logger.rotate()
+				time.Sleep(1 * time.Millisecond)
+			}
+		}
+		close(done)
+	}()
+
+	// 如果发生死锁，5 秒超时会触发
+	select {
+	case <-done:
+		// 成功：无死锁
+	case <-timeout:
+		t.Fatal("DEADLOCK detected: concurrent log.Printf and rotate() blocked for 5 seconds")
+	}
+}
+

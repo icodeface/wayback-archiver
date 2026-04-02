@@ -27,7 +27,12 @@ type FileStorage struct {
 
 func NewFileStorage(baseDir string, downloadTimeout ...int) *FileStorage {
 	// 创建 HTTP 客户端，支持代理
-	transport := &http.Transport{}
+	transport := &http.Transport{
+		MaxIdleConns:        100,              // 全局最大空闲连接数
+		MaxIdleConnsPerHost: 10,               // 每主机最大空闲连接数（默认 2 太小）
+		MaxConnsPerHost:     20,               // 每主机最大连接数，防止对单站点创建过多连接
+		IdleConnTimeout:     90 * time.Second, // 空闲连接超时回收
+	}
 
 	// 检查是否设置了代理环境变量
 	if proxyURL := os.Getenv("https_proxy"); proxyURL != "" {
