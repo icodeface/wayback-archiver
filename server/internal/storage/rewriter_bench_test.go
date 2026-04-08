@@ -38,33 +38,3 @@ func BenchmarkRewriteHTML_Fast(b *testing.B) {
 		_ = r.RewriteHTML(html)
 	}
 }
-
-// BenchmarkRewriteHTML_Regex 测试正则版本的性能（用于对比）
-func BenchmarkRewriteHTML_Regex(b *testing.B) {
-	r := NewURLRewriter()
-	r.SetPageID(123)
-	r.SetTimestamp("20260311")
-
-	for i := 0; i < 100; i++ {
-		url := "https://example.com/resource" + string(rune(i)) + ".jpg"
-		r.AddMapping(url, "resources/hash"+string(rune(i))+".img")
-	}
-
-	var htmlBuilder strings.Builder
-	htmlBuilder.WriteString("<html><head>")
-	for i := 0; i < 100; i++ {
-		url := "https://example.com/resource" + string(rune(i)) + ".jpg"
-		htmlBuilder.WriteString(`<link href="` + url + `">`)
-	}
-	htmlBuilder.WriteString("</head><body>")
-	for htmlBuilder.Len() < 1024*1024 {
-		htmlBuilder.WriteString("<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>")
-	}
-	htmlBuilder.WriteString("</body></html>")
-	html := htmlBuilder.String()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = r.rewriteHTMLRegex(html)
-	}
-}
