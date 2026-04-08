@@ -61,7 +61,13 @@ func (d *Deduplicator) cacheMaxBytes() int64 {
 }
 
 // cacheStore 缓存资源，超出大小限制时淘汰最旧的条目
+// 只缓存有实际数据的小文件；大文件（data == nil）不缓存，避免零大小条目无限累积
 func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string, data []byte) {
+	// 大文件流式落盘后 data 为 nil，不缓存（零大小条目无法被 LRU 淘汰，会无限累积）
+	if len(data) == 0 {
+		return
+	}
+
 	entrySize := int64(len(data))
 
 	// 如果单个条目就超过缓存上限，不缓存
@@ -219,6 +225,7 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 }
 
 // processResourceFallback 下载失败时的兜底逻辑
+// 不读取文件内容到内存，仅返回 DB 中的路径信息（调用方按需从磁盘读取）
 func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (int64, string, []byte, error) {
 	existing, dbErr := d.db.GetResourceByURL(url)
 	if (dbErr != nil || existing == nil) && strings.Contains(url, "?") {
@@ -231,16 +238,12 @@ func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (i
 	if dbErr != nil || existing == nil {
 		return 0, "", nil, fmt.Errorf("download failed and no fallback: %w", downloadErr)
 	}
-	fileData, readErr := d.storage.ReadResource(existing.FilePath)
-	if readErr != nil {
-		return 0, "", nil, fmt.Errorf("download failed and fallback read failed: %w", downloadErr)
-	}
 	log.Printf("Fallback: reusing previous resource (ID: %d) for: %s", existing.ID, url)
 	if updateErr := d.db.UpdateResourceLastSeen(existing.ID); updateErr != nil {
 		log.Printf("Failed to update last_seen for fallback resource: %v", updateErr)
 	}
-	d.cacheStore(url, existing.ID, existing.FilePath, fileData)
-	return existing.ID, existing.FilePath, fileData, nil
+	// 不读取文件到内存、不缓存，避免大文件导致内存膨胀
+	return existing.ID, existing.FilePath, nil, nil
 }
 
 // ProcessCapture 处理完整的页面捕获，返回 (pageID, action, error)
@@ -289,18 +292,24 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		return 0, "", fmt.Errorf("save temp html failed: %w", err)
 	}
 
+	// 提取正文纯文本（在释放 HTML 之前）
+	bodyText := ExtractBodyText(req.HTML)
+
+	// 将 HTML 保存到局部变量，后续使用 rawHTML 避免长时间持有 req.HTML 引用
+	rawHTML := req.HTML
+
 	pageID, err := d.db.CreatePage(req.URL, req.Title, tempHTMLPath, contentHash, capturedAt)
 	if err != nil {
 		return 0, "", fmt.Errorf("create page failed: %w", err)
 	}
 
-	// 提取正文纯文本并保存（用于全文搜索）
-	bodyText := ExtractBodyText(req.HTML)
+	// 保存正文纯文本（用于全文搜索）
 	if bodyText != "" {
 		if err := d.db.UpdatePageBodyText(pageID, bodyText); err != nil {
 			log.Printf("Failed to save body text for page %d: %v", pageID, err)
 		}
 	}
+	bodyText = "" // 释放正文文本
 
 	log.Printf("Page created (ID: %d, hash: %s): %s", pageID, contentHash[:16], req.URL)
 
@@ -501,7 +510,8 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 
 	// 重写 HTML 中的资源 URL
 	// 1. 规范化 ../ 路径  2. 解析相对路径为绝对 URL  3. 替换为归档路径
-	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(req.HTML), req.URL)
+	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(rawHTML), req.URL)
+	rawHTML = "" // 释放原始 HTML
 	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
 	normalizedHTML = "" // 释放中间结果
 
@@ -509,6 +519,7 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
 		return 0, "", fmt.Errorf("update html failed: %w", err)
 	}
+	rewrittenHTML = "" // 释放重写后的 HTML
 
 	// 关联页面和资源
 	for _, resourceID := range resourceIDs {
@@ -573,13 +584,16 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		return "", fmt.Errorf("save html failed: %w", err)
 	}
 
-	// 提取正文纯文本并保存
+	// 提取正文纯文本并保存（在释放 req.HTML 之前）
 	bodyText := ExtractBodyText(req.HTML)
 	if bodyText != "" {
 		if err := d.db.UpdatePageBodyText(pageID, bodyText); err != nil {
 			log.Printf("Failed to save body text for page %d: %v", pageID, err)
 		}
 	}
+	bodyText = "" // 释放正文文本
+
+	rawHTML := req.HTML
 
 	// 生成时间戳用于资源路径
 	timestamp := capturedAt.Format("20060102150405")
@@ -766,7 +780,8 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 
 	// 重写 HTML 中的资源 URL
-	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(req.HTML), req.URL)
+	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(rawHTML), req.URL)
+	rawHTML = "" // 释放原始 HTML
 	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
 	normalizedHTML = "" // 释放中间结果
 
@@ -774,6 +789,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
 		return "", fmt.Errorf("update html failed: %w", err)
 	}
+	rewrittenHTML = "" // 释放重写后的 HTML
 
 	// 更新数据库记录
 	if err := d.db.UpdatePageContent(pageID, tempHTMLPath, newContentHash, req.Title); err != nil {

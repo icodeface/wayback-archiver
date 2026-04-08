@@ -186,49 +186,27 @@ func TestCacheStore_ConcurrentAccess(t *testing.T) {
 func TestCacheStore_NilDataLargeFile(t *testing.T) {
 	d := newTestDeduplicator(100)
 
-	// 大文件流式落盘后 data 为 nil，cacheStore 应该正常处理
+	// 大文件流式落盘后 data 为 nil，cacheStore 应跳过（不缓存零大小条目，防止无限累积）
 	d.cacheStore("large-file-url", 42, "", nil)
 
-	entry, ok := d.cache.Load("large-file-url")
-	if !ok {
-		t.Fatal("expected cache entry for large-file-url")
-	}
-
-	cached := entry.(*resourceCacheEntry)
-	if cached.resourceID != 42 {
-		t.Errorf("resourceID = %d, want 42", cached.resourceID)
-	}
-	if cached.data != nil {
-		t.Errorf("data should be nil for large file, got %d bytes", len(cached.data))
-	}
-	if cached.size != 0 {
-		t.Errorf("size = %d, want 0 for nil data", cached.size)
+	if _, ok := d.cache.Load("large-file-url"); ok {
+		t.Fatal("nil data should NOT be cached (zero-size entries accumulate infinitely)")
 	}
 
 	// cacheBytes 不应增加
 	if d.cacheBytes.Load() != 0 {
-		t.Errorf("cacheBytes = %d, want 0 (nil data should add 0)", d.cacheBytes.Load())
+		t.Errorf("cacheBytes = %d, want 0 (nil data should not be cached)", d.cacheBytes.Load())
 	}
 }
 
 func TestCacheStore_NilDataCacheHitReturnsNil(t *testing.T) {
 	d := newTestDeduplicator(100)
 
-	// 模拟大文件缓存 entry（data 为 nil）
+	// nil data 不应被缓存（防止零大小条目无限累积）
 	d.cacheStore("css-url", 10, "", nil)
 
-	// 缓存命中时应返回 nil data 和正确的 resourceID
-	entry, ok := d.cache.Load("css-url")
-	if !ok {
-		t.Fatal("expected cache hit")
-	}
-	cached := entry.(*resourceCacheEntry)
-	if cached.resourceID != 10 {
-		t.Errorf("resourceID = %d, want 10", cached.resourceID)
-	}
-	// 调用方需要自行处理 nil data（例如从磁盘读取 CSS 内容）
-	if cached.data != nil {
-		t.Error("expected nil data from cache for large file")
+	if _, ok := d.cache.Load("css-url"); ok {
+		t.Fatal("nil data should NOT be cached")
 	}
 }
 
@@ -236,9 +214,9 @@ func TestCacheStore_FilePathStored(t *testing.T) {
 	d := newTestDeduplicator(100)
 
 	d.cacheStore("url1", 1, "resources/ab/cd/hash1.css", []byte("body{}"))
-	d.cacheStore("url2", 2, "resources/ef/gh/hash2.bin", nil)
+	d.cacheStore("url2", 2, "resources/ef/gh/hash2.bin", nil) // nil data 不会被缓存
 
-	// 验证 filePath 正确存储
+	// 验证 filePath 正确存储（有 data 的条目）
 	entry1, ok := d.cache.Load("url1")
 	if !ok {
 		t.Fatal("expected entry for url1")
@@ -247,12 +225,9 @@ func TestCacheStore_FilePathStored(t *testing.T) {
 		t.Errorf("filePath = %q, want %q", entry1.(*resourceCacheEntry).filePath, "resources/ab/cd/hash1.css")
 	}
 
-	entry2, ok := d.cache.Load("url2")
-	if !ok {
-		t.Fatal("expected entry for url2")
-	}
-	if entry2.(*resourceCacheEntry).filePath != "resources/ef/gh/hash2.bin" {
-		t.Errorf("filePath = %q, want %q", entry2.(*resourceCacheEntry).filePath, "resources/ef/gh/hash2.bin")
+	// nil data 的条目不应被缓存
+	if _, ok := d.cache.Load("url2"); ok {
+		t.Fatal("nil data should NOT be cached (url2)")
 	}
 }
 

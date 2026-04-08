@@ -8,6 +8,23 @@ import (
 	"strings"
 )
 
+// Pre-compiled regexes for HTMLResourceExtractor（避免每次请求重复编译）
+var (
+	imgSrcRe      = regexp.MustCompile(`<img[^>]*\ssrc=["']([^"']+)["']`)
+	scriptSrcRe   = regexp.MustCompile(`<script[^>]+src=["']([^"']+)["']`)
+	linkTagRe     = regexp.MustCompile(`<link[^>]+>`)
+	relAttrRe     = regexp.MustCompile(`\srel=["']([^"']+)["']`)
+	asAttrRe      = regexp.MustCompile(`\sas=["']([^"']+)["']`)
+	hrefAttrRe    = regexp.MustCompile(`\shref=["']([^"']+)["']`)
+	srcsetAttrRe  = regexp.MustCompile(`srcset=["']([^"']+)["']`)
+	videoPosterRe = regexp.MustCompile(`<video[^>]+poster=["']([^"']+)["']`)
+	videoSrcRe    = regexp.MustCompile(`<video[^>]+src=["']([^"']+)["']`)
+	audioSrcRe    = regexp.MustCompile(`<audio[^>]+src=["']([^"']+)["']`)
+	sourceSrcRe   = regexp.MustCompile(`<source[^>]+src=["']([^"']+)["']`)
+	cssUrlRe      = regexp.MustCompile(`url\(["']?([^"')]+)["']?\)`)
+	quotUrlRe     = regexp.MustCompile(`url\(&quot;(.+?)&quot;\)`)
+)
+
 // HTMLResourceExtractor 从 HTML 中提取资源 URL
 type HTMLResourceExtractor struct{}
 
@@ -20,8 +37,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 	resources := make(map[string]ResourceRef)
 
 	// 提取 <img src="...">（使用 \ssrc= 避免匹配 data-src=）
-	imgRegex := regexp.MustCompile(`<img[^>]*\ssrc=["']([^"']+)["']`)
-	matches := imgRegex.FindAllStringSubmatch(html, -1)
+	matches := imgSrcRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
 			rawURL := htmlpkg.UnescapeString(match[1])
@@ -33,8 +49,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 	}
 
 	// 提取 <script src="...">
-	jsRegex := regexp.MustCompile(`<script[^>]+src=["']([^"']+)["']`)
-	matches = jsRegex.FindAllStringSubmatch(html, -1)
+	matches = scriptSrcRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
 			rawURL := htmlpkg.UnescapeString(match[1])
@@ -47,14 +62,9 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 
 	// 统一提取所有 <link> 标签中的资源
 	// 先匹配每个 <link ...> 标签，再从中解析 rel 和所有 *href= 属性
-	linkTagRegex := regexp.MustCompile(`<link[^>]+>`)
-	relAttrRegex := regexp.MustCompile(`\srel=["']([^"']+)["']`)
-	asAttrRegex := regexp.MustCompile(`\sas=["']([^"']+)["']`)
-	hrefAttrRegex := regexp.MustCompile(`\shref=["']([^"']+)["']`)
-
-	linkTags := linkTagRegex.FindAllString(html, -1)
+	linkTags := linkTagRe.FindAllString(html, -1)
 	for _, tag := range linkTags {
-		relMatch := relAttrRegex.FindStringSubmatch(tag)
+		relMatch := relAttrRe.FindStringSubmatch(tag)
 		if relMatch == nil {
 			continue
 		}
@@ -68,7 +78,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 		case strings.Contains(rel, "icon"):
 			resType = "image"
 		case strings.Contains(rel, "preload"):
-			asMatch := asAttrRegex.FindStringSubmatch(tag)
+			asMatch := asAttrRe.FindStringSubmatch(tag)
 			if asMatch == nil {
 				continue
 			}
@@ -89,7 +99,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 		}
 
 		// 提取标签中所有 *href= 的值
-		hrefMatches := hrefAttrRegex.FindAllStringSubmatch(tag, -1)
+		hrefMatches := hrefAttrRe.FindAllStringSubmatch(tag, -1)
 		for _, m := range hrefMatches {
 			if len(m) > 1 {
 				rawURL := htmlpkg.UnescapeString(m[1])
@@ -102,8 +112,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 	}
 
 	// 提取 srcset 属性中的图片 URL
-	srcsetRegex := regexp.MustCompile(`srcset=["']([^"']+)["']`)
-	matches = srcsetRegex.FindAllStringSubmatch(html, -1)
+	matches = srcsetAttrRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
 			srcsetURLs := parseSrcset(htmlpkg.UnescapeString(match[1]))
@@ -117,8 +126,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 	}
 
 	// 提取 <video poster="..."> 和 <video src="...">
-	videoPosterRegex := regexp.MustCompile(`<video[^>]+poster=["']([^"']+)["']`)
-	matches = videoPosterRegex.FindAllStringSubmatch(html, -1)
+	matches = videoPosterRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
 			fullURL := e.resolveURL(htmlpkg.UnescapeString(match[1]), pageURL)
@@ -128,8 +136,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 		}
 	}
 
-	videoSrcRegex := regexp.MustCompile(`<video[^>]+src=["']([^"']+)["']`)
-	matches = videoSrcRegex.FindAllStringSubmatch(html, -1)
+	matches = videoSrcRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
 			fullURL := e.resolveURL(htmlpkg.UnescapeString(match[1]), pageURL)
@@ -140,8 +147,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 	}
 
 	// 提取 <audio src="...">
-	audioSrcRegex := regexp.MustCompile(`<audio[^>]+src=["']([^"']+)["']`)
-	matches = audioSrcRegex.FindAllStringSubmatch(html, -1)
+	matches = audioSrcRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
 			fullURL := e.resolveURL(htmlpkg.UnescapeString(match[1]), pageURL)
@@ -152,8 +158,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 	}
 
 	// 提取 <source src="...">（video/audio 子元素）
-	sourceSrcRegex := regexp.MustCompile(`<source[^>]+src=["']([^"']+)["']`)
-	matches = sourceSrcRegex.FindAllStringSubmatch(html, -1)
+	matches = sourceSrcRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
 			fullURL := e.resolveURL(htmlpkg.UnescapeString(match[1]), pageURL)
@@ -164,8 +169,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 	}
 
 	// 提取 CSS 中的 url(...)
-	cssUrlRegex := regexp.MustCompile(`url\(["']?([^"')]+)["']?\)`)
-	matches = cssUrlRegex.FindAllStringSubmatch(html, -1)
+	matches = cssUrlRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
 			rawURL := match[1]
@@ -183,8 +187,7 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 	}
 
 	// 提取 url(&quot;...&quot;) 格式（HTML 实体编码的引号）
-	quotUrlRegex := regexp.MustCompile(`url\(&quot;(.+?)&quot;\)`)
-	matches = quotUrlRegex.FindAllStringSubmatch(html, -1)
+	matches = quotUrlRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
 			rawURL := htmlpkg.UnescapeString(match[1])

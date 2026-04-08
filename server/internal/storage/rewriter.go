@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"fmt"
 	"net/url"
 	"path"
 	"regexp"
@@ -132,91 +131,4 @@ func replaceURLInHTML(html, escapedURL, localURL string) string {
 // RewriteHTML 重写 HTML 中的资源 URL
 func (r *URLRewriter) RewriteHTML(html string) string {
 	return r.RewriteHTMLFast(html)
-}
-
-// rewriteHTMLRegex 使用正则逐个替换（旧版本，保留用于对比测试）
-func (r *URLRewriter) rewriteHTMLRegex(html string) string {
-	result := html
-
-	// 替换所有已知的资源 URL
-	for originalURL, localPath := range r.urlToLocalPath {
-		// 构建本地 URL：/archive/{pageID}/{timestamp}mp_/{originalURL}
-		var localURL string
-		if r.pageID > 0 && r.timestamp != "" {
-			localURL = fmt.Sprintf("/archive/%d/%smp_/%s", r.pageID, r.timestamp, originalURL)
-		} else {
-			localURL = "/archive/" + localPath
-		}
-
-		escapedURL := regexp.QuoteMeta(originalURL)
-
-		// 1. 替换完整的绝对 URL
-		result = replaceURLInHTML(result, escapedURL, localURL)
-
-		// 2. 处理协议相对 URL（如 //example.com/path）
-		protocolRelativeURL := strings.TrimPrefix(originalURL, "https:")
-		protocolRelativeURL = strings.TrimPrefix(protocolRelativeURL, "http:")
-
-		if protocolRelativeURL != originalURL && strings.HasPrefix(protocolRelativeURL, "//") {
-			result = replaceURLInHTML(result, regexp.QuoteMeta(protocolRelativeURL), localURL)
-		}
-
-		// 3. 替换相对路径（只匹配文件名）
-		relativePath := r.getRelativePath(originalURL)
-		if relativePath != "" && relativePath != "." && relativePath != "/" {
-			escapedRelative := regexp.QuoteMeta(relativePath)
-			relPatterns := []string{
-				`(\s)src=["']\.?/?` + escapedRelative + `["']`,
-				`(\s)href=["']\.?/?` + escapedRelative + `["']`,
-			}
-			for _, pattern := range relPatterns {
-				re := regexp.MustCompile(pattern)
-				result = re.ReplaceAllStringFunc(result, func(match string) string {
-					ws := match[:1]
-					if strings.Contains(match, `src=`) {
-						return ws + `src="` + localURL + `"`
-					}
-					return ws + `href="` + localURL + `"`
-				})
-			}
-		}
-
-		// 4. 处理以 / 开头的绝对路径（如 /assets/style.css）
-		parsed, err := url.Parse(originalURL)
-		if err == nil && parsed.Path != "" {
-			pathWithQuery := parsed.Path
-			if parsed.RawQuery != "" {
-				pathWithQuery = parsed.Path + "?" + parsed.RawQuery
-			}
-			result = replaceURLInHTML(result, regexp.QuoteMeta(pathWithQuery), localURL)
-		}
-
-		// 5. 处理 HTML 实体编码的 URL（& -> &amp;）
-		htmlEncodedURL := strings.ReplaceAll(originalURL, "&", "&amp;")
-		if htmlEncodedURL != originalURL {
-			result = replaceURLInHTML(result, regexp.QuoteMeta(htmlEncodedURL), localURL)
-
-			// 5b. 协议相对 + &amp; 组合（如 //host/path?a=1&amp;b=2）
-			if protocolRelativeURL != originalURL && strings.HasPrefix(protocolRelativeURL, "//") {
-				protoRelEncoded := strings.ReplaceAll(protocolRelativeURL, "&", "&amp;")
-				result = replaceURLInHTML(result, regexp.QuoteMeta(protoRelEncoded), localURL)
-			}
-		}
-
-		// 6. 处理 url(&quot;...&quot;) 格式
-		quotPatterns := []string{
-			`url\(&quot;` + escapedURL + `&quot;\)`,
-		}
-		if htmlEncodedURL != originalURL {
-			quotPatterns = append(quotPatterns,
-				`url\(&quot;`+regexp.QuoteMeta(htmlEncodedURL)+`&quot;\)`,
-			)
-		}
-		for _, pattern := range quotPatterns {
-			re := regexp.MustCompile(pattern)
-			result = re.ReplaceAllString(result, `url(&quot;`+localURL+`&quot;)`)
-		}
-	}
-
-	return result
 }
