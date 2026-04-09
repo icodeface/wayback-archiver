@@ -26,7 +26,7 @@ func setupTestHandler(t *testing.T) (*Handler, func()) {
 	fs := storage.NewFileStorage(dataDir)
 	dedup := storage.NewDeduplicator(db, fs, config.ResourceConfig{
 		Workers:         4,
-		CacheSizeMB:     100,
+		MetadataCacheMB: 100,
 		DownloadTimeout: 30,
 	})
 	handler := NewHandler(dedup, db, dataDir, nil)

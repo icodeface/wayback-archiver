@@ -51,6 +51,7 @@ SERVER_PORT=8080
 
 # Security (REQUIRED)
 AUTH_PASSWORD=your_auth_password
+ENABLE_DEBUG_API=false
 ALLOWED_ORIGINS=http://your-server-ip:8080,null
 
 # Storage
@@ -137,6 +138,7 @@ Test browser extension:
 ## Security Notes
 
 - **Always set `AUTH_PASSWORD`** for remote deployment
+- Keep `ENABLE_DEBUG_API=false` unless you are actively debugging the server
 - **Restrict `ALLOWED_ORIGINS`** to trusted domains only
 - Configure firewall:
   ```bash

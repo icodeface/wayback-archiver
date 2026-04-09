@@ -55,7 +55,7 @@ func TestProcessCapture_ContentDeduplication(t *testing.T) {
 	fs := NewFileStorage(t.TempDir())
 	dedup := NewDeduplicator(db, fs, config.ResourceConfig{
 		Workers:         4,
-		CacheSizeMB:     100,
+		MetadataCacheMB: 100,
 		DownloadTimeout: 30,
 	})
 

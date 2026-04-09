@@ -11,6 +11,7 @@ func TestDetectResourceConfig_AutoDetect(t *testing.T) {
 	// 确保没有环境变量干扰
 	os.Unsetenv("RESOURCE_WORKERS")
 	os.Unsetenv("RESOURCE_CACHE_MB")
+	os.Unsetenv("RESOURCE_METADATA_CACHE_MB")
 	os.Unsetenv("RESOURCE_DOWNLOAD_TIMEOUT")
 
 	cfg := detectResourceConfig()
@@ -26,8 +27,8 @@ func TestDetectResourceConfig_AutoDetect(t *testing.T) {
 	}
 
 	// cache 应该 > 0
-	if cfg.CacheSizeMB <= 0 {
-		t.Errorf("CacheSizeMB = %d, want > 0", cfg.CacheSizeMB)
+	if cfg.MetadataCacheMB <= 0 {
+		t.Errorf("MetadataCacheMB = %d, want > 0", cfg.MetadataCacheMB)
 	}
 
 	// download timeout 默认 30
@@ -38,7 +39,7 @@ func TestDetectResourceConfig_AutoDetect(t *testing.T) {
 
 func TestDetectResourceConfig_EnvOverride(t *testing.T) {
 	t.Setenv("RESOURCE_WORKERS", "3")
-	t.Setenv("RESOURCE_CACHE_MB", "200")
+	t.Setenv("RESOURCE_METADATA_CACHE_MB", "200")
 	t.Setenv("RESOURCE_DOWNLOAD_TIMEOUT", "60")
 
 	cfg := detectResourceConfig()
@@ -46,8 +47,8 @@ func TestDetectResourceConfig_EnvOverride(t *testing.T) {
 	if cfg.Workers != 3 {
 		t.Errorf("Workers = %d, want 3", cfg.Workers)
 	}
-	if cfg.CacheSizeMB != 200 {
-		t.Errorf("CacheSizeMB = %d, want 200", cfg.CacheSizeMB)
+	if cfg.MetadataCacheMB != 200 {
+		t.Errorf("MetadataCacheMB = %d, want 200", cfg.MetadataCacheMB)
 	}
 	if cfg.DownloadTimeout != 60 {
 		t.Errorf("DownloadTimeout = %d, want 60", cfg.DownloadTimeout)
@@ -57,7 +58,7 @@ func TestDetectResourceConfig_EnvOverride(t *testing.T) {
 func TestDetectResourceConfig_EnvZeroUsesDefault(t *testing.T) {
 	// 0 表示不覆盖，使用自动检测值
 	t.Setenv("RESOURCE_WORKERS", "0")
-	t.Setenv("RESOURCE_CACHE_MB", "0")
+	t.Setenv("RESOURCE_METADATA_CACHE_MB", "0")
 
 	cfg := detectResourceConfig()
 
@@ -66,8 +67,8 @@ func TestDetectResourceConfig_EnvZeroUsesDefault(t *testing.T) {
 		t.Errorf("Workers = %d, want >= 1 (should use auto-detected default)", cfg.Workers)
 	}
 	// cache 为 0 时被安全边界拦截为 1
-	if cfg.CacheSizeMB < 1 {
-		t.Errorf("CacheSizeMB = %d, want >= 1", cfg.CacheSizeMB)
+	if cfg.MetadataCacheMB < 1 {
+		t.Errorf("MetadataCacheMB = %d, want >= 1", cfg.MetadataCacheMB)
 	}
 }
 
@@ -89,7 +90,7 @@ func TestDetectResourceConfig_SafetyBounds(t *testing.T) {
 
 func TestDetectResourceConfig_InvalidEnvIgnored(t *testing.T) {
 	t.Setenv("RESOURCE_WORKERS", "not_a_number")
-	t.Setenv("RESOURCE_CACHE_MB", "abc")
+	t.Setenv("RESOURCE_METADATA_CACHE_MB", "abc")
 
 	cfg := detectResourceConfig()
 
@@ -97,8 +98,8 @@ func TestDetectResourceConfig_InvalidEnvIgnored(t *testing.T) {
 	if cfg.Workers < 1 {
 		t.Errorf("Workers = %d, want >= 1 (invalid env should use default)", cfg.Workers)
 	}
-	if cfg.CacheSizeMB < 1 {
-		t.Errorf("CacheSizeMB = %d, want >= 1 (invalid env should use default)", cfg.CacheSizeMB)
+	if cfg.MetadataCacheMB < 1 {
+		t.Errorf("MetadataCacheMB = %d, want >= 1 (invalid env should use default)", cfg.MetadataCacheMB)
 	}
 }
 
@@ -143,12 +144,34 @@ func TestDetectResourceConfig_CacheNotExceedMemory(t *testing.T) {
 	totalMem := getTotalMemoryMB()
 
 	// 设置缓存为总内存的两倍
-	t.Setenv("RESOURCE_CACHE_MB", strconv.Itoa(totalMem*2))
+	t.Setenv("RESOURCE_METADATA_CACHE_MB", strconv.Itoa(totalMem*2))
 
 	cfg := detectResourceConfig()
 
-	if cfg.CacheSizeMB > totalMem {
-		t.Errorf("CacheSizeMB = %d, exceeds total memory %dMB", cfg.CacheSizeMB, totalMem)
+	if cfg.MetadataCacheMB > totalMem {
+		t.Errorf("MetadataCacheMB = %d, exceeds total memory %dMB", cfg.MetadataCacheMB, totalMem)
+	}
+}
+
+func TestDetectResourceConfig_LegacyCacheEnvFallback(t *testing.T) {
+	t.Setenv("RESOURCE_CACHE_MB", "123")
+	t.Setenv("RESOURCE_METADATA_CACHE_MB", "")
+
+	cfg := detectResourceConfig()
+
+	if cfg.MetadataCacheMB != 123 {
+		t.Errorf("MetadataCacheMB = %d, want 123 from legacy env", cfg.MetadataCacheMB)
+	}
+}
+
+func TestDetectResourceConfig_NewCacheEnvTakesPrecedence(t *testing.T) {
+	t.Setenv("RESOURCE_CACHE_MB", "123")
+	t.Setenv("RESOURCE_METADATA_CACHE_MB", "456")
+
+	cfg := detectResourceConfig()
+
+	if cfg.MetadataCacheMB != 456 {
+		t.Errorf("MetadataCacheMB = %d, want 456 from new env", cfg.MetadataCacheMB)
 	}
 }
 
@@ -181,5 +204,29 @@ func TestDetectResourceConfig_StreamThresholdCustom(t *testing.T) {
 
 	if cfg.StreamThresholdKB != 512 {
 		t.Errorf("StreamThresholdKB = %d, want 512", cfg.StreamThresholdKB)
+	}
+}
+
+func TestLoadFromEnv_DebugAPIDefaultDisabled(t *testing.T) {
+	t.Setenv("ENABLE_DEBUG_API", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Server.EnableDebugAPI {
+		t.Fatal("EnableDebugAPI = true, want false by default")
+	}
+}
+
+func TestLoadFromEnv_DebugAPIEnabled(t *testing.T) {
+	t.Setenv("ENABLE_DEBUG_API", "true")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if !cfg.Server.EnableDebugAPI {
+		t.Fatal("EnableDebugAPI = false, want true")
 	}
 }

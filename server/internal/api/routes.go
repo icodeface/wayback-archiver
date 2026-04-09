@@ -3,6 +3,7 @@ package api
 import (
 	"io/fs"
 	"net/http"
+	"net/http/pprof"
 
 	"github.com/gin-gonic/gin"
 	"wayback/internal/config"
@@ -10,13 +11,13 @@ import (
 )
 
 // SetupRoutes 设置路由
-func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, version, buildTime string) {
+func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, serverCfg *config.ServerConfig, version, buildTime string) {
 	// CORS 中间件 - 仅允许本地来源，防止 CSRF 攻击
 	r.Use(func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
 		// 仅允许本地来源（localhost, 127.0.0.1, file://)
 		if origin == "http://localhost:8080" || origin == "http://127.0.0.1:8080" ||
-		   origin == "null" || origin == "" { // null = file:// protocol
+			origin == "null" || origin == "" { // null = file:// protocol
 			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
@@ -74,8 +75,22 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, ve
 				"repo":       "https://github.com/icodeface/wayback-archiver",
 			})
 		})
-		api.GET("/debug/memstats", handler.MemStats)
-		api.POST("/debug/gc", handler.ForceGC)
+		if serverCfg.EnableDebugAPI {
+			api.GET("/debug/memstats", handler.MemStats)
+			api.POST("/debug/gc", handler.ForceGC)
+			api.GET("/debug/pprof/", gin.WrapF(pprof.Index))
+			api.GET("/debug/pprof/cmdline", gin.WrapF(pprof.Cmdline))
+			api.GET("/debug/pprof/profile", gin.WrapF(pprof.Profile))
+			api.POST("/debug/pprof/symbol", gin.WrapF(pprof.Symbol))
+			api.GET("/debug/pprof/symbol", gin.WrapF(pprof.Symbol))
+			api.GET("/debug/pprof/trace", gin.WrapF(pprof.Trace))
+			api.GET("/debug/pprof/allocs", gin.WrapH(pprof.Handler("allocs")))
+			api.GET("/debug/pprof/block", gin.WrapH(pprof.Handler("block")))
+			api.GET("/debug/pprof/goroutine", gin.WrapH(pprof.Handler("goroutine")))
+			api.GET("/debug/pprof/heap", gin.WrapH(pprof.Handler("heap")))
+			api.GET("/debug/pprof/mutex", gin.WrapH(pprof.Handler("mutex")))
+			api.GET("/debug/pprof/threadcreate", gin.WrapH(pprof.Handler("threadcreate")))
+		}
 		api.POST("/archive", handler.ArchivePage)
 		api.PUT("/archive/:id", handler.UpdatePage)
 		api.GET("/pages", handler.ListPages)

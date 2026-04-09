@@ -154,6 +154,8 @@ The server automatically loads `.env` from the working directory if it exists. Y
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
 | `LOG_DIR` | `./data/logs` | Log file directory |
 | `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`). **REQUIRED for remote deployment** |
+| `RESOURCE_METADATA_CACHE_MB` | 10% of system memory | Metadata-only cache budget for resource URL to file-path lookups. `RESOURCE_CACHE_MB` is still accepted as a legacy alias. |
+| `ENABLE_DEBUG_API` | `false` | Enable `/api/debug/*` endpoints (`memstats`, `gc`, `pprof`). Keep disabled unless you are actively debugging. |
 | `COMPRESSION_LEVEL` | `-1` | Compression level: 1 (fastest) to 9 (best), -1 (default/balanced). Response compression always enabled, auto-negotiated via Accept-Encoding |
 
 ### Compression Settings

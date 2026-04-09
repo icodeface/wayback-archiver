@@ -222,8 +222,14 @@ SERVER_PORT=8080
 # Storage
 DATA_DIR=./data
 
+# Resource metadata cache
+RESOURCE_METADATA_CACHE_MB=256  # Optional; RESOURCE_CACHE_MB is a legacy alias
+
 # Authentication (optional)
 AUTH_PASSWORD=
+
+# Debug APIs (disabled by default; enable only while troubleshooting)
+ENABLE_DEBUG_API=false
 ```
 
 ## License
