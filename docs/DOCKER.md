@@ -66,6 +66,9 @@ ALLOWED_ORIGINS=http://localhost:8080,https://your-domain.com,null
 
 # Optional: Set authentication password
 AUTH_PASSWORD=your-secure-password
+
+# Optional: keep debug APIs disabled unless troubleshooting
+ENABLE_DEBUG_API=false
 ```
 
 ### Remote Deployment

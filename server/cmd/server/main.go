@@ -54,10 +54,10 @@ func main() {
 	log.Printf("Database: %s@%s:%d/%s (sslmode=%s)",
 		cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName, cfg.Database.SSLMode)
 	log.Printf("Storage: data=%s, logs=%s", cfg.Storage.DataDir, cfg.Storage.LogDir)
-	log.Printf("Server: %s:%d, compression_level=%d", cfg.Server.Host, cfg.Server.Port, cfg.Server.CompressionLevel)
+	log.Printf("Server: %s:%d, compression_level=%d, debug_api=%v", cfg.Server.Host, cfg.Server.Port, cfg.Server.CompressionLevel, cfg.Server.EnableDebugAPI)
 	log.Printf("Auth: %v", cfg.Auth.Enabled())
-	log.Printf("Resource: workers=%d, cache=%dMB, download_timeout=%ds, stream_threshold=%dKB",
-		cfg.Resource.Workers, cfg.Resource.CacheSizeMB, cfg.Resource.DownloadTimeout, cfg.Resource.StreamThresholdKB)
+	log.Printf("Resource: workers=%d, metadata_cache=%dMB, download_timeout=%ds, stream_threshold=%dKB",
+		cfg.Resource.Workers, cfg.Resource.MetadataCacheMB, cfg.Resource.DownloadTimeout, cfg.Resource.StreamThresholdKB)
 
 	// 连接数据库
 	db, err := database.New(
@@ -149,15 +149,15 @@ func main() {
 		compressionLevel,
 		gzip.WithExcludedExtensions([]string{
 			".png", ".gif", ".jpeg", ".jpg", // 图片（默认已排除，这里显式声明）
-			".webp", ".svg", ".ico",         // 其他图片格式
-			".mp4", ".webm", ".avi",         // 视频
-			".mp3", ".ogg", ".wav",          // 音频
-			".zip", ".gz", ".tar", ".rar",   // 压缩包
-			".woff", ".woff2", ".ttf",       // 字体文件
+			".webp", ".svg", ".ico", // 其他图片格式
+			".mp4", ".webm", ".avi", // 视频
+			".mp3", ".ogg", ".wav", // 音频
+			".zip", ".gz", ".tar", ".rar", // 压缩包
+			".woff", ".woff2", ".ttf", // 字体文件
 		}),
 	))
 
-	api.SetupRoutes(r, handler, &cfg.Auth, Version, BuildTime)
+	api.SetupRoutes(r, handler, &cfg.Auth, &cfg.Server, Version, BuildTime)
 
 	// 启动服务器
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

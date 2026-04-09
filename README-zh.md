@@ -148,6 +148,8 @@ export https_proxy=http://127.0.0.1:7897
 | `DATA_DIR` | `./data` | HTML 和资源的存储目录 |
 | `LOG_DIR` | `./data/logs` | 日志文件目录 |
 | `AUTH_PASSWORD` | *（空）* | HTTP Basic Auth 密码（为空时关闭认证，用户名固定为 `wayback`） |
+| `RESOURCE_METADATA_CACHE_MB` | 总内存的 10% | 资源 URL 到本地文件路径的元数据缓存预算（MB）。旧变量 `RESOURCE_CACHE_MB` 仍作为兼容别名生效。 |
+| `ENABLE_DEBUG_API` | `false` | 是否启用 `/api/debug/*` 调试接口（`memstats`、`gc`、`pprof`）。仅在排查问题时临时开启。 |
 | `COMPRESSION_LEVEL` | `-1` | 压缩级别：1（最快）到 9（最佳），-1（默认/平衡）。响应压缩始终启用，根据 Accept-Encoding 自动协商 |
 
 ### 压缩设置

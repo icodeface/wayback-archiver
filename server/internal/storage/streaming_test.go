@@ -120,7 +120,7 @@ func TestGlobalSemaphore(t *testing.T) {
 	fs := NewFileStorage(t.TempDir())
 	cfg := config.ResourceConfig{
 		Workers:           3,
-		CacheSizeMB:       10,
+		MetadataCacheMB:   10,
 		DownloadTimeout:   30,
 		StreamThresholdKB: 2048,
 	}
@@ -142,7 +142,7 @@ func TestStreamThresholdKB_ZeroPassedThrough(t *testing.T) {
 	fs := NewFileStorage(t.TempDir())
 	cfg := config.ResourceConfig{
 		Workers:           2,
-		CacheSizeMB:       10,
+		MetadataCacheMB:   10,
 		DownloadTimeout:   30,
 		StreamThresholdKB: 0, // 0 意味着所有文件都流式落盘
 	}

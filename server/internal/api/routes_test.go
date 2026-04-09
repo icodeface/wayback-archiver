@@ -9,17 +9,17 @@ import (
 	"wayback/internal/config"
 )
 
-func setupAuthRouter(authCfg *config.AuthConfig) *gin.Engine {
+func setupAuthRouter(authCfg *config.AuthConfig, serverCfg *config.ServerConfig) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	handler := &Handler{} // minimal handler, routes not hit
 
-	SetupRoutes(r, handler, authCfg, "test", "")
+	SetupRoutes(r, handler, authCfg, serverCfg, "test", "")
 	return r
 }
 
 func TestRoutes_NoAuth_AllowsAccess(t *testing.T) {
-	r := setupAuthRouter(&config.AuthConfig{Password: ""})
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/", nil)
@@ -32,7 +32,7 @@ func TestRoutes_NoAuth_AllowsAccess(t *testing.T) {
 }
 
 func TestRoutes_WithAuth_RejectsNoCredentials(t *testing.T) {
-	r := setupAuthRouter(&config.AuthConfig{Password: "secret"})
+	r := setupAuthRouter(&config.AuthConfig{Password: "secret"}, &config.ServerConfig{})
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/", nil)
@@ -44,7 +44,7 @@ func TestRoutes_WithAuth_RejectsNoCredentials(t *testing.T) {
 }
 
 func TestRoutes_WithAuth_AcceptsValidCredentials(t *testing.T) {
-	r := setupAuthRouter(&config.AuthConfig{Password: "secret"})
+	r := setupAuthRouter(&config.AuthConfig{Password: "secret"}, &config.ServerConfig{})
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/", nil)
@@ -57,7 +57,7 @@ func TestRoutes_WithAuth_AcceptsValidCredentials(t *testing.T) {
 }
 
 func TestRoutes_WithAuth_RejectsWrongPassword(t *testing.T) {
-	r := setupAuthRouter(&config.AuthConfig{Password: "secret"})
+	r := setupAuthRouter(&config.AuthConfig{Password: "secret"}, &config.ServerConfig{})
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/", nil)
@@ -70,7 +70,7 @@ func TestRoutes_WithAuth_RejectsWrongPassword(t *testing.T) {
 }
 
 func TestRoutes_WithAuth_RejectsWrongUsername(t *testing.T) {
-	r := setupAuthRouter(&config.AuthConfig{Password: "secret"})
+	r := setupAuthRouter(&config.AuthConfig{Password: "secret"}, &config.ServerConfig{})
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/", nil)
@@ -83,7 +83,7 @@ func TestRoutes_WithAuth_RejectsWrongUsername(t *testing.T) {
 }
 
 func TestRoutes_CORS_IncludesAuthorizationHeader(t *testing.T) {
-	r := setupAuthRouter(&config.AuthConfig{Password: ""})
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("OPTIONS", "/api/archive", nil)
@@ -95,6 +95,30 @@ func TestRoutes_CORS_IncludesAuthorizationHeader(t *testing.T) {
 	}
 	if !containsSubstring(allowHeaders, "Authorization") {
 		t.Errorf("CORS Allow-Headers = %q, want it to include Authorization", allowHeaders)
+	}
+}
+
+func TestRoutes_DebugAPI_DisabledByDefault(t *testing.T) {
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/debug/memstats", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 when debug API is disabled, got %d", w.Code)
+	}
+}
+
+func TestRoutes_DebugAPI_CanBeEnabled(t *testing.T) {
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{EnableDebugAPI: true})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/debug/memstats", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 when debug API is enabled, got %d", w.Code)
 	}
 }
 

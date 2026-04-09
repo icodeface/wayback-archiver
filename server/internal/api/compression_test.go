@@ -25,7 +25,8 @@ func setupRouterWithGzip() *gin.Engine {
 
 	handler := &Handler{} // minimal handler
 	authCfg := &config.AuthConfig{Password: ""}
-	SetupRoutes(r, handler, authCfg, "test", "")
+	serverCfg := &config.ServerConfig{}
+	SetupRoutes(r, handler, authCfg, serverCfg, "test", "")
 
 	return r
 }
@@ -478,4 +479,3 @@ func TestCompressionEnabled_BothSides(t *testing.T) {
 	t.Logf("Request: %d bytes (compressed: %d bytes)", len(testData), compressedBuf.Len())
 	t.Logf("Response compressed: %d bytes", w.Body.Len())
 }
-

@@ -23,8 +23,7 @@ func TestCacheStore_ConcurrentStress(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := fmt.Sprintf("resource-%d", i)
-			data := make([]byte, 10*1024) // 10KB
-			d.cacheStore(key, int64(i), fmt.Sprintf("resources/%02x/%02x/hash.bin", i%256, (i/256)%256), data)
+			d.cacheStore(key, int64(i), fmt.Sprintf("resources/%02x/%02x/hash.bin", i%256, (i/256)%256), nil)
 		}(i)
 	}
 
@@ -48,19 +47,20 @@ func TestCacheStore_ConcurrentOverwrite(t *testing.T) {
 	const goroutines = 200
 	wg.Add(goroutines)
 
+	path := "resources/path.bin"
+
 	// 所有 goroutine 写同一个 key
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
-			data := make([]byte, 1024) // 1KB
-			d.cacheStore("same-key", int64(i), "resources/path.bin", data)
+			d.cacheStore("same-key", int64(i), path, nil)
 		}(i)
 	}
 
 	wg.Wait()
 
-	// 最终 cacheBytes 应该恰好等于 1KB（只有一个 key）
-	expected := int64(1024)
+	// 最终 cacheBytes 应该恰好等于单个元数据条目的大小（只有一个 key）
+	expected := cacheEntrySize("same-key", path)
 	actual := d.cacheBytes.Load()
 	if actual != expected {
 		t.Errorf("cacheBytes = %d, want %d (concurrent overwrites should track correctly)", actual, expected)
@@ -72,8 +72,8 @@ func TestCacheStore_ConcurrentEvictionAccuracy(t *testing.T) {
 	// 非常小的缓存，强制频繁淘汰
 	d := &Deduplicator{
 		config: config.ResourceConfig{
-			Workers:     2,
-			CacheSizeMB: 0, // 0MB → cacheMaxBytes() = 0，每次写入都会触发淘汰
+			Workers:         2,
+			MetadataCacheMB: 0, // 0MB → cacheMaxBytes() = 0，每次写入都会触发淘汰
 		},
 	}
 	// 0MB 意味着 entrySize > 0 总是 > cacheMaxBytes()，所以什么都不会被缓存
@@ -87,10 +87,9 @@ func TestCacheStore_ConcurrentEvictionAccuracy(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
-			// 每个 50KB，100 个 = 5MB >> 1MB，大量淘汰
+			// 用长路径放大元数据条目，强制频繁淘汰
 			key := fmt.Sprintf("key-%d", i)
-			data := make([]byte, 50*1024)
-			d.cacheStore(key, int64(i), "", data)
+			d.cacheStore(key, int64(i), sizedString(50*1024), nil)
 		}(i)
 	}
 

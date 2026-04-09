@@ -19,14 +19,15 @@ import (
 )
 
 const (
-	resourceCacheTTL = 2 * time.Hour
+	resourceCacheTTL             = 2 * time.Hour
+	resourceCacheCleanupInterval = 10 * time.Minute
+	resourceCacheEntryOverhead   = 128
 )
 
 type resourceCacheEntry struct {
 	resourceID int64
 	filePath   string
-	data       []byte
-	size       int64 // len(data) 用于统计缓存大小
+	size       int64 // 估算的元数据大小，用于统计缓存大小
 	cachedAt   time.Time
 }
 
@@ -35,16 +36,16 @@ type Deduplicator struct {
 	storage       *FileStorage
 	cssParser     *CSSParser
 	htmlExtractor *HTMLResourceExtractor
-	cache         sync.Map  // url -> *resourceCacheEntry
+	cache         sync.Map // url -> *resourceCacheEntry
 	deletionQueue *DeletionQueue
 	config        config.ResourceConfig
-	cacheBytes    atomic.Int64 // 当前缓存占用字节数
-	cacheMu       sync.Mutex   // 保护缓存淘汰逻辑，防止并发 cacheStore 导致超限
+	cacheBytes    atomic.Int64  // 当前缓存占用字节数
+	cacheMu       sync.Mutex    // 保护缓存淘汰逻辑，防止并发 cacheStore 导致超限
 	globalSem     chan struct{} // 全局并发下载信号量，跨所有页面共享
 }
 
 func NewDeduplicator(db *database.DB, storage *FileStorage, cfg config.ResourceConfig) *Deduplicator {
-	return &Deduplicator{
+	d := &Deduplicator{
 		db:            db,
 		storage:       storage,
 		cssParser:     NewCSSParser(),
@@ -53,22 +54,61 @@ func NewDeduplicator(db *database.DB, storage *FileStorage, cfg config.ResourceC
 		config:        cfg,
 		globalSem:     make(chan struct{}, cfg.Workers),
 	}
+	d.startCacheCleanupLoop()
+	return d
+}
+
+func (d *Deduplicator) startCacheCleanupLoop() {
+	ticker := time.NewTicker(resourceCacheCleanupInterval)
+	go func() {
+		for range ticker.C {
+			d.cleanupExpiredCache()
+		}
+	}()
+}
+
+func (d *Deduplicator) cleanupExpiredCache() int {
+	d.cacheMu.Lock()
+	defer d.cacheMu.Unlock()
+
+	removed := 0
+	d.cache.Range(func(k, v any) bool {
+		entry := v.(*resourceCacheEntry)
+		if time.Since(entry.cachedAt) < resourceCacheTTL {
+			return true
+		}
+
+		if old, loaded := d.cache.LoadAndDelete(k); loaded {
+			d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
+			removed++
+		}
+		return true
+	})
+
+	if removed > 0 {
+		log.Printf("[cache] evicted %d expired resource entries", removed)
+	}
+
+	return removed
 }
 
 // cacheMaxBytes 返回缓存大小上限（字节）
 func (d *Deduplicator) cacheMaxBytes() int64 {
-	return int64(d.config.CacheSizeMB) * 1024 * 1024
+	return int64(d.config.MetadataCacheMB) * 1024 * 1024
 }
 
-// cacheStore 缓存资源，超出大小限制时淘汰最旧的条目
-// 只缓存有实际数据的小文件；大文件（data == nil）不缓存，避免零大小条目无限累积
+func cacheEntrySize(key, filePath string) int64 {
+	return int64(len(key) + len(filePath) + resourceCacheEntryOverhead)
+}
+
+// cacheStore 缓存资源元数据，超出大小限制时淘汰最旧的条目
 func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string, data []byte) {
-	// 大文件流式落盘后 data 为 nil，不缓存（零大小条目无法被 LRU 淘汰，会无限累积）
-	if len(data) == 0 {
+	_ = data // 资源内容不再缓存，只保留元数据
+	if key == "" || filePath == "" {
 		return
 	}
 
-	entrySize := int64(len(data))
+	entrySize := cacheEntrySize(key, filePath)
 
 	// 如果单个条目就超过缓存上限，不缓存
 	if entrySize > d.cacheMaxBytes() {
@@ -94,10 +134,11 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string,
 			entry := v.(*resourceCacheEntry)
 			// 优先淘汰过期的
 			if time.Since(entry.cachedAt) >= resourceCacheTTL {
-				d.cache.Delete(k)
-				d.cacheBytes.Add(-entry.size)
-				evicted = true
-				return false // 淘汰一个后重新检查
+				if old, loaded := d.cache.LoadAndDelete(k); loaded {
+					d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
+					evicted = true
+					return false // 淘汰一个后重新检查
+				}
 			}
 			// 记录最旧的
 			if oldestKey == nil || entry.cachedAt.Before(oldestTime) {
@@ -122,7 +163,6 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string,
 	entry := &resourceCacheEntry{
 		resourceID: resourceID,
 		filePath:   filePath,
-		data:       data,
 		size:       entrySize,
 		cachedAt:   time.Now(),
 	}
@@ -132,7 +172,7 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string,
 
 // ProcessResource 处理单个资源：下载、去重、存储
 // 返回 (resourceID, filePath, data, error)
-// 小文件（≤ streamThreshold）保留在内存并缓存 data；大文件流式写入临时文件，data 返回 nil
+// 小文件（≤ streamThreshold）保留在内存供当前调用链使用；缓存只保留元数据
 func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string, headers map[string]string) (int64, string, []byte, error) {
 	// 检查缓存
 	if entry, ok := d.cache.Load(url); ok {
@@ -141,10 +181,11 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 			if err := d.db.UpdateResourceLastSeen(cached.resourceID); err != nil {
 				log.Printf("Failed to update last_seen for cached resource: %v", err)
 			}
-			return cached.resourceID, cached.filePath, cached.data, nil
+			return cached.resourceID, cached.filePath, nil, nil
 		}
-		d.cache.Delete(url)
-		d.cacheBytes.Add(-cached.size)
+		if old, loaded := d.cache.LoadAndDelete(url); loaded {
+			d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
+		}
 	}
 
 	var data []byte    // 小文件有值，大文件 nil
@@ -911,4 +952,3 @@ func (d *Deduplicator) cleanupEmptyDirs(root string) {
 func (d *Deduplicator) AddHTMLToDeletionQueue(htmlPath string, pageID int64) error {
 	return d.deletionQueue.Add(htmlPath, pageID)
 }
-

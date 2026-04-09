@@ -30,6 +30,7 @@ type DatabaseConfig struct {
 type ServerConfig struct {
 	Host             string
 	Port             int
+	EnableDebugAPI   bool
 	CompressionLevel int // Compression level (1-9, -1=default). Response compression always enabled, auto-negotiated via Accept-Encoding
 }
 
@@ -49,7 +50,7 @@ const AuthUsername = "wayback"
 // ResourceConfig holds resource processing settings
 type ResourceConfig struct {
 	Workers           int // 并发下载 worker 数量（默认 = CPU 核心数 × 4，最少 2）
-	CacheSizeMB       int // 资源缓存池大小（MB，默认 = 可用内存的 10%）
+	MetadataCacheMB   int // 资源元数据缓存池大小（MB，默认 = 可用内存的 10%）
 	DownloadTimeout   int // 单个资源下载超时（秒，默认 30）
 	StreamThresholdKB int // 大文件流式落盘阈值（KB，默认 2048 即 2MB）
 }
@@ -79,6 +80,7 @@ func LoadFromEnv() (*Config, error) {
 		Server: ServerConfig{
 			Host:             getEnv("SERVER_HOST", "127.0.0.1"),
 			Port:             getEnvInt("SERVER_PORT", 8080),
+			EnableDebugAPI:   getEnvBool("ENABLE_DEBUG_API", false),
 			CompressionLevel: getEnvInt("COMPRESSION_LEVEL", -1), // -1 = DefaultCompression
 		},
 		Storage: StorageConfig{
@@ -156,9 +158,13 @@ func detectResourceConfig() ResourceConfig {
 	if v := getEnvInt("RESOURCE_WORKERS", 0); v > 0 {
 		workers = v
 	}
-	cacheSizeMB := defaultCacheMB
-	if v := getEnvInt("RESOURCE_CACHE_MB", 0); v > 0 {
-		cacheSizeMB = v
+	metadataCacheMB := defaultCacheMB
+	if os.Getenv("RESOURCE_METADATA_CACHE_MB") != "" {
+		if v := getEnvInt("RESOURCE_METADATA_CACHE_MB", 0); v > 0 {
+			metadataCacheMB = v
+		}
+	} else if v := getEnvInt("RESOURCE_CACHE_MB", 0); v > 0 {
+		metadataCacheMB = v
 	}
 	downloadTimeout := getEnvInt("RESOURCE_DOWNLOAD_TIMEOUT", 30)
 	streamThresholdKB := getEnvInt("RESOURCE_STREAM_THRESHOLD_KB", 2048)
@@ -167,11 +173,11 @@ func detectResourceConfig() ResourceConfig {
 	if workers < 1 {
 		workers = 1
 	}
-	if cacheSizeMB < 1 {
-		cacheSizeMB = 1
+	if metadataCacheMB < 1 {
+		metadataCacheMB = 1
 	}
-	if cacheSizeMB > totalMemMB {
-		cacheSizeMB = totalMemMB
+	if metadataCacheMB > totalMemMB {
+		metadataCacheMB = totalMemMB
 	}
 	if downloadTimeout < 5 {
 		downloadTimeout = 5
@@ -182,7 +188,7 @@ func detectResourceConfig() ResourceConfig {
 
 	cfg := ResourceConfig{
 		Workers:           workers,
-		CacheSizeMB:       cacheSizeMB,
+		MetadataCacheMB:   metadataCacheMB,
 		DownloadTimeout:   downloadTimeout,
 		StreamThresholdKB: streamThresholdKB,
 	}
