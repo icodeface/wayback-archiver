@@ -347,7 +347,7 @@ func (db *DB) GetPageByID(id string) (*models.Page, error) {
 // SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
 func (db *DB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
 	query := "SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited FROM pages WHERE (url ILIKE $1 OR title ILIKE $1 OR body_text ILIKE $1)"
-	args := []interface{}{"%"+keyword+"%"}
+	args := []interface{}{"%" + keyword + "%"}
 	argIndex := 2
 
 	// 追加时间过滤条件
@@ -435,6 +435,17 @@ func (db *DB) GetResourcesByPageID(pageID int64) ([]models.Resource, error) {
 
 // GetResourceByURLAndPageID 根据URL和页面ID查找资源
 func (db *DB) GetResourceByURLAndPageID(url string, pageID int64) (*models.Resource, error) {
+	r, err := db.GetLinkedResourceByURLAndPageID(url, pageID)
+	if err != nil || r != nil {
+		return r, err
+	}
+
+	// 如果页面关联中没有，尝试直接按URL查找最新的
+	return db.GetResourceByURL(url)
+}
+
+// GetLinkedResourceByURLAndPageID 根据URL和页面ID查找资源，只查询 page_resources 关联，不做全局兜底
+func (db *DB) GetLinkedResourceByURLAndPageID(url string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
 	err := db.conn.QueryRow(`
 		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
@@ -445,8 +456,7 @@ func (db *DB) GetResourceByURLAndPageID(url string, pageID int64) (*models.Resou
 	`, pageID, url).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
 
 	if err == sql.ErrNoRows {
-		// 如果页面关联中没有，尝试直接按URL查找最新的
-		return db.GetResourceByURL(url)
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err

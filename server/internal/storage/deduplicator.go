@@ -364,7 +364,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	rewriter.SetBaseURL(req.URL)
 
 	var resourceIDs []int64
-	cssURLMapping := make(map[string]string) // CSS URL -> local path mapping
 
 	// 并行处理资源
 	type resourceResult struct {
@@ -418,7 +417,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	type cssWork struct {
 		cssContent string
 		cssURL     string
-		filePath   string
 	}
 	var cssWorkItems []cssWork
 
@@ -459,7 +457,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 				cssWorkItems = append(cssWorkItems, cssWork{
 					cssContent: string(cssData),
 					cssURL:     result.res.URL,
-					filePath:   result.filePath,
 				})
 			}
 		}
@@ -470,8 +467,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	// 处理 CSS 中引用的资源（收集所有子资源后并行处理）
 	type cssSubResource struct {
 		absoluteURL string
-		rawURL      string
-		cssURL      string
 	}
 	var allCSSSubResources []cssSubResource
 
@@ -481,8 +476,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 			absoluteURL := d.resolveURL(cw.cssURL, cssResURL)
 			allCSSSubResources = append(allCSSSubResources, cssSubResource{
 				absoluteURL: absoluteURL,
-				rawURL:      cssResURL,
-				cssURL:      cw.cssURL,
 			})
 		}
 	}
@@ -532,20 +525,7 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 			}
 
 			resourceIDs = append(resourceIDs, result.resID)
-			cssURLMapping[result.sub.rawURL] = result.filePath
-			cssURLMapping[result.sub.absoluteURL] = result.filePath
 			rewriter.AddMapping(result.sub.absoluteURL, result.filePath)
-		}
-	}
-
-	// 重写 CSS 文件中的 URL
-	for _, cw := range cssWorkItems {
-		cssResources := d.cssParser.ExtractResources(cw.cssContent)
-		if len(cssResources) > 0 {
-			rewrittenCSS := d.cssParser.RewriteCSS(cw.cssContent, cssURLMapping)
-			if err := d.storage.UpdateResource(cw.filePath, []byte(rewrittenCSS)); err != nil {
-				log.Printf("Failed to update CSS file: %v", err)
-			}
 		}
 	}
 
@@ -646,7 +626,6 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	rewriter.SetBaseURL(req.URL)
 
 	var resourceIDs []int64
-	cssURLMapping := make(map[string]string)
 	processStart := time.Now()
 
 	// 并行处理资源
@@ -699,7 +678,6 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	type cssWork struct {
 		cssContent string
 		cssURL     string
-		filePath   string
 	}
 	var cssWorkItems []cssWork
 
@@ -729,7 +707,6 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 				cssWorkItems = append(cssWorkItems, cssWork{
 					cssContent: string(cssData),
 					cssURL:     result.res.URL,
-					filePath:   result.filePath,
 				})
 			}
 		}
@@ -739,8 +716,6 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	// 处理 CSS 中引用的资源
 	type cssSubResource struct {
 		absoluteURL string
-		rawURL      string
-		cssURL      string
 	}
 	var allCSSSubResources []cssSubResource
 
@@ -750,8 +725,6 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			absoluteURL := d.resolveURL(cw.cssURL, cssResURL)
 			allCSSSubResources = append(allCSSSubResources, cssSubResource{
 				absoluteURL: absoluteURL,
-				rawURL:      cssResURL,
-				cssURL:      cw.cssURL,
 			})
 		}
 	}
@@ -802,22 +775,9 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 			}
 
 			resourceIDs = append(resourceIDs, result.resID)
-			cssURLMapping[result.sub.rawURL] = result.filePath
-			cssURLMapping[result.sub.absoluteURL] = result.filePath
 			rewriter.AddMapping(result.sub.absoluteURL, result.filePath)
 		}
 		log.Printf("[Update] CSS sub-resources processed in %v", time.Since(cssSubStart))
-	}
-
-	// 重写 CSS 文件中的 URL
-	for _, cw := range cssWorkItems {
-		cssResources := d.cssParser.ExtractResources(cw.cssContent)
-		if len(cssResources) > 0 {
-			rewrittenCSS := d.cssParser.RewriteCSS(cw.cssContent, cssURLMapping)
-			if err := d.storage.UpdateResource(cw.filePath, []byte(rewrittenCSS)); err != nil {
-				log.Printf("[Update] Failed to update CSS file: %v", err)
-			}
-		}
 	}
 
 	// 重写 HTML 中的资源 URL

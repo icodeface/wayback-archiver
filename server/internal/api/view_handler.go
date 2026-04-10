@@ -201,81 +201,21 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 	pageIDInt := int64(0)
 	fmt.Sscanf(pageID, "%d", &pageIDInt)
 
-	resource, err := h.db.GetResourceByURLAndPageID(originalURL, pageIDInt)
+	resource, err := h.findResourceForPage(originalURL, pageIDInt)
 	if err != nil {
 		log.Printf("[Proxy] Database error: %v", err)
 		c.String(http.StatusInternalServerError, "Database error")
 		return
 	}
 
-	// 如果精确匹配失败，尝试用 URL 编码后的版本查找（Gin 会解码 %20 等）
-	if resource == nil {
-		parsed, parseErr := url.Parse(originalURL)
-		if parseErr == nil {
-			encoded := parsed.String()
-			if encoded != originalURL {
-				resource, err = h.db.GetResourceByURLAndPageID(encoded, pageIDInt)
-				if err != nil {
-					log.Printf("[Proxy] Database error (encoded): %v", err)
-				}
-			}
-		}
-		// 也尝试手动对路径部分进行编码
-		if resource == nil {
-			// 将空格替换为 %20 等常见编码
-			encodedURL := strings.ReplaceAll(originalURL, " ", "%20")
-			if encodedURL != originalURL {
-				resource, err = h.db.GetResourceByURLAndPageID(encodedURL, pageIDInt)
-				if err != nil {
-					log.Printf("[Proxy] Database error (space-encoded): %v", err)
-				}
-			}
-		}
-	}
-
-	// 如果仍然找不到，尝试模糊匹配（DB 中的 URL 可能带有 #fragment）
-	if resource == nil {
-		resource, err = h.db.GetResourceByURLPrefix(originalURL, pageIDInt)
-		if err != nil {
-			log.Printf("[Proxy] Database error (prefix): %v", err)
-		}
-	}
-
-	// 如果仍然找不到，尝试按 URL 路径匹配（忽略查询参数，处理同一图片不同 token 的情况）
-	if resource == nil {
-		urlPath := originalURL
-		if idx := strings.IndexByte(urlPath, '?'); idx != -1 {
-			urlPath = urlPath[:idx]
-		}
-		resource, err = h.db.GetResourceByURLPath(urlPath, pageIDInt)
-		if err != nil {
-			log.Printf("[Proxy] Database error (path): %v", err)
-		}
-	}
-
-	// 最后兜底：忽略 pageID 限制，按 URL 路径全局查找（处理兜底逻辑重写的未关联资源）
-	if resource == nil {
-		urlPath := originalURL
-		if idx := strings.IndexByte(urlPath, '?'); idx != -1 {
-			urlPath = urlPath[:idx]
-		}
-		// 直接查 resources 表，不限定 page_resources 关联
-		resource, err = h.db.GetResourceByURL(urlPath)
-		if err != nil {
-			log.Printf("[Proxy] Database error (global path): %v", err)
-		}
-		// 如果还是找不到，尝试模糊匹配（URL 可能带查询参数）
-		if resource == nil {
-			resource, err = h.db.GetResourceByURLLike(urlPath + "%")
-			if err != nil {
-				log.Printf("[Proxy] Database error (global like): %v", err)
-			}
-		}
-	}
-
 	if resource == nil {
 		log.Printf("[Proxy] Resource not found: %s", originalURL)
 		c.String(http.StatusNotFound, "Resource not found")
+		return
+	}
+
+	if resource.ResourceType == "css" {
+		h.serveRewrittenCSS(c, pageIDInt, resource)
 		return
 	}
 
@@ -297,6 +237,145 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 	defer f.Close()
 	stat, _ := f.Stat()
 	http.ServeContent(c.Writer, c.Request, filepath.Base(filePath), stat.ModTime(), f)
+}
+
+func (h *Handler) serveRewrittenCSS(c *gin.Context, pageID int64, resource *models.Resource) {
+	filePath := filepath.Join(h.dataDir, resource.FilePath)
+	cssContent, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Printf("[Proxy] Failed to read CSS file %s: %v", filePath, err)
+		c.String(http.StatusInternalServerError, "Failed to read file")
+		return
+	}
+
+	rewritten := rewriteCSSForPage(h.cssParser(), string(cssContent), resource.URL, func(resourceURL string) (string, bool) {
+		cssResource, findErr := h.findResourceForPageOnly(resourceURL, pageID)
+		if findErr != nil {
+			log.Printf("[Proxy] Failed to resolve CSS sub-resource %s: %v", resourceURL, findErr)
+			return "", false
+		}
+		if cssResource == nil {
+			return "", false
+		}
+		return cssResource.FilePath, true
+	})
+
+	c.Header("Content-Type", "text/css; charset=utf-8")
+	c.Header("Cache-Control", "public, max-age=31536000")
+	c.Data(http.StatusOK, "text/css; charset=utf-8", []byte(rewritten))
+}
+
+func (h *Handler) findResourceForPage(originalURL string, pageID int64) (*models.Resource, error) {
+	resource, err := h.findResourceForPageOnly(originalURL, pageID)
+	if err != nil || resource != nil {
+		return resource, err
+	}
+
+	urlPath := originalURL
+	if idx := strings.IndexByte(urlPath, '?'); idx != -1 {
+		urlPath = urlPath[:idx]
+	}
+
+	resource, err = h.db.GetResourceByURL(urlPath)
+	if err != nil || resource != nil {
+		return resource, err
+	}
+
+	return h.db.GetResourceByURLLike(urlPath + "%")
+}
+
+func (h *Handler) findResourceForPageOnly(originalURL string, pageID int64) (*models.Resource, error) {
+	resource, err := h.db.GetLinkedResourceByURLAndPageID(originalURL, pageID)
+	if err != nil || resource != nil {
+		return resource, err
+	}
+
+	parsed, parseErr := url.Parse(originalURL)
+	if parseErr == nil {
+		encoded := parsed.String()
+		if encoded != originalURL {
+			resource, err = h.db.GetLinkedResourceByURLAndPageID(encoded, pageID)
+			if err != nil || resource != nil {
+				return resource, err
+			}
+		}
+	}
+
+	encodedURL := strings.ReplaceAll(originalURL, " ", "%20")
+	if encodedURL != originalURL {
+		resource, err = h.db.GetLinkedResourceByURLAndPageID(encodedURL, pageID)
+		if err != nil || resource != nil {
+			return resource, err
+		}
+	}
+
+	resource, err = h.db.GetResourceByURLPrefix(originalURL, pageID)
+	if err != nil || resource != nil {
+		return resource, err
+	}
+
+	urlPath := originalURL
+	if idx := strings.IndexByte(urlPath, '?'); idx != -1 {
+		urlPath = urlPath[:idx]
+	}
+
+	resource, err = h.db.GetResourceByURLPath(urlPath, pageID)
+	if err != nil || resource != nil {
+		return resource, err
+	}
+
+	return nil, nil
+}
+
+func rewriteCSSForPage(parser interface {
+	ExtractResources(string) []string
+	RewriteCSS(string, map[string]string) string
+}, cssContent, cssURL string, resolveFilePath func(string) (string, bool)) string {
+	cssResources := parser.ExtractResources(cssContent)
+	if len(cssResources) == 0 {
+		return cssContent
+	}
+
+	urlMapping := make(map[string]string)
+	for _, cssResURL := range cssResources {
+		absoluteURL := resolveRelativeURL(cssURL, cssResURL)
+		if absoluteURL == "" {
+			continue
+		}
+
+		if filePath, ok := resolveFilePath(absoluteURL); ok {
+			urlMapping[cssResURL] = filePath
+			urlMapping[absoluteURL] = filePath
+		}
+	}
+
+	if len(urlMapping) == 0 {
+		return cssContent
+	}
+
+	return parser.RewriteCSS(cssContent, urlMapping)
+}
+
+func resolveRelativeURL(baseURL, relativeURL string) string {
+	if strings.HasPrefix(relativeURL, "http://") || strings.HasPrefix(relativeURL, "https://") {
+		parsed, err := url.Parse(relativeURL)
+		if err != nil {
+			return ""
+		}
+		return parsed.String()
+	}
+
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+
+	rel, err := url.Parse(relativeURL)
+	if err != nil {
+		return ""
+	}
+
+	return base.ResolveReference(rel).String()
 }
 
 // detectContentType 检测资源的Content-Type

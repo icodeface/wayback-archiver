@@ -9,6 +9,7 @@ import (
 type Handler struct {
 	dedup   *storage.Deduplicator
 	db      *database.DB
+	css     *storage.CSSParser
 	dataDir string
 	logger  *logging.Logger
 }
@@ -17,7 +18,15 @@ func NewHandler(dedup *storage.Deduplicator, db *database.DB, dataDir string, lo
 	return &Handler{
 		dedup:   dedup,
 		db:      db,
+		css:     storage.NewCSSParser(),
 		dataDir: dataDir,
 		logger:  logger,
 	}
+}
+
+func (h *Handler) cssParser() *storage.CSSParser {
+	if h.css == nil {
+		h.css = storage.NewCSSParser()
+	}
+	return h.css
 }

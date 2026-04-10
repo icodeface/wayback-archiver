@@ -4,7 +4,223 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"wayback/internal/storage"
 )
+
+func TestRewriteCSSForPage_RewritesMatchedSubresources(t *testing.T) {
+	parser := storage.NewCSSParser()
+	css := `.hero { background-image: url('../img/logo.png'); } .icon { background-image: url("https://cdn.example.com/icon.svg"); }`
+
+	rewritten := rewriteCSSForPage(parser, css, "https://example.com/assets/css/app.css", func(resourceURL string) (string, bool) {
+		switch resourceURL {
+		case "https://example.com/assets/img/logo.png":
+			return "resources/aa/bb/logo.img", true
+		case "https://cdn.example.com/icon.svg":
+			return "resources/cc/dd/icon.img", true
+		default:
+			return "", false
+		}
+	})
+
+	if !strings.Contains(rewritten, `url('/archive/resources/aa/bb/logo.img')`) {
+		t.Fatalf("relative CSS resource was not rewritten: %s", rewritten)
+	}
+	if !strings.Contains(rewritten, `url("/archive/resources/cc/dd/icon.img")`) {
+		t.Fatalf("absolute CSS resource was not rewritten: %s", rewritten)
+	}
+}
+
+func TestRewriteCSSForPage_PreservesUnmatchedURLs(t *testing.T) {
+	parser := storage.NewCSSParser()
+	css := `.keep { background-image: url('/archive/logo.png'); }`
+
+	rewritten := rewriteCSSForPage(parser, css, "https://example.com/assets/css/app.css", func(resourceURL string) (string, bool) {
+		return "", false
+	})
+
+	if rewritten != css {
+		t.Fatalf("unmatched CSS should stay unchanged, got: %s", rewritten)
+	}
+}
+
+func TestRewriteCSSForPage_RewritesImportWithoutRecursion(t *testing.T) {
+	parser := storage.NewCSSParser()
+	css := `@import url("./nested.css"); .hero { background-image: url('../img/logo.png'); }`
+	var resolved []string
+
+	rewritten := rewriteCSSForPage(parser, css, "https://example.com/assets/css/app.css", func(resourceURL string) (string, bool) {
+		resolved = append(resolved, resourceURL)
+		switch resourceURL {
+		case "https://example.com/assets/css/nested.css":
+			return "resources/aa/bb/nested.css", true
+		case "https://example.com/assets/img/logo.png":
+			return "resources/cc/dd/logo.img", true
+		default:
+			return "", false
+		}
+	})
+
+	if !strings.Contains(rewritten, `@import url("/archive/resources/aa/bb/nested.css")`) {
+		t.Fatalf("import URL was not rewritten: %s", rewritten)
+	}
+	if !strings.Contains(rewritten, `url('/archive/resources/cc/dd/logo.img')`) {
+		t.Fatalf("image URL was not rewritten: %s", rewritten)
+	}
+	if len(resolved) != 2 {
+		t.Fatalf("expected exactly 2 resolve attempts, got %d: %#v", len(resolved), resolved)
+	}
+}
+
+func TestRewriteCSSForPage_SelfImportIsSinglePass(t *testing.T) {
+	parser := storage.NewCSSParser()
+	css := `@import url("./self.css");`
+	resolveCalls := 0
+
+	rewritten := rewriteCSSForPage(parser, css, "https://example.com/assets/css/self.css", func(resourceURL string) (string, bool) {
+		resolveCalls++
+		if resourceURL == "https://example.com/assets/css/self.css" {
+			return "resources/aa/bb/self.css", true
+		}
+		return "", false
+	})
+
+	if !strings.Contains(rewritten, `@import url("/archive/resources/aa/bb/self.css")`) {
+		t.Fatalf("self import was not rewritten: %s", rewritten)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("expected single-pass rewrite, got %d resolve calls", resolveCalls)
+	}
+}
+
+func TestRewriteCSSForPage_MutualImportsRemainSinglePass(t *testing.T) {
+	parser := storage.NewCSSParser()
+	resolveCalls := 0
+	resolver := func(resourceURL string) (string, bool) {
+		resolveCalls++
+		switch resourceURL {
+		case "https://example.com/assets/css/a.css":
+			return "resources/aa/bb/a.css", true
+		case "https://example.com/assets/css/b.css":
+			return "resources/cc/dd/b.css", true
+		default:
+			return "", false
+		}
+	}
+
+	aCSS := `@import url("./b.css"); .a { color: red; }`
+	bCSS := `@import url("./a.css"); .b { color: blue; }`
+
+	rewrittenA := rewriteCSSForPage(parser, aCSS, "https://example.com/assets/css/a.css", resolver)
+	rewrittenB := rewriteCSSForPage(parser, bCSS, "https://example.com/assets/css/b.css", resolver)
+
+	if !strings.Contains(rewrittenA, `@import url("/archive/resources/cc/dd/b.css")`) {
+		t.Fatalf("A.css import was not rewritten: %s", rewrittenA)
+	}
+	if !strings.Contains(rewrittenB, `@import url("/archive/resources/aa/bb/a.css")`) {
+		t.Fatalf("B.css import was not rewritten: %s", rewrittenB)
+	}
+	if resolveCalls != 2 {
+		t.Fatalf("expected 2 resolve calls total, got %d", resolveCalls)
+	}
+	if strings.Count(rewrittenA, "/archive/resources/") != 1 || strings.Count(rewrittenB, "/archive/resources/") != 1 {
+		t.Fatalf("mutual imports should be rewritten once per response: A=%q B=%q", rewrittenA, rewrittenB)
+	}
+}
+
+func TestRewriteCSSForPage_RewritesQueryAndFragmentURLs(t *testing.T) {
+	parser := storage.NewCSSParser()
+	css := `@import url("./theme.css?v=123#dark"); .hero{background:url("../img/logo.png?size=2x#main")}`
+	var resolved []string
+
+	rewritten := rewriteCSSForPage(parser, css, "https://example.com/assets/css/app.css?v=1", func(resourceURL string) (string, bool) {
+		resolved = append(resolved, resourceURL)
+		switch resourceURL {
+		case "https://example.com/assets/css/theme.css?v=123#dark":
+			return "resources/11/22/theme.css", true
+		case "https://example.com/assets/img/logo.png?size=2x#main":
+			return "resources/33/44/logo.img", true
+		default:
+			return "", false
+		}
+	})
+
+	if !strings.Contains(rewritten, `@import url("/archive/resources/11/22/theme.css")`) {
+		t.Fatalf("query/hash import was not rewritten: %s", rewritten)
+	}
+	if !strings.Contains(rewritten, `url("/archive/resources/33/44/logo.img")`) {
+		t.Fatalf("query/hash asset URL was not rewritten: %s", rewritten)
+	}
+	if len(resolved) != 2 {
+		t.Fatalf("expected 2 resolved URLs, got %d: %#v", len(resolved), resolved)
+	}
+}
+
+func TestRewriteCSSForPage_RewritesRootAndParentRelativePaths(t *testing.T) {
+	parser := storage.NewCSSParser()
+	css := `.root{background:url('/shared/root.png')} .parent{background:url('../../img/cover.jpg')}`
+
+	rewritten := rewriteCSSForPage(parser, css, "https://example.com/static/css/nested/app.css", func(resourceURL string) (string, bool) {
+		switch resourceURL {
+		case "https://example.com/shared/root.png":
+			return "resources/55/66/root.img", true
+		case "https://example.com/static/img/cover.jpg":
+			return "resources/77/88/cover.img", true
+		default:
+			return "", false
+		}
+	})
+
+	if !strings.Contains(rewritten, `url('/archive/resources/55/66/root.img')`) {
+		t.Fatalf("root-relative URL was not rewritten: %s", rewritten)
+	}
+	if !strings.Contains(rewritten, `url('/archive/resources/77/88/cover.img')`) {
+		t.Fatalf("parent-relative URL was not rewritten: %s", rewritten)
+	}
+}
+
+func TestResolveRelativeURL_HandlesAbsoluteAndInvalidInputs(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseURL  string
+		relative string
+		want     string
+	}{
+		{
+			name:     "absolute URL stays unchanged",
+			baseURL:  "https://example.com/assets/css/app.css",
+			relative: "https://cdn.example.com/a.css",
+			want:     "https://cdn.example.com/a.css",
+		},
+		{
+			name:     "protocol relative resolves against base scheme",
+			baseURL:  "https://example.com/assets/css/app.css",
+			relative: "//cdn.example.com/a.css",
+			want:     "https://cdn.example.com/a.css",
+		},
+		{
+			name:     "invalid base returns empty",
+			baseURL:  "://bad",
+			relative: "./a.css",
+			want:     "",
+		},
+		{
+			name:     "invalid relative returns empty",
+			baseURL:  "https://example.com/assets/css/app.css",
+			relative: "http://[::1",
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveRelativeURL(tt.baseURL, tt.relative)
+			if got != tt.want {
+				t.Fatalf("resolveRelativeURL(%q, %q) = %q, want %q", tt.baseURL, tt.relative, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestFixNestedButtons_NoNesting(t *testing.T) {
 	html := `<button class="a">click</button><button class="b">ok</button>`
