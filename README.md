@@ -2,7 +2,7 @@
 
 > *The Memory of Your Internet — Archive Everything You Browse.*
 
-English | [中文](README-zh.md)
+English | [Chinese](README-zh.md)
 
 A self-hosted personal web archiving system that automatically captures and preserves web pages you visit in Chrome — HTML, CSS, JavaScript, images, and all. When the original page goes offline, you can still browse your archived copy with styles and layout intact.
 
@@ -91,8 +91,8 @@ tar -xzf wayback-server-*.tar.gz
 ### 2. Database Setup
 
 ```bash
-# PostgreSQL 默认使用当前系统用户名作为数据库用户
-# 如果你的系统用户名是 alice，以下命令等同于 createdb -U alice wayback
+# PostgreSQL uses your current system username as the default database user
+# If your system username is alice, this is equivalent to: createdb -U alice wayback
 createdb wayback
 
 # Run the schema (init_db.sql is included in the release archive)
@@ -144,7 +144,7 @@ The server automatically loads `.env` from the working directory if it exists. Y
 |---|---|---|
 | `DB_HOST` | `localhost` | PostgreSQL host |
 | `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_USER` | `postgres` | Database user (PostgreSQL 默认使用系统用户名，建议不设置此变量) |
+| `DB_USER` | `postgres` | Database user. PostgreSQL defaults to the current system username, so leaving this unset is usually recommended. |
 | `DB_PASSWORD` | *(empty)* | Database password |
 | `DB_NAME` | `wayback` | Database name |
 | `DB_SSLMODE` | `disable` | SSL mode |
