@@ -2,14 +2,9 @@
 
 /**
  * Returns true if the current page should not be archived.
- * Skips local pages, browser internal pages, and iframes.
+ * Skips local pages and browser internal pages.
  */
 export function shouldSkipPage(): boolean {
-  // Only run in top-level window, skip iframes
-  if (window.self !== window.top) {
-    return true;
-  }
-
   const url = window.location.href;
   const hostname = window.location.hostname;
 

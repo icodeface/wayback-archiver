@@ -4,12 +4,16 @@
 import { CONFIG } from './config';
 import { CaptureData } from './types';
 import { shouldSkipPage } from './page-filter';
-import { waitForDOMStable, serializeCSSOMToDOM } from './page-freezer';
-import { inlineLayoutStyles } from './style-inliner';
+import { waitForDOMStable } from './page-freezer';
 import { DOMCollector } from './dom-collector';
+import { captureDocumentHTMLWithFrames, setupFrameCaptureBridge } from './frame-capture';
 
 // pako is loaded via script tag in Puppeteer
 declare const pako: any;
+
+if (!shouldSkipPage() && window.self !== window.top) {
+  setupFrameCaptureBridge();
+}
 
 interface ArchiveResponse {
   status: string;
@@ -96,6 +100,11 @@ export async function archivePage(): Promise<void> {
     return;
   }
 
+  if (window.self !== window.top) {
+    setupFrameCaptureBridge();
+    return;
+  }
+
   console.log('[Wayback] Starting capture:', window.location.href);
 
   const domCollector = new DOMCollector();
@@ -106,8 +115,8 @@ export async function archivePage(): Promise<void> {
 
   await waitForDOMStable(CONFIG.MUTATION_OBSERVER_TIMEOUT, CONFIG.DOM_STABLE_TIME);
 
-  serializeCSSOMToDOM();
-  let html = inlineLayoutStyles();
+  const captured = await captureDocumentHTMLWithFrames();
+  let html = captured.html;
 
   if (domCollector.collectedCount > 0) {
     console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes`);
@@ -120,6 +129,7 @@ export async function archivePage(): Promise<void> {
     url: window.location.href,
     title: document.title,
     html,
+    frames: captured.frames,
   };
 
   await sendToServer(captureData);

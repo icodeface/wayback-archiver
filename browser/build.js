@@ -31,6 +31,8 @@ const userscriptModules = [
   'page-freezer.js',
   'style-inliner.js',
   'dom-collector.js',
+  'html-url-normalizer.js',
+  'frame-capture.js',
   'archiver.js',
   'main.js',
 ];
@@ -42,6 +44,8 @@ const puppeteerModules = [
   'page-freezer.js',
   'style-inliner.js',
   'dom-collector.js',
+  'html-url-normalizer.js',
+  'frame-capture.js',
   'puppeteer.js',
 ];
 

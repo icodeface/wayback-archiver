@@ -4,7 +4,15 @@ export interface CaptureData {
   url: string;
   title: string;
   html: string;
+  frames?: FrameCapture[];
   headers?: Record<string, string>;
+}
+
+export interface FrameCapture {
+  key: string;
+  url: string;
+  title: string;
+  html: string;
 }
 
 export interface ArchiveResponse {

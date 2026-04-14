@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -287,14 +289,269 @@ func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (i
 	return existing.ID, existing.FilePath, nil, nil
 }
 
+type cssWorkItem struct {
+	cssContent string
+	cssURL     string
+}
+
+type processedInlineHTML struct {
+	resourceID int64
+	filePath   string
+}
+
+var (
+	iframeTagMatchRe     = regexp.MustCompile(`(?is)<iframe\b[^>]*>`)
+	iframeFrameKeyAttrRe = regexp.MustCompile(`(?i)\sdata-wayback-frame-key=["']([^"']+)["']`)
+	iframeSrcAttrMatchRe = regexp.MustCompile(`(?i)(\ssrc=)(["'])([^"']*)(["'])`)
+)
+
+func buildFrameCaptureMap(frames []models.FrameCapture) map[string]models.FrameCapture {
+	frameMap := make(map[string]models.FrameCapture, len(frames))
+	for _, frame := range frames {
+		if frame.Key == "" || frame.URL == "" || frame.HTML == "" {
+			continue
+		}
+		frameMap[frame.Key] = frame
+	}
+	return frameMap
+}
+
+func hashCaptureContent(html string, frames []models.FrameCapture) string {
+	hasher := sha256.New()
+	hasher.Write([]byte(html))
+
+	if len(frames) > 0 {
+		sorted := append([]models.FrameCapture(nil), frames...)
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].Key < sorted[j].Key
+		})
+		for _, frame := range sorted {
+			hasher.Write([]byte("\n--frame-key--\n"))
+			hasher.Write([]byte(frame.Key))
+			hasher.Write([]byte("\n--frame-url--\n"))
+			hasher.Write([]byte(frame.URL))
+			hasher.Write([]byte("\n--frame-title--\n"))
+			hasher.Write([]byte(frame.Title))
+			hasher.Write([]byte("\n--frame-html--\n"))
+			hasher.Write([]byte(frame.HTML))
+		}
+	}
+
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+func archiveProxyURL(pageID int64, timestamp, originalURL string) string {
+	return fmt.Sprintf("/archive/%d/%smp_/%s", pageID, timestamp, originalURL)
+}
+
+func (d *Deduplicator) rewriteIframeTagsByKey(htmlContent string, pageID int64, timestamp string, headers map[string]string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) string {
+	if len(frameMap) == 0 {
+		return htmlContent
+	}
+
+	return iframeTagMatchRe.ReplaceAllStringFunc(htmlContent, func(tag string) string {
+		keyMatch := iframeFrameKeyAttrRe.FindStringSubmatch(tag)
+		if len(keyMatch) < 2 {
+			return tag
+		}
+		frame, ok := frameMap[keyMatch[1]]
+		if !ok {
+			return tag
+		}
+
+		resourceID, _, err := d.archiveFrameCapture(frame, headers, pageID, timestamp, frameMap, resourceIDs, seen, visiting, archived)
+		if err != nil {
+			log.Printf("Failed to process iframe capture %s: %v", frame.URL, err)
+			return tag
+		}
+		appendUniqueResourceID(resourceIDs, seen, resourceID)
+
+		proxyURL := archiveProxyURL(pageID, timestamp, frame.URL)
+		if iframeSrcAttrMatchRe.MatchString(tag) {
+			return iframeSrcAttrMatchRe.ReplaceAllString(tag, `${1}${2}`+proxyURL+`${4}`)
+		}
+		if strings.HasSuffix(tag, "/>") {
+			return strings.TrimSuffix(tag, "/>") + ` src="` + proxyURL + `"/>`
+		}
+		return strings.TrimSuffix(tag, ">") + ` src="` + proxyURL + `">`
+	})
+}
+
+func appendUniqueResourceID(resourceIDs *[]int64, seen map[int64]struct{}, resourceID int64) {
+	if resourceID == 0 {
+		return
+	}
+	if _, ok := seen[resourceID]; ok {
+		return
+	}
+	seen[resourceID] = struct{}{}
+	*resourceIDs = append(*resourceIDs, resourceID)
+}
+
+func (d *Deduplicator) processInlineResource(url, resourceType string, data []byte) (int64, string, []byte, error) {
+	hashBytes := sha256.Sum256(data)
+	hash := hex.EncodeToString(hashBytes[:])
+	fileSize := int64(len(data))
+
+	existingByHash, err := d.db.GetResourceByHash(hash)
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("db query by hash failed: %w", err)
+	}
+
+	var filePath string
+	if existingByHash != nil {
+		filePath = existingByHash.FilePath
+	} else {
+		filePath, err = d.storage.SaveResource(data, hash, resourceType)
+		if err != nil {
+			return 0, "", nil, fmt.Errorf("save failed: %w", err)
+		}
+	}
+
+	resourceID, err := d.db.CreateResourceIfNotExists(url, hash, resourceType, filePath, fileSize)
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("db insert failed: %w", err)
+	}
+
+	d.cacheStore(url, resourceID, filePath, data)
+	return resourceID, filePath, data, nil
+}
+
+func (d *Deduplicator) processCSSWorkItems(cssWorkItems []cssWorkItem, pageURL string, headers map[string]string, rewriter *URLRewriter, resourceIDs *[]int64, seen map[int64]struct{}) {
+	type cssSubResource struct {
+		absoluteURL string
+	}
+	var allCSSSubResources []cssSubResource
+
+	for _, cw := range cssWorkItems {
+		cssResources := d.cssParser.ExtractResources(cw.cssContent)
+		for _, cssResURL := range cssResources {
+			absoluteURL := d.resolveURL(cw.cssURL, cssResURL)
+			allCSSSubResources = append(allCSSSubResources, cssSubResource{absoluteURL: absoluteURL})
+		}
+	}
+
+	if len(allCSSSubResources) == 0 {
+		return
+	}
+
+	type cssSubResult struct {
+		sub      cssSubResource
+		resID    int64
+		filePath string
+		err      error
+	}
+
+	resultsCh := make(chan cssSubResult, len(allCSSSubResources))
+	var wg sync.WaitGroup
+	for _, sub := range allCSSSubResources {
+		wg.Add(1)
+		go func(sub cssSubResource) {
+			defer wg.Done()
+			d.globalSem <- struct{}{}
+			defer func() { <-d.globalSem }()
+
+			resID, filePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), pageURL, headers)
+			resultsCh <- cssSubResult{sub: sub, resID: resID, filePath: filePath, err: err}
+		}(sub)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	for result := range resultsCh {
+		if result.err != nil {
+			log.Printf("Failed to process CSS resource %s: %v", result.sub.absoluteURL, result.err)
+			continue
+		}
+		appendUniqueResourceID(resourceIDs, seen, result.resID)
+		rewriter.AddMapping(result.sub.absoluteURL, result.filePath)
+	}
+}
+
+func (d *Deduplicator) archiveFrameCapture(frame models.FrameCapture, headers map[string]string, pageID int64, timestamp string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) (int64, string, error) {
+	if cached, ok := archived[frame.URL]; ok {
+		appendUniqueResourceID(resourceIDs, seen, cached.resourceID)
+		return cached.resourceID, cached.filePath, nil
+	}
+	if visiting[frame.URL] {
+		return 0, "", fmt.Errorf("cyclic iframe reference: %s", frame.URL)
+	}
+	visiting[frame.URL] = true
+	defer delete(visiting, frame.URL)
+
+	rewrittenHTML, err := d.rewriteCapturedHTML(frame.HTML, frame.URL, headers, pageID, timestamp, frameMap, resourceIDs, seen, visiting, archived)
+	if err != nil {
+		return 0, "", err
+	}
+
+	resourceID, filePath, _, err := d.processInlineResource(frame.URL, "html", []byte(rewrittenHTML))
+	if err != nil {
+		return 0, "", err
+	}
+
+	archived[frame.URL] = processedInlineHTML{resourceID: resourceID, filePath: filePath}
+	appendUniqueResourceID(resourceIDs, seen, resourceID)
+	return resourceID, filePath, nil
+}
+
+func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers map[string]string, pageID int64, timestamp string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) (string, error) {
+	htmlResources := d.htmlExtractor.ExtractResources(htmlContent, baseURL)
+	rewriter := NewURLRewriter()
+	rewriter.SetPageID(pageID)
+	rewriter.SetTimestamp(timestamp)
+	rewriter.SetBaseURL(baseURL)
+
+	var cssWorkItems []cssWorkItem
+	for _, res := range htmlResources {
+		if frame, ok := frameMap[res.URL]; ok {
+			resourceID, filePath, err := d.archiveFrameCapture(frame, headers, pageID, timestamp, frameMap, resourceIDs, seen, visiting, archived)
+			if err != nil {
+				log.Printf("Failed to process iframe capture %s: %v", res.URL, err)
+				continue
+			}
+			appendUniqueResourceID(resourceIDs, seen, resourceID)
+			rewriter.AddMapping(res.URL, filePath)
+			continue
+		}
+
+		resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, baseURL, headers)
+		if err != nil {
+			log.Printf("Failed to process resource %s: %v", res.URL, err)
+			continue
+		}
+
+		appendUniqueResourceID(resourceIDs, seen, resourceID)
+		rewriter.AddMapping(res.URL, filePath)
+
+		if res.Type == "css" {
+			cssData := data
+			if cssData == nil && filePath != "" {
+				if fileData, readErr := d.storage.ReadResource(filePath); readErr == nil {
+					cssData = fileData
+				} else {
+					log.Printf("Failed to read CSS file for sub-resource extraction: %s: %v", filePath, readErr)
+				}
+			}
+			if cssData != nil {
+				cssWorkItems = append(cssWorkItems, cssWorkItem{cssContent: string(cssData), cssURL: res.URL})
+			}
+		}
+	}
+
+	d.processCSSWorkItems(cssWorkItems, baseURL, headers, rewriter, resourceIDs, seen)
+
+	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(htmlContent), baseURL)
+	return rewriter.RewriteHTML(normalizedHTML), nil
+}
+
 // ProcessCapture 处理完整的页面捕获，返回 (pageID, action, error)
 func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string, error) {
 	capturedAt := time.Now()
 
-	// 计算 HTML 内容哈希（流式写入，避免拷贝 []byte(req.HTML)）
-	hasher := sha256.New()
-	hasher.Write([]byte(req.HTML))
-	contentHash := hex.EncodeToString(hasher.Sum(nil))
+	contentHash := hashCaptureContent(req.HTML, req.Frames)
 
 	// 检查是否存在相同 URL 和内容哈希的页面
 	existingPage, err := d.db.GetPageByURLAndHash(req.URL, contentHash)
@@ -311,20 +568,8 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		return existingPage.ID, models.ArchiveActionUnchanged, nil
 	}
 
-	// 内容有变化或首次访问，创建新记录
-
-	// 从 HTML 中提取所有资源 URL
-	htmlResources := d.htmlExtractor.ExtractResources(req.HTML, req.URL)
-
-	allResources := make([]models.ResourceReference, 0, len(htmlResources))
-	for _, res := range htmlResources {
-		allResources = append(allResources, models.ResourceReference{
-			URL:  res.URL,
-			Type: res.Type,
-		})
-	}
-
-	log.Printf("Total resources to process: %d", len(allResources))
+	frameMap := buildFrameCaptureMap(req.Frames)
+	log.Printf("Total resources to process: %d (frames: %d)", len(d.htmlExtractor.ExtractResources(req.HTML, req.URL)), len(frameMap))
 
 	// 先创建页面记录以获取 pageID（用于生成正确的资源路径）
 	// 使用临时 HTML 创建页面
@@ -335,9 +580,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 
 	// 提取正文纯文本（在释放 HTML 之前）
 	bodyText := ExtractBodyText(req.HTML)
-
-	// 将 HTML 保存到局部变量，后续使用 rawHTML 避免长时间持有 req.HTML 引用
-	rawHTML := req.HTML
 
 	pageID, err := d.db.CreatePage(req.URL, req.Title, tempHTMLPath, contentHash, capturedAt)
 	if err != nil {
@@ -357,184 +599,14 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	// 生成时间戳用于资源路径
 	timestamp := capturedAt.Format("20060102150405")
 
-	// 创建 URL 重写器
-	rewriter := NewURLRewriter()
-	rewriter.SetPageID(pageID)
-	rewriter.SetTimestamp(timestamp)
-	rewriter.SetBaseURL(req.URL)
-
 	var resourceIDs []int64
-
-	// 并行处理资源
-	type resourceResult struct {
-		res        models.ResourceReference
-		resourceID int64
-		data       []byte
-		filePath   string
-		err        error
-	}
-
-	resultsCh := make(chan resourceResult, len(allResources))
-	sem := d.globalSem // 全局信号量，跨所有页面共享
-	var wg sync.WaitGroup
 	startTime := time.Now()
-
-	for _, res := range allResources {
-		wg.Add(1)
-		go func(res models.ResourceReference) {
-			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("PANIC recovered in resource goroutine for %s: %v", res.URL, r)
-					resultsCh <- resourceResult{res: res, err: fmt.Errorf("panic: %v", r)}
-				}
-			}()
-
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, req.URL, req.Headers)
-			if err != nil {
-				resultsCh <- resourceResult{res: res, err: err}
-				return
-			}
-
-			resultsCh <- resourceResult{
-				res:        res,
-				resourceID: resourceID,
-				data:       data,
-				filePath:   filePath,
-			}
-		}(res)
+	resourceIDSet := make(map[int64]struct{})
+	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
+	if err != nil {
+		return 0, "", fmt.Errorf("rewrite html failed: %w", err)
 	}
-
-	go func() {
-		wg.Wait()
-		close(resultsCh)
-	}()
-
-	// 收集结果
-	type cssWork struct {
-		cssContent string
-		cssURL     string
-	}
-	var cssWorkItems []cssWork
-
-	processedCount := 0
-	failedCount := 0
-	lastLogTime := time.Now()
-
-	for result := range resultsCh {
-		processedCount++
-
-		// 每处理 50 个资源或每 10 秒输出一次进度
-		if processedCount%50 == 0 || time.Since(lastLogTime) > 10*time.Second {
-			log.Printf("Resource processing progress: %d/%d completed (failed: %d)", processedCount, len(allResources), failedCount)
-			lastLogTime = time.Now()
-		}
-
-		if result.err != nil {
-			failedCount++
-			log.Printf("Failed to process resource %s: %v", result.res.URL, result.err)
-			continue
-		}
-
-		resourceIDs = append(resourceIDs, result.resourceID)
-		rewriter.AddMapping(result.res.URL, result.filePath)
-
-		// 收集需要处理的 CSS 文件
-		if result.res.Type == "css" {
-			cssData := result.data
-			// 大文件流式落盘后 data 为 nil，需要从磁盘读回以提取子资源
-			if cssData == nil && result.filePath != "" {
-				if fileData, readErr := d.storage.ReadResource(result.filePath); readErr == nil {
-					cssData = fileData
-				} else {
-					log.Printf("Failed to read CSS file for sub-resource extraction: %s: %v", result.filePath, readErr)
-				}
-			}
-			if cssData != nil {
-				cssWorkItems = append(cssWorkItems, cssWork{
-					cssContent: string(cssData),
-					cssURL:     result.res.URL,
-				})
-			}
-		}
-	}
-
-	log.Printf("Resource processing completed: %d succeeded, %d failed, took %v", len(resourceIDs), failedCount, time.Since(startTime))
-
-	// 处理 CSS 中引用的资源（收集所有子资源后并行处理）
-	type cssSubResource struct {
-		absoluteURL string
-	}
-	var allCSSSubResources []cssSubResource
-
-	for _, cw := range cssWorkItems {
-		cssResources := d.cssParser.ExtractResources(cw.cssContent)
-		for _, cssResURL := range cssResources {
-			absoluteURL := d.resolveURL(cw.cssURL, cssResURL)
-			allCSSSubResources = append(allCSSSubResources, cssSubResource{
-				absoluteURL: absoluteURL,
-			})
-		}
-	}
-
-	// 并行处理 CSS 子资源
-	if len(allCSSSubResources) > 0 {
-		type cssSubResult struct {
-			sub      cssSubResource
-			resID    int64
-			filePath string
-			err      error
-		}
-
-		subResultsCh := make(chan cssSubResult, len(allCSSSubResources))
-		var subWg sync.WaitGroup
-
-		for _, sub := range allCSSSubResources {
-			subWg.Add(1)
-			go func(sub cssSubResource) {
-				defer subWg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				subResourceID, subFilePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), req.URL, req.Headers)
-				if err != nil {
-					subResultsCh <- cssSubResult{sub: sub, err: err}
-					return
-				}
-
-				subResultsCh <- cssSubResult{
-					sub:      sub,
-					resID:    subResourceID,
-					filePath: subFilePath,
-				}
-			}(sub)
-		}
-
-		go func() {
-			subWg.Wait()
-			close(subResultsCh)
-		}()
-
-		for result := range subResultsCh {
-			if result.err != nil {
-				log.Printf("Failed to process CSS resource %s: %v", result.sub.absoluteURL, result.err)
-				continue
-			}
-
-			resourceIDs = append(resourceIDs, result.resID)
-			rewriter.AddMapping(result.sub.absoluteURL, result.filePath)
-		}
-	}
-
-	// 重写 HTML 中的资源 URL
-	// 1. 规范化 ../ 路径  2. 解析相对路径为绝对 URL  3. 替换为归档路径
-	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(rawHTML), req.URL)
-	rawHTML = "" // 释放原始 HTML
-	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
-	normalizedHTML = "" // 释放中间结果
+	log.Printf("Resource processing completed: %d linked resources, took %v", len(resourceIDs), time.Since(startTime))
 
 	// 更新保存的 HTML 文件（用重写后的内容替换临时内容）
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
@@ -564,10 +636,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		return "", fmt.Errorf("page not found: %d", pageID)
 	}
 
-	// 2. 计算新内容哈希（流式写入，避免拷贝 []byte(req.HTML)）
-	hasher := sha256.New()
-	hasher.Write([]byte(req.HTML))
-	newContentHash := hex.EncodeToString(hasher.Sum(nil))
+	newContentHash := hashCaptureContent(req.HTML, req.Frames)
 
 	// 3. 如果内容未变化，仅更新时间
 	if newContentHash == page.ContentHash {
@@ -586,18 +655,8 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		return "", fmt.Errorf("failed to delete old page resources: %w", err)
 	}
 
-	// 5. 处理新内容（复用 ProcessCapture 的资源处理逻辑）
-	extractStart := time.Now()
-	htmlResources := d.htmlExtractor.ExtractResources(req.HTML, req.URL)
-	allResources := make([]models.ResourceReference, 0, len(htmlResources))
-	for _, res := range htmlResources {
-		allResources = append(allResources, models.ResourceReference{
-			URL:  res.URL,
-			Type: res.Type,
-		})
-	}
-
-	log.Printf("[Update] Extracted %d resources in %v", len(allResources), time.Since(extractStart))
+	frameMap := buildFrameCaptureMap(req.Frames)
+	log.Printf("[Update] Processing capture with %d top-level resources and %d frames", len(d.htmlExtractor.ExtractResources(req.HTML, req.URL)), len(frameMap))
 
 	// 保存新 HTML
 	tempHTMLPath, err := d.storage.SaveHTML(req.URL, req.HTML, capturedAt)
@@ -614,177 +673,17 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 	bodyText = "" // 释放正文文本
 
-	rawHTML := req.HTML
-
 	// 生成时间戳用于资源路径
 	timestamp := capturedAt.Format("20060102150405")
 
-	// 创建 URL 重写器
-	rewriter := NewURLRewriter()
-	rewriter.SetPageID(pageID)
-	rewriter.SetTimestamp(timestamp)
-	rewriter.SetBaseURL(req.URL)
-
 	var resourceIDs []int64
 	processStart := time.Now()
-
-	// 并行处理资源
-	type resourceResult struct {
-		res        models.ResourceReference
-		resourceID int64
-		data       []byte
-		filePath   string
-		err        error
+	resourceIDSet := make(map[int64]struct{})
+	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
+	if err != nil {
+		return "", fmt.Errorf("rewrite html failed: %w", err)
 	}
-
-	resultsCh := make(chan resourceResult, len(allResources))
-	sem := d.globalSem // 全局信号量，跨所有页面共享
-	var wg sync.WaitGroup
-
-	for _, res := range allResources {
-		wg.Add(1)
-		go func(res models.ResourceReference) {
-			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[Update] PANIC recovered in resource goroutine for %s: %v", res.URL, r)
-					resultsCh <- resourceResult{res: res, err: fmt.Errorf("panic: %v", r)}
-				}
-			}()
-
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, req.URL, req.Headers)
-			if err != nil {
-				resultsCh <- resourceResult{res: res, err: err}
-				return
-			}
-
-			resultsCh <- resourceResult{
-				res:        res,
-				resourceID: resourceID,
-				data:       data,
-				filePath:   filePath,
-			}
-		}(res)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resultsCh)
-	}()
-
-	type cssWork struct {
-		cssContent string
-		cssURL     string
-	}
-	var cssWorkItems []cssWork
-
-	updateProcessed := 0
-	updateFailed := 0
-	for result := range resultsCh {
-		updateProcessed++
-		if result.err != nil {
-			updateFailed++
-			log.Printf("[Update] Failed to process resource %s: %v", result.res.URL, result.err)
-			continue
-		}
-
-		resourceIDs = append(resourceIDs, result.resourceID)
-		rewriter.AddMapping(result.res.URL, result.filePath)
-
-		if result.res.Type == "css" {
-			cssData := result.data
-			if cssData == nil && result.filePath != "" {
-				if fileData, readErr := d.storage.ReadResource(result.filePath); readErr == nil {
-					cssData = fileData
-				} else {
-					log.Printf("[Update] Failed to read CSS file for sub-resource extraction: %s: %v", result.filePath, readErr)
-				}
-			}
-			if cssData != nil {
-				cssWorkItems = append(cssWorkItems, cssWork{
-					cssContent: string(cssData),
-					cssURL:     result.res.URL,
-				})
-			}
-		}
-	}
-	log.Printf("[Update] Processed %d resources (%d failed) in %v", len(resourceIDs), updateFailed, time.Since(processStart))
-
-	// 处理 CSS 中引用的资源
-	type cssSubResource struct {
-		absoluteURL string
-	}
-	var allCSSSubResources []cssSubResource
-
-	for _, cw := range cssWorkItems {
-		cssResources := d.cssParser.ExtractResources(cw.cssContent)
-		for _, cssResURL := range cssResources {
-			absoluteURL := d.resolveURL(cw.cssURL, cssResURL)
-			allCSSSubResources = append(allCSSSubResources, cssSubResource{
-				absoluteURL: absoluteURL,
-			})
-		}
-	}
-
-	if len(allCSSSubResources) > 0 {
-		cssSubStart := time.Now()
-		log.Printf("[Update] Processing %d CSS sub-resources", len(allCSSSubResources))
-		type cssSubResult struct {
-			sub      cssSubResource
-			resID    int64
-			filePath string
-			err      error
-		}
-
-		subResultsCh := make(chan cssSubResult, len(allCSSSubResources))
-		var subWg sync.WaitGroup
-
-		for _, sub := range allCSSSubResources {
-			subWg.Add(1)
-			go func(sub cssSubResource) {
-				defer subWg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				subResourceID, subFilePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), req.URL, req.Headers)
-				if err != nil {
-					subResultsCh <- cssSubResult{sub: sub, err: err}
-					return
-				}
-
-				subResultsCh <- cssSubResult{
-					sub:      sub,
-					resID:    subResourceID,
-					filePath: subFilePath,
-				}
-			}(sub)
-		}
-
-		go func() {
-			subWg.Wait()
-			close(subResultsCh)
-		}()
-
-		for result := range subResultsCh {
-			if result.err != nil {
-				log.Printf("[Update] Failed to process CSS resource %s: %v", result.sub.absoluteURL, result.err)
-				continue
-			}
-
-			resourceIDs = append(resourceIDs, result.resID)
-			rewriter.AddMapping(result.sub.absoluteURL, result.filePath)
-		}
-		log.Printf("[Update] CSS sub-resources processed in %v", time.Since(cssSubStart))
-	}
-
-	// 重写 HTML 中的资源 URL
-	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(rawHTML), req.URL)
-	rawHTML = "" // 释放原始 HTML
-	rewrittenHTML := rewriter.RewriteHTML(normalizedHTML)
-	normalizedHTML = "" // 释放中间结果
+	log.Printf("[Update] Processed %d linked resources in %v", len(resourceIDs), time.Since(processStart))
 
 	// 更新保存的 HTML 文件
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
@@ -859,6 +758,9 @@ func (d *Deduplicator) guessResourceType(url string) string {
 		strings.HasSuffix(lower, ".svg") || strings.HasSuffix(lower, ".webp") ||
 		strings.HasSuffix(lower, ".ico") {
 		return "image"
+	}
+	if strings.Contains(lower, ".html") || strings.Contains(lower, ".htm") || strings.Contains(lower, "/html/") {
+		return "html"
 	}
 
 	return "other"

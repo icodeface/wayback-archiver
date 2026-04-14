@@ -11,6 +11,7 @@ import (
 // Pre-compiled regexes for HTMLResourceExtractor（避免每次请求重复编译）
 var (
 	imgSrcRe      = regexp.MustCompile(`<img[^>]*\ssrc=["']([^"']+)["']`)
+	iframeSrcRe   = regexp.MustCompile(`<iframe[^>]*\ssrc=["']([^"']+)["']`)
 	scriptSrcRe   = regexp.MustCompile(`<script[^>]+src=["']([^"']+)["']`)
 	linkTagRe     = regexp.MustCompile(`<link[^>]+>`)
 	relAttrRe     = regexp.MustCompile(`\srel=["']([^"']+)["']`)
@@ -56,6 +57,18 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 			fullURL := e.resolveURL(rawURL, pageURL)
 			if e.isExternalURL(fullURL) {
 				resources[fullURL] = ResourceRef{URL: fullURL, Type: "js"}
+			}
+		}
+	}
+
+	// 提取 <iframe src="...">（保留真正承载内容的子文档）
+	matches = iframeSrcRe.FindAllStringSubmatch(html, -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			rawURL := htmlpkg.UnescapeString(match[1])
+			fullURL := e.resolveURL(rawURL, pageURL)
+			if e.isExternalURL(fullURL) {
+				resources[fullURL] = ResourceRef{URL: fullURL, Type: guessResourceType(fullURL)}
 			}
 		}
 	}
@@ -290,6 +303,9 @@ func guessResourceType(fullURL string) string {
 		strings.Contains(lower, ".svg") ||
 		strings.Contains(lower, ".webp") {
 		return "image"
+	}
+	if strings.Contains(lower, ".html") || strings.Contains(lower, ".htm") || strings.Contains(lower, "/html/") {
+		return "html"
 	}
 	return "other"
 }

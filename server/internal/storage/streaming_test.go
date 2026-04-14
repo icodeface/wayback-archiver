@@ -555,6 +555,7 @@ func TestGetExtension(t *testing.T) {
 		{"css", ".css"},
 		{"js", ".js"},
 		{"font", ".font"},
+		{"html", ".html"},
 		{"other", ".bin"},
 		{"video", ".bin"},
 		{"", ".bin"},

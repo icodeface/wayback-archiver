@@ -189,3 +189,23 @@ func TestExtractResources_VideoPoster(t *testing.T) {
 		t.Error("Should extract video poster")
 	}
 }
+
+func TestExtractResources_IframeHTML(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	html := `<html><body><iframe src="https://example.com/embed/app.html?id=1"></iframe></body></html>`
+	resources := extractor.ExtractResources(html, "https://example.com/page")
+
+	found := false
+	for _, r := range resources {
+		if r.URL == "https://example.com/embed/app.html?id=1" {
+			found = true
+			if r.Type != "html" {
+				t.Fatalf("iframe resource type = %q, want html", r.Type)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("should extract iframe HTML resource")
+	}
+}

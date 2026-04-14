@@ -14,21 +14,24 @@
 import { CONFIG } from './config';
 import { CaptureData } from './types';
 import { shouldSkipPage } from './page-filter';
-import { freezePageState, waitForDOMStable, serializeCSSOMToDOM } from './page-freezer';
-import { inlineLayoutStyles } from './style-inliner';
+import { waitForDOMStable } from './page-freezer';
 import { sendToServer, updateOnServer } from './archiver';
 import { DOMCollector } from './dom-collector';
+import { captureDocumentHTMLWithFrames, setupFrameCaptureBridge } from './frame-capture';
 
 // Early exit check before any initialization
 if (shouldSkipPage()) {
   console.log('[Wayback] Skipping page:', window.location.href);
 } else {
   console.log('[Wayback] Script loaded for:', window.location.href);
-  initializeArchiver();
+  if (window.self === window.top) {
+    initializeArchiver();
+  } else {
+    setupFrameCaptureBridge();
+  }
 }
 
 function initializeArchiver(): void {
-  // Save native timers before freezePageState() replaces them with noops
   const nativeSetTimeout = window.setTimeout.bind(window);
   const nativeClearTimeout = window.clearTimeout.bind(window);
   const nativeSetInterval = window.setInterval.bind(window);
@@ -85,11 +88,9 @@ function initializeArchiver(): void {
         }
       }
 
-      // Serialize CSSOM without freezing — we need timers alive for the DOM monitor
-      serializeCSSOMToDOM();
-
-      // 在克隆 DOM 上内联布局样式，不影响原始页面显示
-      let html = inlineLayoutStyles();
+      // 在克隆 DOM 上内联布局样式，并把 iframe 当前内容嵌入快照
+      const captured = await captureDocumentHTMLWithFrames();
+      let html = captured.html;
 
       // Merge any nodes removed by virtual scrolling before/during capture
       if (domCollector.collectedCount > 0) {
@@ -101,6 +102,7 @@ function initializeArchiver(): void {
         url: window.location.href,
         title: document.title,
         html,
+        frames: captured.frames,
         headers,
       };
 
@@ -229,11 +231,9 @@ function initializeArchiver(): void {
         try {
           console.log(`[Wayback] DOM changed (${currentMutations} mutations), triggering update...`);
 
-          // Only serialize CSSOM — don't freeze, to keep the SPA functional
-          serializeCSSOMToDOM();
-
-          // 在克隆 DOM 上内联布局样式
-          let newHTML = inlineLayoutStyles();
+          // 在克隆 DOM 上内联布局样式，并把 iframe 当前内容嵌入快照
+          const captured = await captureDocumentHTMLWithFrames();
+          let newHTML = captured.html;
 
           // Merge any nodes that were removed by virtual scrolling back into the snapshot
           if (domCollector.collectedCount > 0) {
@@ -251,6 +251,7 @@ function initializeArchiver(): void {
             url: window.location.href,
             title: document.title,
             html: newHTML,
+            frames: captured.frames,
             headers: captureData?.headers,
           };
 

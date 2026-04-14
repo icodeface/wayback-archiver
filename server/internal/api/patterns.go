@@ -18,6 +18,7 @@ var (
 	srcsetAttrRe = regexp.MustCompile(`(?i)\ssrcset=["']([^"']+)["']`)
 	posterAttrRe = regexp.MustCompile(`(?i)\sposter=["']([^"']+)["']`)
 	dataAttrRe   = regexp.MustCompile(`(?i)\sdata=["']([^"']+)["']`)
+	srcdocAttrRe = regexp.MustCompile(`(?i)\ssrcdoc=["']([^"']*)["']`)
 
 	// CSS patterns
 	cssURLRe      = regexp.MustCompile(`url\(['"]?([^'")\s]+)['"]?\)`)
@@ -33,10 +34,14 @@ var (
 
 	// ViewPage patterns (previously compiled per-request)
 	baseTagRe        = regexp.MustCompile(`(?i)<base\s[^>]*>`)
+	iframeTagFullRe  = regexp.MustCompile(`(?is)<iframe\b[^>]*>`)
 	eventHandlerDQRe = regexp.MustCompile(`(?i)\s+on\w+\s*=\s*"[^"]*"`)
 	eventHandlerSQRe = regexp.MustCompile(`(?i)\s+on\w+\s*=\s*'[^']*'`)
 	jsProtocolRe     = regexp.MustCompile(`(?i)href\s*=\s*["']javascript:[^"']*["']`)
 	lazyLoadRe       = regexp.MustCompile(`(?i)\s+loading\s*=\s*["']lazy["']`)
+	frameTagRe       = regexp.MustCompile(`(?is)<frame\b[^>]*>.*?</frame>|<frame\b[^>]*/?>`)
+	objectTagRe      = regexp.MustCompile(`(?is)<object\b[^>]*>.*?</object>|<object\b[^>]*/>`)
+	embedTagRe       = regexp.MustCompile(`(?is)<embed\b[^>]*/?>`)
 	autoplayAttrRe   = regexp.MustCompile(`(?i)\s+autoplay(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?`)
 	controlsAttrRe   = regexp.MustCompile(`(?i)\s+controls(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?`)
 	sourceTagRe      = regexp.MustCompile(`(?is)<source[^>]*>`)
