@@ -8,7 +8,7 @@ export const CONFIG = {
   SPA_TRANSITION_DELAY: 500,        // ms to wait after SPA navigation before starting collector (shorter than DOM_STABILITY_DELAY)
   MUTATION_OBSERVER_TIMEOUT: 10000, // max ms to wait for DOM stability
   DOM_STABLE_TIME: 1000,            // ms of no mutations to consider DOM stable
-  FRAME_CAPTURE_TIMEOUT: 8000,      // max ms to wait for each iframe capture response
+  FRAME_CAPTURE_TIMEOUT: 20000,     // max ms to wait for each iframe capture response (must cover child-side readiness waits)
   FRAME_MUTATION_OBSERVER_TIMEOUT: 5000, // max ms to wait for iframe DOM stability
   FRAME_DOM_STABLE_TIME: 500,       // ms of no iframe mutations to consider stable
   FRAME_CONTENT_WAIT_TIMEOUT: 10000, // max ms to wait for iframe body content to appear

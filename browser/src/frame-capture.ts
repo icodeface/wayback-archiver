@@ -7,6 +7,8 @@ import { FrameCapture } from './types';
 const FRAME_ATTR = 'data-wayback-frame-id';
 const SOURCE = 'wayback-frame-capture';
 
+type FrameCaptureStatus = 'ok' | 'empty' | 'placeholder' | 'login_required';
+
 type FrameCaptureRequest = {
   source: typeof SOURCE;
   type: 'capture-frame';
@@ -17,6 +19,7 @@ type FrameCaptureResult = {
   source: typeof SOURCE;
   type: 'frame-result';
   requestId: string;
+  status: FrameCaptureStatus;
   html: string;
   url: string;
   title: string;
@@ -42,6 +45,48 @@ function hasMeaningfulBodyContent(doc: Document): boolean {
     const tag = el.tagName.toLowerCase();
     return tag !== 'script' && tag !== 'style' && tag !== 'link' && tag !== 'meta';
   });
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function isElementHidden(element: Element | null): boolean {
+  if (!element) {
+    return false;
+  }
+
+  const classAttr = element.getAttribute('class') || '';
+  if (classAttr.split(/\s+/).some((name) => name.toLowerCase() === 'none')) {
+    return true;
+  }
+
+  const styleAttr = normalizeText(element.getAttribute('style') || '');
+  return styleAttr.includes('display:none') || styleAttr.includes('visibility:hidden');
+}
+
+function assessFrameDocument(doc: Document, url: string): FrameCaptureStatus {
+  if (!hasMeaningfulBodyContent(doc)) {
+    return 'empty';
+  }
+
+  if (isElementHidden(doc.body)) {
+    return 'placeholder';
+  }
+
+  void url;
+  return 'ok';
+}
+
+async function waitForFrameReady(url: string): Promise<void> {
+  const deadline = Date.now() + CONFIG.FRAME_CONTENT_WAIT_TIMEOUT;
+
+  while (Date.now() < deadline) {
+    if (assessFrameDocument(document, url) === 'ok') {
+      return;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, CONFIG.FRAME_CONTENT_CHECK_INTERVAL));
+  }
 }
 
 async function waitForMeaningfulBodyContent(): Promise<void> {
@@ -72,6 +117,7 @@ function isCaptureResult(data: unknown): data is FrameCaptureResult {
     (data as { source?: string }).source === SOURCE &&
     (data as { type?: string }).type === 'frame-result' &&
     typeof (data as { requestId?: string }).requestId === 'string' &&
+    typeof (data as { status?: string }).status === 'string' &&
     typeof (data as { html?: string }).html === 'string' &&
     typeof (data as { url?: string }).url === 'string';
 }
@@ -98,8 +144,8 @@ function markFrames(): HTMLIFrameElement[] {
   return frames;
 }
 
-function embedCapturedFrames(parentHTML: string, capturedFrames: Map<string, FrameCaptureResult>): string {
-  if (capturedFrames.size === 0) {
+function embedCapturedFrames(parentHTML: string, capturedFrames: Map<string, FrameCaptureResult>, skippedFrames: Map<string, FrameCaptureResult>): string {
+  if (capturedFrames.size === 0 && skippedFrames.size === 0) {
     return parentHTML;
   }
 
@@ -111,11 +157,20 @@ function embedCapturedFrames(parentHTML: string, capturedFrames: Map<string, Fra
     if (!frameId) continue;
 
     const capture = capturedFrames.get(frameId);
-    if (!capture) continue;
+    if (capture) {
+      frame.setAttribute('data-wayback-frame-key', frameId);
+      frame.setAttribute('data-wayback-original-src', capture.url);
+      frame.setAttribute('src', capture.url);
+      frame.removeAttribute('srcdoc');
+      continue;
+    }
 
-    frame.setAttribute('data-wayback-frame-key', frameId);
-    frame.setAttribute('data-wayback-original-src', capture.url);
-    frame.setAttribute('src', capture.url);
+    const skipped = skippedFrames.get(frameId);
+    if (!skipped) continue;
+
+    frame.setAttribute('data-wayback-frame-status', skipped.status);
+    frame.setAttribute('data-wayback-original-src', skipped.url);
+    frame.removeAttribute('src');
     frame.removeAttribute('srcdoc');
   }
 
@@ -166,6 +221,7 @@ async function requestFrameCapture(frame: HTMLIFrameElement): Promise<FrameCaptu
 export async function captureDocumentHTMLWithFrames(): Promise<DocumentCaptureResult> {
   const frames = markFrames();
   const capturedFrames = new Map<string, FrameCaptureResult>();
+  const skippedFrames = new Map<string, FrameCaptureResult>();
   const collectedFrames: FrameCapture[] = [];
 
   if (frames.length > 0) {
@@ -174,14 +230,19 @@ export async function captureDocumentHTMLWithFrames(): Promise<DocumentCaptureRe
       const result = results[i];
       const frameId = frames[i].getAttribute(FRAME_ATTR);
       if (result && frameId) {
-        capturedFrames.set(frameId, result);
-        collectedFrames.push({
-          key: frameId,
-          url: result.url,
-          title: result.title,
-          html: result.html,
-        });
-        collectedFrames.push(...result.frames);
+        if (result.status === 'ok') {
+          capturedFrames.set(frameId, result);
+          collectedFrames.push({
+            key: frameId,
+            url: result.url,
+            title: result.title,
+            html: result.html,
+          });
+          collectedFrames.push(...result.frames);
+        } else {
+          skippedFrames.set(frameId, result);
+          console.warn(`[Wayback] Skipping iframe capture (${result.status}):`, result.url);
+        }
       }
     }
   }
@@ -189,7 +250,7 @@ export async function captureDocumentHTMLWithFrames(): Promise<DocumentCaptureRe
   serializeCSSOMToDOM();
   const html = normalizeCapturedHTMLURLs(inlineLayoutStyles(), window.location.href);
   return {
-    html: embedCapturedFrames(html, capturedFrames),
+    html: embedCapturedFrames(html, capturedFrames, skippedFrames),
     frames: dedupeFrames(collectedFrames),
   };
 }
@@ -213,15 +274,18 @@ export function setupFrameCaptureBridge(): void {
 
       try {
         await waitForMeaningfulBodyContent();
+        await waitForFrameReady(window.location.href);
       } catch {
         // Fall through and capture best-effort current DOM.
       }
 
       const captured = await captureDocumentHTMLWithFrames();
+      const status = assessFrameDocument(document, window.location.href);
       window.parent.postMessage({
         source: SOURCE,
         type: 'frame-result',
         requestId: event.data.requestId,
+        status,
         html: captured.html,
         url: window.location.href,
         title: document.title,
