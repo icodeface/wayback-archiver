@@ -193,6 +193,7 @@ CSS 文件按内容哈希去重后，会被多个页面共享复用。
 - 移除 `<script>`、`<noscript>`、`<base>` 标签
 - 移除内联事件处理器和 `javascript:` 链接
 - 移除 `loading="lazy"`（归档页面无 JS，懒加载无法触发）
+- 移除 `<video autoplay>` 并补上原生 `controls`，避免自动播放，同时保留手动播放能力
 - 隐藏无源的 `<video>` 元素
 - 修复未重写的 `srcset`、嵌套 `<button>`
 - 移除 SPA loading 覆盖层

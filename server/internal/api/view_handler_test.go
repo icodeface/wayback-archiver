@@ -529,6 +529,105 @@ func TestFixScrollAnimationOpacity_LeadingWhitespace(t *testing.T) {
 	}
 }
 
+func TestHideVideoElements_DisablesAutoplayAndAddsControls(t *testing.T) {
+	html := `<video autoplay src="/video.mp4"></video>`
+	result := hideVideoElements(html)
+
+	if strings.Contains(strings.ToLower(result), "autoplay") {
+		t.Fatalf("autoplay should be removed, got: %s", result)
+	}
+	if !strings.Contains(strings.ToLower(result), "controls") {
+		t.Fatalf("controls should be added for manual playback, got: %s", result)
+	}
+	if !strings.Contains(result, `src="/video.mp4"`) {
+		t.Fatalf("video src should be preserved, got: %s", result)
+	}
+}
+
+func TestHideVideoElements_PreservesExistingControls(t *testing.T) {
+	html := `<video controls autoplay><source src="/video.mp4"></video>`
+	result := hideVideoElements(html)
+
+	if strings.Contains(strings.ToLower(result), "autoplay") {
+		t.Fatalf("autoplay should be removed, got: %s", result)
+	}
+	if strings.Count(strings.ToLower(result), "controls") != 1 {
+		t.Fatalf("controls should not be duplicated, got: %s", result)
+	}
+}
+
+func TestHideVideoElements_HidesEmptyVideo(t *testing.T) {
+	html := `<video autoplay></video>`
+	result := hideVideoElements(html)
+
+	if !strings.Contains(result, `style="display:none!important"`) {
+		t.Fatalf("empty video should be hidden, got: %s", result)
+	}
+	if strings.Contains(strings.ToLower(result), "autoplay") {
+		t.Fatalf("autoplay should be removed from hidden empty video, got: %s", result)
+	}
+}
+
+func TestHideVideoElements_AddsControlsWhenVideoUsesSourceChild(t *testing.T) {
+	html := `<video autoplay><source src="/video.mp4" type="video/mp4"></video>`
+	result := hideVideoElements(html)
+
+	if strings.Contains(strings.ToLower(result), "autoplay") {
+		t.Fatalf("autoplay should be removed, got: %s", result)
+	}
+	if !strings.Contains(strings.ToLower(result), "controls") {
+		t.Fatalf("controls should be added for video with source child, got: %s", result)
+	}
+	if !strings.Contains(result, `<source src="/video.mp4" type="video/mp4">`) {
+		t.Fatalf("source child should be preserved, got: %s", result)
+	}
+}
+
+func TestHideVideoElements_SelfClosingVideo(t *testing.T) {
+	html := `<video autoplay src="/video.mp4"/>`
+	result := hideVideoElements(html)
+
+	if strings.Contains(strings.ToLower(result), "autoplay") {
+		t.Fatalf("autoplay should be removed from self-closing video, got: %s", result)
+	}
+	if !strings.Contains(strings.ToLower(result), "controls") {
+		t.Fatalf("controls should be added to self-closing video, got: %s", result)
+	}
+	if !strings.Contains(result, `src="/video.mp4"`) {
+		t.Fatalf("src should be preserved on self-closing video, got: %s", result)
+	}
+}
+
+func TestHideVideoElements_CaseInsensitiveAttributes(t *testing.T) {
+	html := `<video AUTOPLAY SRC="/video.mp4"></video>`
+	result := hideVideoElements(html)
+
+	if strings.Contains(strings.ToLower(result), "autoplay") {
+		t.Fatalf("autoplay should be removed case-insensitively, got: %s", result)
+	}
+	if !strings.Contains(strings.ToLower(result), "controls") {
+		t.Fatalf("controls should be added with uppercase attrs, got: %s", result)
+	}
+	if !strings.Contains(result, `SRC="/video.mp4"`) {
+		t.Fatalf("original src attribute should be preserved, got: %s", result)
+	}
+}
+
+func TestHideVideoElements_PreservesExistingControlsValue(t *testing.T) {
+	html := `<video controls="controls" autoplay src="/video.mp4"></video>`
+	result := hideVideoElements(html)
+
+	if strings.Contains(strings.ToLower(result), "autoplay") {
+		t.Fatalf("autoplay should be removed, got: %s", result)
+	}
+	if len(controlsAttrRe.FindAllString(result, -1)) != 1 {
+		t.Fatalf("existing controls attribute should be preserved without duplication, got: %s", result)
+	}
+	if !strings.Contains(result, `controls="controls"`) {
+		t.Fatalf("existing controls value should be preserved, got: %s", result)
+	}
+}
+
 // --- CSP meta 标签移除测试 ---
 
 func TestRemoveCSPMeta(t *testing.T) {

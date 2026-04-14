@@ -44,6 +44,19 @@ const GSAP_ANIM_RE = /translate:\s*none|rotate:\s*none|scale:\s*none/;
 const ANIM_STYLE_CLEANUP_RE = /\b(?:opacity:\s*0|transform:\s*[^;]+|translate:\s*[^;]+|rotate:\s*[^;]+|scale:\s*[^;]+|stroke-dashoffset:\s*[^;]+)\s*;?/g;
 const MULTI_SEMI_RE = /;\s*;+/g;
 
+function neutralizeClonedMedia(cloneRoot: ParentNode): void {
+  for (const node of Array.from(cloneRoot.querySelectorAll('video, audio'))) {
+    if (!(node instanceof HTMLMediaElement)) continue;
+
+    // Detached media clones can still start fetching/playing on some sites.
+    // Keep src/poster in the serialized HTML, but disable eager playback/loading.
+    node.pause();
+    node.autoplay = false;
+    node.removeAttribute('autoplay');
+    node.preload = 'none';
+  }
+}
+
 // 检测元素是否有 data-animate* 属性（避免 getAttributeNames() 分配数组）
 function hasDataAnimateAttr(el: Element): boolean {
   const attrs = el.attributes;
@@ -151,6 +164,7 @@ export function inlineLayoutStyles(): string {
 
   // 深克隆整棵 DOM 树（不会触发 reflow/repaint）
   const clone = document.documentElement.cloneNode(true) as HTMLElement;
+  neutralizeClonedMedia(clone);
 
   // 同步遍历原始 DOM 和克隆 DOM
   const origWalker = document.createTreeWalker(

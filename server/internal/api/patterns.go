@@ -6,9 +6,9 @@ import "regexp"
 // These patterns are compiled once at package initialization and reused throughout the application.
 var (
 	// HTML tag patterns
-	bodyTagRe   = regexp.MustCompile(`(?i)(<body[^>]*>)`)
-	headTagRe   = regexp.MustCompile(`(?i)(<head[^>]*>)`)
-	htmlTagRe   = regexp.MustCompile(`(?i)(<html[^>]*>)`)
+	bodyTagRe     = regexp.MustCompile(`(?i)(<body[^>]*>)`)
+	headTagRe     = regexp.MustCompile(`(?i)(<head[^>]*>)`)
+	htmlTagRe     = regexp.MustCompile(`(?i)(<html[^>]*>)`)
 	scriptTagRe   = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
 	noscriptTagRe = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
 
@@ -37,6 +37,8 @@ var (
 	eventHandlerSQRe = regexp.MustCompile(`(?i)\s+on\w+\s*=\s*'[^']*'`)
 	jsProtocolRe     = regexp.MustCompile(`(?i)href\s*=\s*["']javascript:[^"']*["']`)
 	lazyLoadRe       = regexp.MustCompile(`(?i)\s+loading\s*=\s*["']lazy["']`)
+	autoplayAttrRe   = regexp.MustCompile(`(?i)\s+autoplay(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?`)
+	controlsAttrRe   = regexp.MustCompile(`(?i)\s+controls(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?`)
 	sourceTagRe      = regexp.MustCompile(`(?is)<source[^>]*>`)
 	videoBlockRe     = regexp.MustCompile(`(?is)<video\b([^>]*)>(.*?)</video>|<video\b([^>]*)/>`)
 )
