@@ -122,7 +122,7 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	// 移除 loading="lazy"，归档页面禁用了 JS，懒加载可能无法正常触发
 	modifiedHTML = lazyLoadRe.ReplaceAllString(modifiedHTML, "")
 
-	// 隐藏 <video> 元素 — 归档不保存视频源文件，空 video 标签会渲染为大黑块
+	// 归档页面禁用 JS：关闭视频自动播放、补原生 controls，并隐藏无源 video
 	modifiedHTML = hideVideoElements(modifiedHTML)
 
 	// 修复未重写的 srcset 协议相对 URL（如 srcset="//i1.hdslb.com/..."）
@@ -636,17 +636,27 @@ func fixUnrewrittenSrcset(html string) string {
 	return html
 }
 
-// hideVideoElements 隐藏没有任何视频源的 video 元素
-// 只隐藏既没有 src 属性、内部也没有 <source> 子元素的 video（空壳会渲染为黑块）
+// hideVideoElements 规范化归档页面中的 video 元素
+// 1. 去掉 autoplay，避免归档页一打开就自动播放
+// 2. 给可播放视频补上原生 controls，方便在无 JS 页面中手动播放
+// 3. 隐藏既没有 src、也没有 <source> 的空 video，避免渲染黑块
 func hideVideoElements(html string) string {
 	// 匹配完整的 <video>...</video> 或自闭合 <video/>
 	html = videoBlockRe.ReplaceAllStringFunc(html, func(match string) string {
+		match = autoplayAttrRe.ReplaceAllString(match, "")
+
 		// 有 src 属性 → 保留（不管是本地还是外部）
 		if srcAttrRe.MatchString(match) {
+			if !controlsAttrRe.MatchString(match) {
+				return strings.Replace(match, "<video", `<video controls`, 1)
+			}
 			return match
 		}
 		// 内部有 <source> 子元素 → 保留
 		if strings.Contains(strings.ToLower(match), "<source") {
+			if !controlsAttrRe.MatchString(match) {
+				return strings.Replace(match, "<video", `<video controls`, 1)
+			}
 			return match
 		}
 		// 无源的空 video → 隐藏
