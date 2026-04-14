@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -173,7 +174,7 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 		h.serveRewrittenCSS(c, pageIDInt, resource)
 		return
 	}
-	if resource.ResourceType == "html" {
+	if h.shouldServeArchivedHTML(c, resource) {
 		h.serveArchivedHTMLResource(c, resource)
 		return
 	}
@@ -238,6 +239,65 @@ func (h *Handler) serveArchivedHTMLResource(c *gin.Context, resource *models.Res
 	c.Header("Cache-Control", "public, max-age=31536000")
 	c.Header("Content-Security-Policy", "default-src 'self'; script-src 'none'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'self'; object-src 'none';")
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(sanitized))
+}
+
+func (h *Handler) shouldServeArchivedHTML(c *gin.Context, resource *models.Resource) bool {
+	if resource.ResourceType == "html" {
+		return true
+	}
+
+	fetchDest := strings.ToLower(strings.TrimSpace(c.GetHeader("Sec-Fetch-Dest")))
+	switch fetchDest {
+	case "document", "iframe", "frame":
+		return true
+	}
+
+	accept := strings.ToLower(c.GetHeader("Accept"))
+	if strings.Contains(accept, "text/html") {
+		if looksLikeHTMLURL(resource.URL) {
+			return true
+		}
+		return resourceLooksLikeHTML(filepath.Join(h.dataDir, resource.FilePath))
+	}
+
+	return false
+}
+
+func looksLikeHTMLURL(rawURL string) bool {
+	lower := strings.ToLower(rawURL)
+	if strings.Contains(lower, ".html") || strings.Contains(lower, ".htm") || strings.Contains(lower, "/html/") {
+		return true
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+
+	pathLower := strings.ToLower(parsed.Path)
+	queryLower := strings.ToLower(parsed.RawQuery)
+	if strings.Contains(pathLower, "/cgi-bin/") && (strings.Contains(pathLower, "html") || strings.Contains(queryLower, "html") || strings.Contains(queryLower, "iframe")) {
+		return true
+	}
+
+	return false
+}
+
+func resourceLooksLikeHTML(filePath string) bool {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil || n == 0 {
+		return false
+	}
+
+	sample := strings.ToLower(string(bytes.TrimSpace(buf[:n])))
+	return strings.HasPrefix(sample, "<!doctype html") || strings.HasPrefix(sample, "<html") || strings.HasPrefix(sample, "<head") || strings.HasPrefix(sample, "<body")
 }
 
 func (h *Handler) findResourceForPage(originalURL string, pageID int64) (*models.Resource, error) {
