@@ -534,6 +534,8 @@ func getExtension(resourceType string) string {
 		return ".js"
 	case "font":
 		return ".font"
+	case "html":
+		return ".html"
 	default:
 		return ".bin"
 	}
@@ -544,5 +546,3 @@ func (fs *FileStorage) ReadHTML(relPath string) ([]byte, error) {
 	filePath := filepath.Join(fs.baseDir, relPath)
 	return os.ReadFile(filePath)
 }
-
-

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	htmlpkg "html"
 	"log"
 	"net/http"
 	"net/url"
@@ -93,53 +94,7 @@ func (h *Handler) ViewPage(c *gin.Context) {
 		return
 	}
 
-	modifiedHTML := string(htmlContent)
-
-	// 移除 <base> 标签 — 归档页面的资源路径已重写为本地路径，
-	// <base href="https://原始域名/"> 会导致浏览器将 /archive/... 解析到原始域名
-	modifiedHTML = baseTagRe.ReplaceAllString(modifiedHTML, "")
-
-	// 移除 CSP meta 标签 — upgrade-insecure-requests 会导致 Opera 等浏览器
-	// 将 http://内网IP/archive/... 升级为 https，导致资源无法加载
-	modifiedHTML = metaCSPRe.ReplaceAllString(modifiedHTML, "")
-
-	// 移除所有 <script> 标签
-	modifiedHTML = scriptTagRe.ReplaceAllString(modifiedHTML, "")
-
-	// 移除 <noscript> 标签（CSP 禁用了 JS，浏览器会渲染 noscript 内容，
-	// 导致 SPA 页面显示"需要启用 JavaScript"的错误信息和大片空白）
-	modifiedHTML = noscriptTagRe.ReplaceAllString(modifiedHTML, "")
-
-	// 移除内联事件处理器
-	// 使用两个独立正则分别处理双引号和单引号包裹的属性值，
-	// 避免 [^"']* 在遇到嵌套引号时提前终止匹配（如 onclick="window.open('...')"）
-	modifiedHTML = eventHandlerDQRe.ReplaceAllString(modifiedHTML, "")
-	modifiedHTML = eventHandlerSQRe.ReplaceAllString(modifiedHTML, "")
-
-	// 移除 javascript: 协议的链接
-	modifiedHTML = jsProtocolRe.ReplaceAllString(modifiedHTML, `href="#"`)
-
-	// 移除 loading="lazy"，归档页面禁用了 JS，懒加载可能无法正常触发
-	modifiedHTML = lazyLoadRe.ReplaceAllString(modifiedHTML, "")
-
-	// 归档页面禁用 JS：关闭视频自动播放、补原生 controls，并隐藏无源 video
-	modifiedHTML = hideVideoElements(modifiedHTML)
-
-	// 修复未重写的 srcset 协议相对 URL（如 srcset="//i1.hdslb.com/..."）
-	// 早期归档的页面 srcset 未被重写，在渲染时补偿处理
-	modifiedHTML = fixUnrewrittenSrcset(modifiedHTML)
-
-	// 移除 SPA loading 覆盖层（如 X.com 的 #placeholder 全屏黑色 loading 画面）
-	// 归档页面没有 JS 运行，这些覆盖层永远不会被隐藏，会遮挡真实内容
-	modifiedHTML = removeLoadingOverlays(modifiedHTML)
-
-	// 修复嵌套的 <button> 标签（HTML 规范不允许 button 嵌套 button）
-	// 浏览器遇到嵌套 button 时会隐式关闭外层 button，破坏 DOM 树结构，
-	// 导致后续元素（如 <main>、<section>）被提升到错误的层级
-	modifiedHTML = fixNestedButtons(modifiedHTML)
-
-	// 修复滚动动画元素的 opacity: 0（归档页面没有 JS，动画永远不会触发）
-	modifiedHTML = fixScrollAnimationOpacity(modifiedHTML)
+	modifiedHTML := sanitizeArchivedHTML(string(htmlContent))
 
 	// 注入归档信息栏（传入 nonce 用于 CSP）
 	// 生成随机 nonce，防止归档页面中的恶意脚本绕过 CSP
@@ -149,7 +104,7 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	// 设置安全响应头（允许带 nonce 的内联脚本，用于修复定位问题）
 	c.Header("X-Frame-Options", "SAMEORIGIN")
 	c.Header("Referrer-Policy", "no-referrer")
-	c.Header("Content-Security-Policy", fmt.Sprintf("default-src 'self'; script-src 'nonce-%s'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'none'; object-src 'none';", nonce))
+	c.Header("Content-Security-Policy", fmt.Sprintf("default-src 'self'; script-src 'nonce-%s'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'self'; object-src 'none';", nonce))
 
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(modifiedHTML))
 }
@@ -218,6 +173,10 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 		h.serveRewrittenCSS(c, pageIDInt, resource)
 		return
 	}
+	if resource.ResourceType == "html" {
+		h.serveArchivedHTMLResource(c, resource)
+		return
+	}
 
 	// 读取文件
 	filePath := filepath.Join(h.dataDir, resource.FilePath)
@@ -263,6 +222,22 @@ func (h *Handler) serveRewrittenCSS(c *gin.Context, pageID int64, resource *mode
 	c.Header("Content-Type", "text/css; charset=utf-8")
 	c.Header("Cache-Control", "public, max-age=31536000")
 	c.Data(http.StatusOK, "text/css; charset=utf-8", []byte(rewritten))
+}
+
+func (h *Handler) serveArchivedHTMLResource(c *gin.Context, resource *models.Resource) {
+	filePath := filepath.Join(h.dataDir, resource.FilePath)
+	htmlContent, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Printf("[Proxy] Failed to read HTML file %s: %v", filePath, err)
+		c.String(http.StatusInternalServerError, "Failed to read file")
+		return
+	}
+
+	sanitized := sanitizeArchivedHTML(string(htmlContent))
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.Header("Cache-Control", "public, max-age=31536000")
+	c.Header("Content-Security-Policy", "default-src 'self'; script-src 'none'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'self'; object-src 'none';")
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(sanitized))
 }
 
 func (h *Handler) findResourceForPage(originalURL string, pageID int64) (*models.Resource, error) {
@@ -393,6 +368,8 @@ func detectContentType(resource *models.Resource) string {
 		return detectImageType(resource.FilePath)
 	case "font":
 		return detectFontType(resource.FilePath)
+	case "html":
+		return "text/html; charset=utf-8"
 	default:
 		// 尝试从 URL 路径扩展名推断（如 .jpg、.png）
 		if ct := detectImageType(resource.URL); ct != "image/jpeg" {
@@ -448,6 +425,8 @@ func detectContentTypeByPath(filePath string) string {
 		return "video/webm"
 	case ".mp3":
 		return "audio/mpeg"
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
 	default:
 		return "application/octet-stream"
 	}
@@ -633,6 +612,64 @@ func fixUnrewrittenSrcset(html string) string {
 	// <img> 的 src 已被正确重写，删除 <source> 后浏览器会回退到 <img>
 	html = sourceTagRe.ReplaceAllString(html, "")
 
+	return html
+}
+
+func sanitizeArchivedHTML(html string) string {
+	html = baseTagRe.ReplaceAllString(html, "")
+	html = metaCSPRe.ReplaceAllString(html, "")
+	html = scriptTagRe.ReplaceAllString(html, "")
+	html = noscriptTagRe.ReplaceAllString(html, "")
+	html = eventHandlerDQRe.ReplaceAllString(html, "")
+	html = eventHandlerSQRe.ReplaceAllString(html, "")
+	html = jsProtocolRe.ReplaceAllString(html, `href="#"`)
+	html = lazyLoadRe.ReplaceAllString(html, "")
+	html = hideVideoElements(html)
+	html = removeUnsupportedEmbeddedContent(html)
+	html = fixUnrewrittenSrcset(html)
+	html = removeUnarchivedExternalCSSReferences(html)
+	html = removeLoadingOverlays(html)
+	html = fixNestedButtons(html)
+	html = fixScrollAnimationOpacity(html)
+	return html
+}
+
+// removeUnarchivedExternalCSSReferences 清理仍残留在 HTML 中的外部 CSS 引用。
+// 这些引用通常对应下载失败的资源；保留它们只会让归档页继续请求原站。
+func removeUnarchivedExternalCSSReferences(html string) string {
+	html = cssURLRe.ReplaceAllStringFunc(html, func(match string) string {
+		parts := cssURLRe.FindStringSubmatch(match)
+		if len(parts) < 2 {
+			return match
+		}
+
+		rawURL := strings.TrimSpace(htmlpkg.UnescapeString(parts[1]))
+		rawURL = strings.Trim(rawURL, `"'`)
+		if rawURL == "" {
+			return match
+		}
+
+		if strings.HasPrefix(rawURL, "/archive/") || strings.HasPrefix(rawURL, "data:") {
+			return match
+		}
+
+		if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") || strings.HasPrefix(rawURL, "//") {
+			return `url("")`
+		}
+
+		return match
+	})
+
+	html = externalImportRe.ReplaceAllString(html, "")
+	return html
+}
+
+// removeUnsupportedEmbeddedContent 移除无法在静态归档页中可靠工作的嵌入式内容。
+// ViewPage 已通过 CSP 禁用 frame/object，这里同步剥掉对应标签，避免旧归档页残留远程资源 URL。
+func removeUnsupportedEmbeddedContent(html string) string {
+	html = frameTagRe.ReplaceAllString(html, "")
+	html = objectTagRe.ReplaceAllString(html, "")
+	html = embedTagRe.ReplaceAllString(html, "")
 	return html
 }
 

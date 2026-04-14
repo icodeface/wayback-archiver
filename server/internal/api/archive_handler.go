@@ -17,7 +17,7 @@ func (h *Handler) ArchivePage(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Received archive request: %s (resources: %d)", req.URL, len(req.Resources))
+	log.Printf("Received archive request: %s (frames: %d)", req.URL, len(req.Frames))
 
 	// 处理捕获
 	pageID, action, err := h.dedup.ProcessCapture(&req)

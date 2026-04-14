@@ -27,16 +27,18 @@ type Resource struct {
 }
 
 type CaptureRequest struct {
-	URL       string              `json:"url" binding:"required"`
-	Title     string              `json:"title"`
-	HTML      string              `json:"html" binding:"required"`
-	Resources []ResourceReference `json:"resources"`
-	Headers   map[string]string   `json:"headers"`
+	URL     string            `json:"url" binding:"required"`
+	Title   string            `json:"title"`
+	HTML    string            `json:"html" binding:"required"`
+	Frames  []FrameCapture    `json:"frames"`
+	Headers map[string]string `json:"headers"`
 }
 
-type ResourceReference struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
+type FrameCapture struct {
+	Key   string `json:"key" binding:"required"`
+	URL   string `json:"url" binding:"required"`
+	Title string `json:"title"`
+	HTML  string `json:"html" binding:"required"`
 }
 
 const (

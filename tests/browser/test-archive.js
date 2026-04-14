@@ -43,8 +43,7 @@ const testData = {
     url: 'https://example.com',
     title: 'Test Page',
     timestamp: Date.now(),
-    html: '<html><body>Test</body></html>',
-    resources: []
+    html: '<html><body>Test</body></html>'
 };
 
 console.log('Sending test archive request...');

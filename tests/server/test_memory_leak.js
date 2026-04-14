@@ -35,11 +35,17 @@ function generateLargeHTML(sizeKB, id) {
 
 async function getMemStats() {
   const res = await fetch(`${SERVER}/api/debug/memstats`);
+  if (!res.ok) {
+    throw new Error(`memstats_unavailable:${res.status}`);
+  }
   return res.json();
 }
 
 async function forceGC() {
   const res = await fetch(`${SERVER}/api/debug/gc`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(`gc_unavailable:${res.status}`);
+  }
   return res.json();
 }
 
@@ -96,6 +102,15 @@ async function deletePage(pageId) {
   try {
     await getMemStats();
   } catch (e) {
+    try {
+      const versionRes = await fetch(`${SERVER}/api/version`);
+      if (versionRes.ok && String(e.message || '').startsWith('memstats_unavailable:')) {
+        console.log('SKIP: debug API is disabled; set DEBUG_API=true to run memory leak test');
+        process.exit(0);
+      }
+    } catch {
+      // fall through to hard failure below
+    }
     console.error('Server not running on localhost:8080. Start with: ./bin/wayback-server');
     process.exit(1);
   }

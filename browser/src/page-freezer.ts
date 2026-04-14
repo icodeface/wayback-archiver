@@ -123,8 +123,8 @@ function serializeCSSOM(): void {
  * Resolves after timeout regardless.
  */
 export function waitForDOMStable(
-  timeout = CONFIG.MUTATION_OBSERVER_TIMEOUT,
-  stableTime = CONFIG.DOM_STABLE_TIME
+  timeout: number = CONFIG.MUTATION_OBSERVER_TIMEOUT,
+  stableTime: number = CONFIG.DOM_STABLE_TIME
 ): Promise<void> {
   return new Promise((resolve) => {
     let timer: number | null = null;

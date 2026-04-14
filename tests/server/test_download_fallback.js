@@ -66,8 +66,7 @@ async function test() {
       url: `https://fallback-verify-${uniqueTag}.example.com/page`,
       title: `Fallback Verify ${uniqueTag}`,
       html: html,
-      timestamp: Date.now(),
-      resources: []
+      timestamp: Date.now()
     })
   });
   const result = await res.json();

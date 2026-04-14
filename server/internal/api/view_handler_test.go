@@ -628,6 +628,57 @@ func TestHideVideoElements_PreservesExistingControlsValue(t *testing.T) {
 	}
 }
 
+func TestRemoveUnsupportedEmbeddedContent_RemovesObjectEmbedButKeepsIframe(t *testing.T) {
+	html := `<div><iframe src="https://example.com/app"></iframe><object data="//cdn.example.com/plugin.swf"><param name="wmode" value="transparent"></object><embed src="https://example.com/movie.swf"><img src="/archive/1/20260414mp_/https://example.com/logo.png"></div>`
+	result := removeUnsupportedEmbeddedContent(html)
+
+	if !strings.Contains(strings.ToLower(result), "<iframe") {
+		t.Fatalf("iframe should be preserved, got: %s", result)
+	}
+	if strings.Contains(strings.ToLower(result), "<object") {
+		t.Fatalf("object should be removed, got: %s", result)
+	}
+	if strings.Contains(strings.ToLower(result), "<embed") {
+		t.Fatalf("embed should be removed, got: %s", result)
+	}
+	if !strings.Contains(result, `<img src="/archive/1/20260414mp_/https://example.com/logo.png">`) {
+		t.Fatalf("non-embedded archived content should be preserved, got: %s", result)
+	}
+}
+
+func TestRemoveUnsupportedEmbeddedContent_RemovesFrameCaseInsensitively(t *testing.T) {
+	html := `<FRAME SRC="https://example.com/legacy"></FRAME><p>ok</p>`
+	result := removeUnsupportedEmbeddedContent(html)
+
+	if strings.Contains(strings.ToLower(result), "<frame") {
+		t.Fatalf("frame should be removed case-insensitively, got: %s", result)
+	}
+	if !strings.Contains(result, `<p>ok</p>`) {
+		t.Fatalf("surrounding content should be preserved, got: %s", result)
+	}
+}
+
+func TestRemoveUnarchivedExternalCSSReferences_RemovesExternalCSSURLs(t *testing.T) {
+	html := `<style>.ok{background:url("/archive/1/20260414mp_/https://example.com/logo.png")}.bad{background:url(https://cdn.example.com/missing.png)}@import url("https://cdn.example.com/theme.css");</style><div style="background-image:url(//cdn.example.com/banner.jpg)"></div>`
+	result := removeUnarchivedExternalCSSReferences(html)
+
+	if !strings.Contains(result, `url("/archive/1/20260414mp_/https://example.com/logo.png")`) {
+		t.Fatalf("archived CSS URL should be preserved, got: %s", result)
+	}
+	if strings.Contains(result, `https://cdn.example.com/missing.png`) {
+		t.Fatalf("external CSS url() should be removed, got: %s", result)
+	}
+	if strings.Contains(result, `//cdn.example.com/banner.jpg`) {
+		t.Fatalf("protocol-relative CSS url() should be removed, got: %s", result)
+	}
+	if strings.Contains(result, `@import url("https://cdn.example.com/theme.css")`) {
+		t.Fatalf("external @import should be removed, got: %s", result)
+	}
+	if strings.Count(result, `url("")`) != 3 {
+		t.Fatalf("expected three stripped url() placeholders, got: %s", result)
+	}
+}
+
 // --- CSP meta 标签移除测试 ---
 
 func TestRemoveCSPMeta(t *testing.T) {
