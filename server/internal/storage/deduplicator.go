@@ -311,9 +311,18 @@ func buildFrameCaptureMap(frames []models.FrameCapture) map[string]models.FrameC
 		if frame.Key == "" || frame.URL == "" || frame.HTML == "" {
 			continue
 		}
+		// 浏览器侧在 HTML 中通过 data-wayback-frame-key 标记 frame，服务端必须按 key 命中。
 		frameMap[frame.Key] = frame
 	}
 	return frameMap
+}
+
+func buildFrameURLSet(frameMap map[string]models.FrameCapture) map[string]struct{} {
+	frameURLs := make(map[string]struct{}, len(frameMap))
+	for _, frame := range frameMap {
+		frameURLs[frame.URL] = struct{}{}
+	}
+	return frameURLs
 }
 
 func hashCaptureContent(html string, frames []models.FrameCapture) string {
@@ -499,6 +508,7 @@ func (d *Deduplicator) archiveFrameCapture(frame models.FrameCapture, headers ma
 
 func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers map[string]string, pageID int64, timestamp string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) (string, error) {
 	htmlResources := d.htmlExtractor.ExtractResources(htmlContent, baseURL)
+	frameURLs := buildFrameURLSet(frameMap)
 	rewriter := NewURLRewriter()
 	rewriter.SetPageID(pageID)
 	rewriter.SetTimestamp(timestamp)
@@ -506,15 +516,11 @@ func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers 
 
 	var cssWorkItems []cssWorkItem
 	for _, res := range htmlResources {
-		if frame, ok := frameMap[res.URL]; ok {
-			resourceID, filePath, err := d.archiveFrameCapture(frame, headers, pageID, timestamp, frameMap, resourceIDs, seen, visiting, archived)
-			if err != nil {
-				log.Printf("Failed to process iframe capture %s: %v", res.URL, err)
+		if res.Type == "html" {
+			if _, ok := frameURLs[res.URL]; ok {
+				// 这些 iframe 会在最后按 frame key 统一重写成 /archive/...，不能再当成普通资源下载。
 				continue
 			}
-			appendUniqueResourceID(resourceIDs, seen, resourceID)
-			rewriter.AddMapping(res.URL, filePath)
-			continue
 		}
 
 		resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, baseURL, headers)
@@ -544,6 +550,7 @@ func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers 
 	d.processCSSWorkItems(cssWorkItems, baseURL, headers, rewriter, resourceIDs, seen)
 
 	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(htmlContent), baseURL)
+	normalizedHTML = d.rewriteIframeTagsByKey(normalizedHTML, pageID, timestamp, headers, frameMap, resourceIDs, seen, visiting, archived)
 	return rewriter.RewriteHTML(normalizedHTML), nil
 }
 
