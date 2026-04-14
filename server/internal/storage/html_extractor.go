@@ -68,7 +68,8 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 			rawURL := htmlpkg.UnescapeString(match[1])
 			fullURL := e.resolveURL(rawURL, pageURL)
 			if e.isExternalURL(fullURL) {
-				resources[fullURL] = ResourceRef{URL: fullURL, Type: guessResourceType(fullURL)}
+				// iframe/src 指向的是浏览上下文文档，即使 URL 没有 .html 后缀也应按 HTML 处理。
+				resources[fullURL] = ResourceRef{URL: fullURL, Type: "html"}
 			}
 		}
 	}

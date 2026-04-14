@@ -232,6 +232,51 @@ func TestProxyResource_EncodedCSSSubresourceDoesNotLeakAcrossPages(t *testing.T)
 	}
 }
 
+func TestProxyResource_ServesLegacyIframeDocumentAsHTML(t *testing.T) {
+	handler, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	router := gin.New()
+	router.GET("/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	pageID, err := handler.db.CreatePage("https://user.qzone.qq.com/page-"+suffix, "Qzone", "html/test/qzone.html", strings.Repeat("b", 64), time.Now())
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer handler.db.DeletePage(pageID)
+
+	iframeURL := "https://ic2.qzone.qq.com/cgi-bin/feeds/feeds_html_module?g_iframeUser=1&refer=2"
+	resourcePath := "resources/99/88/qzone-module.bin"
+	writeTestResourceFile(t, handler.dataDir, resourcePath, []byte(`<html><body><script>alert(1)</script><div>module</div></body></html>`))
+
+	resourceID, err := handler.db.CreateResource(iframeURL, strings.Repeat("c", 64), "other", resourcePath, 64)
+	if err != nil {
+		t.Fatalf("CreateResource failed: %v", err)
+	}
+	if err := handler.db.LinkPageResource(pageID, resourceID); err != nil {
+		t.Fatalf("LinkPageResource failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/archive/%d/20260410123000mp_/%s", pageID, iframeURL), nil)
+	req.Header.Set("Sec-Fetch-Dest", "iframe")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("Content-Type = %q, want text/html", ct)
+	}
+	if strings.Contains(strings.ToLower(w.Body.String()), "<script") {
+		t.Fatalf("sanitized HTML should strip scripts, got: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `<div>module</div>`) {
+		t.Fatalf("expected HTML body, got: %s", w.Body.String())
+	}
+}
+
 func writeTestResourceFile(t *testing.T, dataDir, relPath string, content []byte) {
 	t.Helper()
 	absPath := filepath.Join(dataDir, relPath)

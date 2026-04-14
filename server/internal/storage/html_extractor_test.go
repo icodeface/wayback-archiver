@@ -209,3 +209,21 @@ func TestExtractResources_IframeHTML(t *testing.T) {
 		t.Fatal("should extract iframe HTML resource")
 	}
 }
+
+func TestExtractResources_IframeCGIWithoutHTMLExtension(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	html := `<html><body><iframe src="https://ic2.qzone.qq.com/cgi-bin/feeds/feeds_html_module?g_iframeUser=1&refer=2"></iframe></body></html>`
+	resources := extractor.ExtractResources(html, "https://user.qzone.qq.com/775146258")
+
+	for _, r := range resources {
+		if r.URL == "https://ic2.qzone.qq.com/cgi-bin/feeds/feeds_html_module?g_iframeUser=1&refer=2" {
+			if r.Type != "html" {
+				t.Fatalf("iframe CGI resource type = %q, want html", r.Type)
+			}
+			return
+		}
+	}
+
+	t.Fatal("should extract iframe CGI resource as html")
+}
