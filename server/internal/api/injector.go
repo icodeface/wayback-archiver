@@ -219,7 +219,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 
 })();
 </script>
-`, page.URL, escapeHTML(page.URL), escapeHTML(page.URL), capturedTime, navHTML, nonce)
+`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), capturedTime, navHTML, nonce)
 
 	// 在 <body> 标签后注入
 	if bodyTagRe.MatchString(html) {

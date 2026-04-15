@@ -277,6 +277,59 @@ func TestProxyResource_ServesLegacyIframeDocumentAsHTML(t *testing.T) {
 	}
 }
 
+func TestProxyResource_InvalidPageIDReturnsBadRequest(t *testing.T) {
+	handler, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	router := gin.New()
+	router.GET("/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
+
+	resourceURL := "https://invalid-page-id.example.com/assets/app.css"
+	resourcePath := "resources/ab/cd/invalid-page.css"
+	writeTestResourceFile(t, handler.dataDir, resourcePath, []byte("body{}"))
+	if _, err := handler.db.CreateResource(resourceURL, strings.Repeat("d", 64), "css", resourcePath, 6); err != nil {
+		t.Fatalf("CreateResource failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/archive/not-a-page/20260410124000mp_/"+resourceURL, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestProxyResource_DoesNotFallbackToGlobalResourceFromOtherPage(t *testing.T) {
+	handler, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	router := gin.New()
+	router.GET("/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	pageID, err := handler.db.CreatePage("https://scope-test.example.com/page-"+suffix, "Scope Test", "html/test/scope.html", strings.Repeat("e", 64), time.Now())
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer handler.db.DeletePage(pageID)
+
+	resourceURL := "https://scope-test.example.com/assets/private.png?token=shared"
+	resourcePath := "resources/de/ad/global-private.img"
+	writeTestResourceFile(t, handler.dataDir, resourcePath, []byte("img"))
+	if _, err := handler.db.CreateResource(resourceURL, strings.Repeat("f", 64), "image", resourcePath, 3); err != nil {
+		t.Fatalf("CreateResource failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/archive/%d/20260410125000mp_/%s", pageID, resourceURL), nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func writeTestResourceFile(t *testing.T, dataDir, relPath string, content []byte) {
 	t.Helper()
 	absPath := filepath.Join(dataDir, relPath)

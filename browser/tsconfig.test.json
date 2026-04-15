@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "outDir": "./dist-test",
+    "rootDir": "./src"
+  },
+  "include": ["src/spa-coordinator.ts"],
+  "exclude": ["node_modules", "dist", "dist-test"]
+}

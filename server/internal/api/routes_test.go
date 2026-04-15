@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/fstest"
 
 	"github.com/gin-gonic/gin"
 	"wayback/internal/config"
@@ -16,6 +17,17 @@ func setupAuthRouter(authCfg *config.AuthConfig, serverCfg *config.ServerConfig)
 
 	SetupRoutes(r, handler, authCfg, serverCfg, "test", "")
 	return r
+}
+
+func setupRouterFromEnv(t *testing.T) *gin.Engine {
+	t.Helper()
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+
+	return setupAuthRouter(&cfg.Auth, &cfg.Server)
 }
 
 func TestRoutes_NoAuth_AllowsAccess(t *testing.T) {
@@ -98,6 +110,34 @@ func TestRoutes_CORS_IncludesAuthorizationHeader(t *testing.T) {
 	}
 }
 
+func TestRoutes_CORS_AllowedOriginsEnvEnablesCustomOrigin(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "https://allowed.example.com")
+	r := setupRouterFromEnv(t)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("OPTIONS", "/api/archive", nil)
+	req.Header.Set("Origin", "https://allowed.example.com")
+	r.ServeHTTP(w, req)
+
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://allowed.example.com" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want custom allowed origin", got)
+	}
+}
+
+func TestRoutes_CORS_AllowedOriginsEnvOverridesDefaultLocalhostSet(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "https://allowed.example.com")
+	r := setupRouterFromEnv(t)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("OPTIONS", "/api/archive", nil)
+	req.Header.Set("Origin", "http://localhost:8080")
+	r.ServeHTTP(w, req)
+
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want localhost blocked when not configured", got)
+	}
+}
+
 func TestRoutes_DebugAPI_DisabledByDefault(t *testing.T) {
 	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
 
@@ -119,6 +159,40 @@ func TestRoutes_DebugAPI_CanBeEnabled(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 when debug API is enabled, got %d", w.Code)
+	}
+}
+
+func TestServeEmbeddedFile_MissingFileReturnsInternalServerError(t *testing.T) {
+	handler := serveEmbeddedFile(fstest.MapFS{}, "missing.html")
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/missing.html", nil)
+	handler(c)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for missing embedded file, got %d", w.Code)
+	}
+}
+
+func TestServeEmbeddedFile_SetsContentType(t *testing.T) {
+	handler := serveEmbeddedFile(fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html></html>")},
+	}, "index.html")
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/index.html", nil)
+	handler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want text/html; charset=utf-8", got)
+	}
+	if body := w.Body.String(); body != "<html></html>" {
+		t.Fatalf("body = %q, want embedded content", body)
 	}
 }
 

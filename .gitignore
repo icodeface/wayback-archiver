@@ -24,3 +24,4 @@ data/
 server/wayback-server
 server/server
 bin/
+browser/dist-test/

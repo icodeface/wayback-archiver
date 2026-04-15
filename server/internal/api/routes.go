@@ -4,20 +4,59 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/pprof"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"wayback/internal/config"
 	"wayback/web"
 )
 
+func embeddedFileContentType(name string) string {
+	switch {
+	case len(name) > 5 && name[len(name)-5:] == ".html":
+		return "text/html; charset=utf-8"
+	case len(name) > 4 && name[len(name)-4:] == ".ico":
+		return "image/x-icon"
+	case len(name) > 4 && name[len(name)-4:] == ".txt":
+		return "text/plain; charset=utf-8"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func serveEmbeddedFile(webFS fs.FS, name string) gin.HandlerFunc {
+	data, err := fs.ReadFile(webFS, name)
+	contentType := embeddedFileContentType(name)
+
+	return func(c *gin.Context) {
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Failed to load embedded file")
+			return
+		}
+		c.Data(http.StatusOK, contentType, data)
+	}
+}
+
 // SetupRoutes 设置路由
 func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, serverCfg *config.ServerConfig, version, buildTime string) {
+	origins := serverCfg.AllowedOrigins
+	if len(origins) == 0 {
+		origins = config.DefaultAllowedOrigins()
+	}
+
+	allowedOrigins := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed == "" {
+			continue
+		}
+		allowedOrigins[trimmed] = struct{}{}
+	}
+
 	// CORS 中间件 - 仅允许本地来源，防止 CSRF 攻击
 	r.Use(func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
-		// 仅允许本地来源（localhost, 127.0.0.1, file://)
-		if origin == "http://localhost:8080" || origin == "http://127.0.0.1:8080" ||
-			origin == "null" || origin == "" { // null = file:// protocol
+		if _, ok := allowedOrigins[origin]; ok {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
@@ -32,22 +71,7 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 
 	// robots.txt（在认证之前，确保爬虫和工具可以访问）
 	webFS, _ := fs.Sub(web.StaticFiles, ".")
-	serveFile := func(name string) gin.HandlerFunc {
-		data, _ := fs.ReadFile(webFS, name)
-		contentType := "application/octet-stream"
-		switch {
-		case len(name) > 5 && name[len(name)-5:] == ".html":
-			contentType = "text/html; charset=utf-8"
-		case len(name) > 4 && name[len(name)-4:] == ".ico":
-			contentType = "image/x-icon"
-		case len(name) > 4 && name[len(name)-4:] == ".txt":
-			contentType = "text/plain; charset=utf-8"
-		}
-		return func(c *gin.Context) {
-			c.Data(http.StatusOK, contentType, data)
-		}
-	}
-	r.GET("/robots.txt", serveFile("robots.txt"))
+	r.GET("/robots.txt", serveEmbeddedFile(webFS, "robots.txt"))
 
 	// Basic Auth 中间件（如果启用）
 	if authCfg.Enabled() {
@@ -58,13 +82,13 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 	}
 
 	// Web UI (embedded)
-	r.GET("/", serveFile("index.html"))
-	r.GET("/index.html", serveFile("index.html"))
-	r.GET("/timeline", serveFile("timeline.html"))
-	r.GET("/timeline.html", serveFile("timeline.html"))
-	r.GET("/logs", serveFile("logs.html"))
-	r.GET("/logs.html", serveFile("logs.html"))
-	r.GET("/favicon.ico", serveFile("favicon.ico"))
+	r.GET("/", serveEmbeddedFile(webFS, "index.html"))
+	r.GET("/index.html", serveEmbeddedFile(webFS, "index.html"))
+	r.GET("/timeline", serveEmbeddedFile(webFS, "timeline.html"))
+	r.GET("/timeline.html", serveEmbeddedFile(webFS, "timeline.html"))
+	r.GET("/logs", serveEmbeddedFile(webFS, "logs.html"))
+	r.GET("/logs.html", serveEmbeddedFile(webFS, "logs.html"))
+	r.GET("/favicon.ico", serveEmbeddedFile(webFS, "favicon.ico"))
 
 	api := r.Group("/api")
 	{

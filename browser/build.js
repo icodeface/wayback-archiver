@@ -33,6 +33,7 @@ const userscriptModules = [
   'dom-collector.js',
   'html-url-normalizer.js',
   'bridge-auth.js',
+  'spa-coordinator.js',
   'frame-capture.js',
   'archiver.js',
   'main.js',
@@ -63,6 +64,7 @@ const header = `// ==UserScript==
 // @grant        GM_cookie
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_addValueChangeListener
 // @connect      localhost
 // @connect      *
 // @require      https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js
