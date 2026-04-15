@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,6 +25,27 @@ type FileStorage struct {
 	baseDir    string
 	httpClient *http.Client
 }
+
+type downloadMetadata struct {
+	etag         string
+	lastMod      string
+	freshUntil   time.Time
+	hasFreshness bool
+	notModified  bool
+}
+
+type downloadTrace struct {
+	validate    time.Duration
+	request     time.Duration
+	body        time.Duration
+	mode        string
+	statusCode  int
+	contentSize int64
+}
+
+var (
+	lookupIPFunc = net.LookupIP
+)
 
 func NewFileStorage(baseDir string, downloadTimeout ...int) *FileStorage {
 	// 创建 HTTP 客户端，支持代理
@@ -79,12 +101,21 @@ func validateResourceURL(resourceURL string) error {
 		return errors.New("missing hostname")
 	}
 
+	if ip := net.ParseIP(host); ip != nil {
+		return validateResolvedIPs([]net.IP{ip})
+	}
+
 	// 解析 IP 地址
-	ips, err := net.LookupIP(host)
+	ips, err := lookupIPFunc(host)
 	if err != nil {
 		// DNS 解析失败，允许继续（可能是临时网络问题）
 		return nil
 	}
+
+	return validateResolvedIPs(ips)
+}
+
+func validateResolvedIPs(ips []net.IP) error {
 
 	// 检查是否为内网地址或云元数据服务
 	for _, ip := range ips {
@@ -184,14 +215,23 @@ func (fs *FileStorage) SaveHTML(url, html string, timestamp time.Time) (string, 
 // DownloadResource 下载资源并计算哈希，支持可选的认证 headers
 // 小于 streamThreshold 的资源读入内存返回 data；大于的流式写入临时文件返回 tmpPath
 func (fs *FileStorage) DownloadResource(resourceURL string, pageURL string, headers map[string]string, streamThreshold int64) (data []byte, hash string, tmpPath string, err error) {
+	data, hash, tmpPath, _, _, err = fs.DownloadResourceWithMetadata(resourceURL, pageURL, headers, streamThreshold, "", "")
+	return data, hash, tmpPath, err
+}
+
+// DownloadResourceWithMetadata downloads a resource and returns cache validators/freshness metadata.
+func (fs *FileStorage) DownloadResourceWithMetadata(resourceURL string, pageURL string, headers map[string]string, streamThreshold int64, ifNoneMatch string, ifModifiedSince string) (data []byte, hash string, tmpPath string, metadata downloadMetadata, trace downloadTrace, err error) {
+	validateStart := time.Now()
 	// 防止 SSRF 攻击：拒绝内网地址和云元数据服务
 	if err := validateResourceURL(resourceURL); err != nil {
-		return nil, "", "", fmt.Errorf("invalid resource URL: %w", err)
+		trace.validate = time.Since(validateStart)
+		return nil, "", "", downloadMetadata{}, trace, fmt.Errorf("invalid resource URL: %w", err)
 	}
+	trace.validate = time.Since(validateStart)
 
 	req, err := http.NewRequest("GET", resourceURL, nil)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("create request failed: %w", err)
+		return nil, "", "", downloadMetadata{}, trace, fmt.Errorf("create request failed: %w", err)
 	}
 
 	// 设置 User-Agent
@@ -203,25 +243,46 @@ func (fs *FileStorage) DownloadResource(resourceURL string, pageURL string, head
 	if pageURL != "" {
 		req.Header.Set("Referer", pageURL)
 	}
+	if ifNoneMatch != "" {
+		req.Header.Set("If-None-Match", ifNoneMatch)
+	}
+	if ifModifiedSince != "" {
+		req.Header.Set("If-Modified-Since", ifModifiedSince)
+	}
 
 	// 仅在同根域名时转发 Cookie，防止泄露给第三方
 	if cookie, ok := headers["cookie"]; ok && cookie != "" && isSameRootDomain(resourceURL, pageURL) {
 		req.Header.Set("Cookie", cookie)
 	}
 
+	requestStart := time.Now()
 	resp, err := fs.httpClient.Do(req)
+	trace.request = time.Since(requestStart)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", downloadMetadata{}, trace, err
 	}
 	defer resp.Body.Close()
+	trace.statusCode = resp.StatusCode
+
+	metadata = downloadMetadata{
+		etag:    resp.Header.Get("ETag"),
+		lastMod: resp.Header.Get("Last-Modified"),
+	}
+	metadata.freshUntil, metadata.hasFreshness = parseFreshUntil(resp.Header, time.Now())
+
+	if resp.StatusCode == http.StatusNotModified {
+		trace.mode = "revalidate"
+		metadata.notModified = true
+		return nil, "", "", metadata, trace, nil
+	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", "", fmt.Errorf("failed to download: status %d", resp.StatusCode)
+		return nil, "", "", metadata, trace, fmt.Errorf("failed to download: status %d", resp.StatusCode)
 	}
 
 	// 检查 Content-Length，防止下载超大文件
 	if resp.ContentLength > maxResourceSize {
-		return nil, "", "", fmt.Errorf("resource too large: %d bytes (max: %d)", resp.ContentLength, maxResourceSize)
+		return nil, "", "", metadata, trace, fmt.Errorf("resource too large: %d bytes (max: %d)", resp.ContentLength, maxResourceSize)
 	}
 
 	// 使用 LimitReader 限制读取大小
@@ -229,24 +290,82 @@ func (fs *FileStorage) DownloadResource(resourceURL string, pageURL string, head
 
 	// 已知大文件 或 阈值为 0（全部落盘）：直接流式写磁盘，内存占用 ≈ 0
 	if resp.ContentLength > streamThreshold || streamThreshold <= 0 {
-		return fs.downloadToFile(limitedReader)
+		bodyStart := time.Now()
+		data, hash, tmpPath, err = fs.downloadToFile(limitedReader)
+		trace.body = time.Since(bodyStart)
+		trace.mode = "stream"
+		trace.contentSize = resp.ContentLength
+		return data, hash, tmpPath, metadata, trace, err
 	}
 
 	// 已知小文件（Content-Length ≤ 阈值）：直接读入内存
 	if resp.ContentLength >= 0 {
+		bodyStart := time.Now()
 		memData, readErr := io.ReadAll(limitedReader)
+		trace.body = time.Since(bodyStart)
+		trace.mode = "memory"
+		trace.contentSize = int64(len(memData))
 		if readErr != nil {
-			return nil, "", "", readErr
+			return nil, "", "", metadata, trace, readErr
 		}
 		if int64(len(memData)) > maxResourceSize {
-			return nil, "", "", fmt.Errorf("resource exceeds size limit: %d bytes (max: %d)", len(memData), maxResourceSize)
+			return nil, "", "", metadata, trace, fmt.Errorf("resource exceeds size limit: %d bytes (max: %d)", len(memData), maxResourceSize)
 		}
 		hashBytes := sha256.Sum256(memData)
-		return memData, hex.EncodeToString(hashBytes[:]), "", nil
+		return memData, hex.EncodeToString(hashBytes[:]), "", metadata, trace, nil
 	}
 
 	// Content-Length 未知：先读到内存，超过阈值后溢出到磁盘
-	return fs.downloadBuffered(limitedReader, streamThreshold)
+	bodyStart := time.Now()
+	data, hash, tmpPath, err = fs.downloadBuffered(limitedReader, streamThreshold)
+	trace.body = time.Since(bodyStart)
+	trace.mode = "buffered"
+	if data != nil {
+		trace.contentSize = int64(len(data))
+	} else if tmpPath != "" {
+		if info, statErr := os.Stat(tmpPath); statErr == nil {
+			trace.contentSize = info.Size()
+		}
+	}
+	return data, hash, tmpPath, metadata, trace, err
+}
+
+func parseFreshUntil(headers http.Header, now time.Time) (time.Time, bool) {
+	cacheControl := headers.Get("Cache-Control")
+	if cacheControl != "" {
+		for _, directive := range strings.Split(cacheControl, ",") {
+			directive = strings.TrimSpace(strings.ToLower(directive))
+			switch {
+			case directive == "no-store", directive == "no-cache":
+				return time.Time{}, true
+			case strings.HasPrefix(directive, "max-age="):
+				seconds, err := strconv.Atoi(strings.TrimPrefix(directive, "max-age="))
+				if err != nil || seconds <= 0 {
+					return time.Time{}, true
+				}
+				freshUntil := now.Add(time.Duration(seconds) * time.Second)
+				maxFreshUntil := now.Add(resourceCacheTTL)
+				if freshUntil.After(maxFreshUntil) {
+					return maxFreshUntil, true
+				}
+				return freshUntil, true
+			}
+		}
+	}
+
+	if expires := headers.Get("Expires"); expires != "" {
+		expiresAt, err := http.ParseTime(expires)
+		if err == nil && expiresAt.After(now) {
+			maxFreshUntil := now.Add(resourceCacheTTL)
+			if expiresAt.After(maxFreshUntil) {
+				return maxFreshUntil, true
+			}
+			return expiresAt, true
+		}
+		return time.Time{}, true
+	}
+
+	return time.Time{}, false
 }
 
 // downloadToFile 流式下载到临时文件，边写边算哈希，内存占用 ≈ 0

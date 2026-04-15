@@ -154,7 +154,7 @@ The server automatically loads `.env` from the working directory if it exists. Y
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
 | `LOG_DIR` | `./data/logs` | Log file directory |
 | `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`). **REQUIRED for remote deployment** |
-| `RESOURCE_METADATA_CACHE_MB` | 10% of system memory | Metadata-only cache budget for resource URL to file-path lookups. `RESOURCE_CACHE_MB` is still accepted as a legacy alias. |
+| `RESOURCE_METADATA_CACHE_MB` | 10% of system memory | Metadata cache budget for resource URL lookups plus HTTP freshness/validator reuse and revalidation. `RESOURCE_CACHE_MB` is still accepted as a legacy alias. |
 | `ENABLE_DEBUG_API` | `false` | Enable `/api/debug/*` endpoints (`memstats`, `gc`, `pprof`). Keep disabled unless you are actively debugging. |
 | `COMPRESSION_LEVEL` | `-1` | Compression level: 1 (fastest) to 9 (best), -1 (default/balanced). Response compression always enabled, auto-negotiated via Accept-Encoding |
 
@@ -228,7 +228,7 @@ Returns `{ status, page_id, action }` where `action` is `created` or `unchanged`
 
 ### PUT /api/archive/:id
 
-Accepts the same body as POST. Replaces the snapshot content — old HTML and resource associations are removed, resources are re-processed. Returns `{ status, page_id, action }` where `action` is `updated` or `unchanged`.
+Accepts the same body as POST. Re-processes resources, writes a replacement snapshot, then atomically swaps the page metadata and `page_resources` links. Old HTML is queued for delayed deletion after a successful swap. Returns `{ status, page_id, action }` where `action` is `updated` or `unchanged`.
 
 ## Project Structure
 

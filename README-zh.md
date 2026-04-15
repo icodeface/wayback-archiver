@@ -148,7 +148,7 @@ export https_proxy=http://127.0.0.1:7897
 | `DATA_DIR` | `./data` | HTML 和资源的存储目录 |
 | `LOG_DIR` | `./data/logs` | 日志文件目录 |
 | `AUTH_PASSWORD` | *（空）* | HTTP Basic Auth 密码（为空时关闭认证，用户名固定为 `wayback`） |
-| `RESOURCE_METADATA_CACHE_MB` | 总内存的 10% | 资源 URL 到本地文件路径的元数据缓存预算（MB）。旧变量 `RESOURCE_CACHE_MB` 仍作为兼容别名生效。 |
+| `RESOURCE_METADATA_CACHE_MB` | 总内存的 10% | 资源 URL 元数据缓存预算（MB），同时用于基于 freshness/validator 的 HTTP 复用与重校验。旧变量 `RESOURCE_CACHE_MB` 仍作为兼容别名生效。 |
 | `ENABLE_DEBUG_API` | `false` | 是否启用 `/api/debug/*` 调试接口（`memstats`、`gc`、`pprof`）。仅在排查问题时临时开启。 |
 | `COMPRESSION_LEVEL` | `-1` | 压缩级别：1（最快）到 9（最佳），-1（默认/平衡）。响应压缩始终启用，根据 Accept-Encoding 自动协商 |
 
@@ -192,7 +192,7 @@ export https_proxy=http://127.0.0.1:7897
 
 ### PUT /api/archive/:id
 
-请求体与 POST 相同。替换快照内容 — 旧 HTML 和资源关联被移除，资源重新处理。返回 `{ status, page_id, action }`，`action` 为 `updated` 或 `unchanged`。
+请求体与 POST 相同。会重新处理资源、写入新的临时快照，然后以事务方式替换页面元数据和 `page_resources` 关联。替换成功后，旧 HTML 进入延迟删除队列。返回 `{ status, page_id, action }`，`action` 为 `updated` 或 `unchanged`。
 
 ## 项目结构
 

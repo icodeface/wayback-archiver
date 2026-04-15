@@ -24,11 +24,15 @@ const (
 	resourceCacheTTL             = 2 * time.Hour
 	resourceCacheCleanupInterval = 10 * time.Minute
 	resourceCacheEntryOverhead   = 128
+	slowResourceLogThreshold     = 500 * time.Millisecond
 )
 
 type resourceCacheEntry struct {
 	resourceID int64
 	filePath   string
+	etag       string
+	lastMod    string
+	freshUntil time.Time
 	size       int64 // 估算的元数据大小，用于统计缓存大小
 	cachedAt   time.Time
 }
@@ -44,6 +48,10 @@ type Deduplicator struct {
 	cacheBytes    atomic.Int64  // 当前缓存占用字节数
 	cacheMu       sync.Mutex    // 保护缓存淘汰逻辑，防止并发 cacheStore 导致超限
 	globalSem     chan struct{} // 全局并发下载信号量，跨所有页面共享
+
+	// 测试钩子：用于稳定复现页面已创建/新 HTML 已写入后的失败路径。
+	testBeforeCreateFinalize func(pageID int64, htmlPath string, resourceIDs []int64) error
+	testBeforeUpdateCommit   func(pageID int64, htmlPath string, resourceIDs []int64) error
 }
 
 func NewDeduplicator(db *database.DB, storage *FileStorage, cfg config.ResourceConfig) *Deduplicator {
@@ -94,6 +102,90 @@ func (d *Deduplicator) cleanupExpiredCache() int {
 	return removed
 }
 
+func (d *Deduplicator) cacheDelete(key string) {
+	if old, loaded := d.cache.LoadAndDelete(key); loaded {
+		d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
+	}
+}
+
+func (d *Deduplicator) loadCachedResource(url string) *resourceCacheEntry {
+	entry, ok := d.cache.Load(url)
+	if !ok {
+		return nil
+	}
+
+	cached := entry.(*resourceCacheEntry)
+	if time.Since(cached.cachedAt) >= resourceCacheTTL {
+		d.cacheDelete(url)
+		return nil
+	}
+
+	return cached
+}
+
+func (d *Deduplicator) tryReuseFreshCache(url string, cached *resourceCacheEntry) (int64, string, bool, error) {
+	if cached == nil || cached.freshUntil.IsZero() || !time.Now().Before(cached.freshUntil) {
+		return 0, "", false, nil
+	}
+
+	resource, err := d.db.GetResourceByID(cached.resourceID)
+	if err != nil {
+		return 0, "", false, fmt.Errorf("db query hot cached resource failed: %w", err)
+	}
+	if resource == nil || resource.FilePath == "" {
+		d.cacheDelete(url)
+		return 0, "", false, nil
+	}
+
+	if err := d.db.UpdateResourceLastSeen(resource.ID); err != nil {
+		return 0, "", false, err
+	}
+
+	d.cacheStoreWithMetadata(url, resource.ID, resource.FilePath, downloadMetadata{
+		etag:       cached.etag,
+		lastMod:    cached.lastMod,
+		freshUntil: cached.freshUntil,
+	}, nil)
+	log.Printf("[cache] fresh reuse: %s", shortURLForLog(url))
+	return resource.ID, resource.FilePath, true, nil
+}
+
+func shortURLForLog(raw string) string {
+	const maxLen = 160
+	if len(raw) <= maxLen {
+		return raw
+	}
+	return raw[:maxLen-3] + "..."
+}
+
+func logSlowResource(url, resourceType string, fileSize int64, trace downloadTrace, dbDuration, saveDuration, total time.Duration) {
+	if total < slowResourceLogThreshold {
+		return
+	}
+
+	sizeLabel := "unknown"
+	if fileSize >= 1024*1024 {
+		sizeLabel = fmt.Sprintf("%.1fMB", float64(fileSize)/(1024*1024))
+	} else if fileSize >= 1024 {
+		sizeLabel = fmt.Sprintf("%.1fKB", float64(fileSize)/1024)
+	} else if fileSize >= 0 {
+		sizeLabel = fmt.Sprintf("%dB", fileSize)
+	}
+
+	log.Printf("[resource] slow total=%v type=%s mode=%s size=%s validate=%v request=%v body=%v db=%v save=%v url=%s",
+		total,
+		resourceType,
+		trace.mode,
+		sizeLabel,
+		trace.validate,
+		trace.request,
+		trace.body,
+		dbDuration,
+		saveDuration,
+		shortURLForLog(url),
+	)
+}
+
 // cacheMaxBytes 返回缓存大小上限（字节）
 func (d *Deduplicator) cacheMaxBytes() int64 {
 	return int64(d.config.MetadataCacheMB) * 1024 * 1024
@@ -105,6 +197,10 @@ func cacheEntrySize(key, filePath string) int64 {
 
 // cacheStore 缓存资源元数据，超出大小限制时淘汰最旧的条目
 func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string, data []byte) {
+	d.cacheStoreWithMetadata(key, resourceID, filePath, downloadMetadata{}, data)
+}
+
+func (d *Deduplicator) cacheStoreWithMetadata(key string, resourceID int64, filePath string, metadata downloadMetadata, data []byte) {
 	_ = data // 资源内容不再缓存，只保留元数据
 	if key == "" || filePath == "" {
 		return
@@ -165,6 +261,9 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string,
 	entry := &resourceCacheEntry{
 		resourceID: resourceID,
 		filePath:   filePath,
+		etag:       metadata.etag,
+		lastMod:    metadata.lastMod,
+		freshUntil: metadata.freshUntil,
 		size:       entrySize,
 		cachedAt:   time.Now(),
 	}
@@ -176,31 +275,75 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string,
 // 返回 (resourceID, filePath, data, error)
 // 小文件（≤ streamThreshold）保留在内存供当前调用链使用；缓存只保留元数据
 func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string, headers map[string]string) (int64, string, []byte, error) {
-	// 检查缓存
-	if entry, ok := d.cache.Load(url); ok {
-		cached := entry.(*resourceCacheEntry)
-		if time.Since(cached.cachedAt) < resourceCacheTTL {
-			if err := d.db.UpdateResourceLastSeen(cached.resourceID); err != nil {
-				log.Printf("Failed to update last_seen for cached resource: %v", err)
-			}
-			return cached.resourceID, cached.filePath, nil, nil
-		}
-		if old, loaded := d.cache.LoadAndDelete(url); loaded {
-			d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
-		}
+	startTime := time.Now()
+	cached := d.loadCachedResource(url)
+	if resourceID, filePath, reused, err := d.tryReuseFreshCache(url, cached); err != nil {
+		return 0, "", nil, err
+	} else if reused {
+		return resourceID, filePath, nil, nil
 	}
 
 	var data []byte    // 小文件有值，大文件 nil
 	var tmpPath string // 大文件临时文件路径，小文件空
 	var hash string
 	var fileSize int64
+	var metadata downloadMetadata
+	var trace downloadTrace
+	var dbDuration time.Duration
+	var saveDuration time.Duration
 
 	streamThreshold := int64(d.config.StreamThresholdKB) * 1024
 	var err error
-	data, hash, tmpPath, err = d.storage.DownloadResource(url, pageURL, headers, streamThreshold)
+	data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(
+		url,
+		pageURL,
+		headers,
+		streamThreshold,
+		cachedETag(cached),
+		cachedLastModified(cached),
+	)
 	if err != nil {
 		log.Printf("Download failed for %s: %v, trying fallback", url, err)
 		return d.processResourceFallback(url, err)
+	}
+	if metadata.notModified {
+		if cached == nil {
+			return 0, "", nil, fmt.Errorf("received 304 without cache entry for %s", url)
+		}
+
+		dbStart := time.Now()
+		resource, err := d.db.GetResourceByID(cached.resourceID)
+		dbDuration += time.Since(dbStart)
+		if err != nil {
+			return 0, "", nil, fmt.Errorf("db query revalidated resource failed: %w", err)
+		}
+		if resource == nil || resource.FilePath == "" {
+			d.cacheDelete(url)
+			data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(url, pageURL, headers, streamThreshold, "", "")
+			if err != nil {
+				log.Printf("Download failed for %s after cache revalidation miss: %v, trying fallback", url, err)
+				return d.processResourceFallback(url, err)
+			}
+		} else {
+			dbStart = time.Now()
+			if err := d.db.UpdateResourceLastSeen(resource.ID); err != nil {
+				dbDuration += time.Since(dbStart)
+				return 0, "", nil, err
+			}
+			dbDuration += time.Since(dbStart)
+			if !metadata.hasFreshness {
+				metadata.freshUntil = cached.freshUntil
+			}
+			if metadata.etag == "" {
+				metadata.etag = cached.etag
+			}
+			if metadata.lastMod == "" {
+				metadata.lastMod = cached.lastMod
+			}
+			d.cacheStoreWithMetadata(url, resource.ID, resource.FilePath, metadata, nil)
+			log.Printf("[cache] revalidated 304: %s (%v)", shortURLForLog(url), time.Since(startTime))
+			return resource.ID, resource.FilePath, nil, nil
+		}
 	}
 	if data != nil {
 		fileSize = int64(len(data))
@@ -219,21 +362,53 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 		}()
 	}
 
+	if cached != nil {
+		dbStart := time.Now()
+		cachedResource, err := d.db.GetResourceByID(cached.resourceID)
+		dbDuration += time.Since(dbStart)
+		if err != nil {
+			return 0, "", nil, fmt.Errorf("db query cached resource failed: %w", err)
+		}
+		if cachedResource != nil && cachedResource.ContentHash == hash {
+			dbStart = time.Now()
+			if err := d.db.UpdateResourceLastSeen(cached.resourceID); err != nil {
+				dbDuration += time.Since(dbStart)
+				return 0, "", nil, err
+			}
+			dbDuration += time.Since(dbStart)
+			d.cacheStoreWithMetadata(url, cached.resourceID, cached.filePath, metadata, data)
+			logSlowResource(url, resourceType, fileSize, trace, dbDuration, saveDuration, time.Since(startTime))
+			return cached.resourceID, cached.filePath, data, nil
+		}
+	}
+
 	// 检查是否已有相同 URL 的资源记录
+	dbStart := time.Now()
 	existingByURL, err := d.db.GetResourceByURL(url)
+	dbDuration += time.Since(dbStart)
 	if err != nil {
 		return 0, "", nil, fmt.Errorf("db query by url failed: %w", err)
 	}
 	if existingByURL != nil {
-		if err := d.db.UpdateResourceLastSeen(existingByURL.ID); err != nil {
-			return 0, "", nil, err
+		if existingByURL.ContentHash == hash {
+			dbStart = time.Now()
+			if err := d.db.UpdateResourceLastSeen(existingByURL.ID); err != nil {
+				dbDuration += time.Since(dbStart)
+				return 0, "", nil, err
+			}
+			dbDuration += time.Since(dbStart)
+			d.cacheStoreWithMetadata(url, existingByURL.ID, existingByURL.FilePath, metadata, data)
+			logSlowResource(url, resourceType, fileSize, trace, dbDuration, saveDuration, time.Since(startTime))
+			return existingByURL.ID, existingByURL.FilePath, data, nil
 		}
-		d.cacheStore(url, existingByURL.ID, existingByURL.FilePath, data)
-		return existingByURL.ID, existingByURL.FilePath, data, nil
+
+		log.Printf("Resource content changed for URL %s: old_hash=%s new_hash=%s", url, existingByURL.ContentHash[:16], hash[:16])
 	}
 
 	// 检查是否有相同哈希的资源
+	dbStart = time.Now()
 	existingByHash, err := d.db.GetResourceByHash(hash)
+	dbDuration += time.Since(dbStart)
 	if err != nil {
 		return 0, "", nil, fmt.Errorf("db query by hash failed: %w", err)
 	}
@@ -241,30 +416,49 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 	var filePath string
 	if existingByHash != nil {
 		filePath = existingByHash.FilePath
-		log.Printf("Same content (hash: %s) different URL, reusing file: %s", hash[:16], url)
 	} else if tmpPath != "" {
 		// 大文件：从临时文件移动到资源目录（零拷贝）
+		saveStart := time.Now()
 		filePath, err = d.storage.SaveResourceFromFile(tmpPath, hash, resourceType)
+		saveDuration += time.Since(saveStart)
 		if err != nil {
 			return 0, "", nil, fmt.Errorf("save from file failed: %w", err)
 		}
 		tmpPath = "" // 已被移走，阻止 defer 删除
 	} else {
 		// 小文件：从内存写入
+		saveStart := time.Now()
 		filePath, err = d.storage.SaveResource(data, hash, resourceType)
+		saveDuration += time.Since(saveStart)
 		if err != nil {
 			return 0, "", nil, fmt.Errorf("save failed: %w", err)
 		}
 	}
 
+	dbStart = time.Now()
 	resourceID, err := d.db.CreateResourceIfNotExists(url, hash, resourceType, filePath, fileSize)
+	dbDuration += time.Since(dbStart)
 	if err != nil {
 		return 0, "", nil, fmt.Errorf("db insert failed: %w", err)
 	}
 
-	log.Printf("New resource record (hash: %s): %s", hash[:16], url)
-	d.cacheStore(url, resourceID, filePath, data)
+	d.cacheStoreWithMetadata(url, resourceID, filePath, metadata, data)
+	logSlowResource(url, resourceType, fileSize, trace, dbDuration, saveDuration, time.Since(startTime))
 	return resourceID, filePath, data, nil
+}
+
+func cachedETag(cached *resourceCacheEntry) string {
+	if cached == nil {
+		return ""
+	}
+	return cached.etag
+}
+
+func cachedLastModified(cached *resourceCacheEntry) string {
+	if cached == nil {
+		return ""
+	}
+	return cached.lastMod
 }
 
 // processResourceFallback 下载失败时的兜底逻辑
@@ -585,11 +779,33 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		return 0, "", fmt.Errorf("save temp html failed: %w", err)
 	}
 
+	pageID := int64(0)
+	finalized := false
+	defer func() {
+		if finalized {
+			return
+		}
+		if tempHTMLPath != "" {
+			if err := d.storage.DeleteHTML(tempHTMLPath); err != nil {
+				log.Printf("Failed to delete temporary HTML %s: %v", tempHTMLPath, err)
+			}
+		}
+		if pageID != 0 {
+			if err := d.db.DeletePage(pageID); err != nil {
+				log.Printf("Failed to rollback page %d after capture error: %v", pageID, err)
+			}
+		}
+	}()
+
 	// 提取正文纯文本（在释放 HTML 之前）
 	bodyText := ExtractBodyText(req.HTML)
 
-	pageID, err := d.db.CreatePage(req.URL, req.Title, tempHTMLPath, contentHash, capturedAt)
+	pageID, err = d.db.CreatePage(req.URL, req.Title, tempHTMLPath, contentHash, capturedAt)
 	if err != nil {
+		if deleteErr := d.storage.DeleteHTML(tempHTMLPath); deleteErr != nil {
+			log.Printf("Failed to delete temporary HTML %s after create page error: %v", tempHTMLPath, deleteErr)
+		}
+		tempHTMLPath = ""
 		return 0, "", fmt.Errorf("create page failed: %w", err)
 	}
 
@@ -621,12 +837,17 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	}
 	rewrittenHTML = "" // 释放重写后的 HTML
 
-	// 关联页面和资源
-	for _, resourceID := range resourceIDs {
-		if err := d.db.LinkPageResource(pageID, resourceID); err != nil {
-			log.Printf("Failed to link resource: %v", err)
+	if d.testBeforeCreateFinalize != nil {
+		if err := d.testBeforeCreateFinalize(pageID, tempHTMLPath, resourceIDs); err != nil {
+			return 0, "", err
 		}
 	}
+
+	if err := d.db.LinkPageResources(pageID, resourceIDs); err != nil {
+		return 0, "", fmt.Errorf("link page resources failed: %w", err)
+	}
+
+	finalized = true
 
 	return pageID, models.ArchiveActionCreated, nil
 }
@@ -657,11 +878,6 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	capturedAt := time.Now()
 	oldHTMLPath := page.HTMLPath // 保存旧路径用于日志记录
 
-	// 4. 删除旧的页面资源关联
-	if err := d.db.DeletePageResources(pageID); err != nil {
-		return "", fmt.Errorf("failed to delete old page resources: %w", err)
-	}
-
 	frameMap := buildFrameCaptureMap(req.Frames)
 	log.Printf("[Update] Processing capture with %d top-level resources and %d frames", len(d.htmlExtractor.ExtractResources(req.HTML, req.URL)), len(frameMap))
 
@@ -670,15 +886,17 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	if err != nil {
 		return "", fmt.Errorf("save html failed: %w", err)
 	}
-
-	// 提取正文纯文本并保存（在释放 req.HTML 之前）
-	bodyText := ExtractBodyText(req.HTML)
-	if bodyText != "" {
-		if err := d.db.UpdatePageBodyText(pageID, bodyText); err != nil {
-			log.Printf("Failed to save body text for page %d: %v", pageID, err)
+	cleanupTempHTML := true
+	defer func() {
+		if cleanupTempHTML {
+			if err := d.storage.DeleteHTML(tempHTMLPath); err != nil {
+				log.Printf("[Update] Failed to delete temporary HTML %s: %v", tempHTMLPath, err)
+			}
 		}
-	}
-	bodyText = "" // 释放正文文本
+	}()
+
+	// 提取正文纯文本，并在最终替换快照时和资源关联一起提交。
+	bodyText := ExtractBodyText(req.HTML)
 
 	// 生成时间戳用于资源路径
 	timestamp := capturedAt.Format("20060102150405")
@@ -698,17 +916,21 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	}
 	rewrittenHTML = "" // 释放重写后的 HTML
 
-	// 更新数据库记录
-	if err := d.db.UpdatePageContent(pageID, tempHTMLPath, newContentHash, req.Title); err != nil {
-		return "", fmt.Errorf("update page content failed: %w", err)
-	}
-
-	// 关联新资源
-	for _, resourceID := range resourceIDs {
-		if err := d.db.LinkPageResource(pageID, resourceID); err != nil {
-			log.Printf("[Update] Failed to link resource: %v", err)
+	if d.testBeforeUpdateCommit != nil {
+		if err := d.testBeforeUpdateCommit(pageID, tempHTMLPath, resourceIDs); err != nil {
+			return "", err
 		}
 	}
+
+	var bodyTextPtr *string
+	if bodyText != "" {
+		bodyTextPtr = &bodyText
+	}
+
+	if err := d.db.ReplacePageSnapshot(pageID, tempHTMLPath, newContentHash, req.Title, bodyTextPtr, resourceIDs); err != nil {
+		return "", fmt.Errorf("replace page snapshot failed: %w", err)
+	}
+	cleanupTempHTML = false
 
 	// 将旧 HTML 文件加入删除队列（保留 7 天后自动删除）
 	if oldHTMLPath != tempHTMLPath {

@@ -175,6 +175,26 @@ func (db *DB) LinkPageResource(pageID, resourceID int64) error {
 	return err
 }
 
+// LinkPageResources links a page to all provided resources in a single transaction.
+func (db *DB) LinkPageResources(pageID int64, resourceIDs []int64) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, resourceID := range resourceIDs {
+		if _, err := tx.Exec(
+			"INSERT INTO page_resources (page_id, resource_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+			pageID, resourceID,
+		); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
 // CheckRecentCapture 检查最近是否已捕获相同 URL（5分钟内）
 func (db *DB) CheckRecentCapture(url string, within time.Duration) (bool, error) {
 	var count int
@@ -511,6 +531,46 @@ func (db *DB) UpdatePageContent(id int64, htmlPath, contentHash, title string) e
 		htmlPath, contentHash, title, id,
 	)
 	return err
+}
+
+// ReplacePageSnapshot atomically swaps the page HTML metadata and resource links.
+func (db *DB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title string, bodyText *string, resourceIDs []int64) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if bodyText != nil {
+		if _, err := tx.Exec(
+			"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, body_text = $4, last_visited = NOW() WHERE id = $5",
+			htmlPath, contentHash, title, *bodyText, id,
+		); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(
+			"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, last_visited = NOW() WHERE id = $4",
+			htmlPath, contentHash, title, id,
+		); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec("DELETE FROM page_resources WHERE page_id = $1", id); err != nil {
+		return err
+	}
+
+	for _, resourceID := range resourceIDs {
+		if _, err := tx.Exec(
+			"INSERT INTO page_resources (page_id, resource_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+			id, resourceID,
+		); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 // GetPagesByURL 获取同一 URL 的所有快照（按时间倒序）
