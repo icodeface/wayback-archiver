@@ -13,7 +13,8 @@ const fs = require('fs');
 const path = require('path');
 
 const SERVER_URL = 'http://localhost:8080';
-const DATA_DIR = path.join(__dirname, '../../server/data');
+const TEST_URL = 'https://example.com/test-deletion-queue';
+const DATA_DIR = path.join(__dirname, '../../data');
 const DELETION_QUEUE_FILE = path.join(DATA_DIR, 'deletion_queue.jsonl');
 
 async function sleep(ms) {
@@ -40,7 +41,7 @@ async function updatePage(pageId, html) {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      url: `https://example.com/test-${pageId}`,
+      url: TEST_URL,
       html,
       title: 'Updated Test Page'
     })
@@ -70,7 +71,7 @@ async function main() {
   // 1. 创建初始页面
   console.log('1. 创建初始页面...');
   const pageId = await createPage(
-    'https://example.com/test-deletion-queue',
+    TEST_URL,
     '<html><body><h1>Version 1</h1></body></html>'
   );
   console.log(`   ✓ 页面创建成功 (ID: ${pageId})\n`);
@@ -79,6 +80,7 @@ async function main() {
 
   // 2. 更新页面（第一次）
   console.log('2. 更新页面（第一次）...');
+  const initialQueueLength = readDeletionQueue().length;
   await updatePage(pageId, '<html><body><h1>Version 2</h1></body></html>');
   console.log('   ✓ 页面更新成功\n');
 
@@ -89,30 +91,34 @@ async function main() {
   let queue = readDeletionQueue();
   console.log(`   ✓ 删除队列中有 ${queue.length} 条记录`);
 
-  if (queue.length > 0) {
-    const lastRecord = queue[queue.length - 1];
-    console.log(`   ✓ 最新记录: ${JSON.stringify(lastRecord, null, 2)}`);
+  if (queue.length !== initialQueueLength + 1) {
+    console.error(`   ✗ 删除队列长度异常: 期望 ${initialQueueLength + 1}，实际 ${queue.length}`);
+    process.exit(1);
+  }
 
-    // 验证记录格式
-    if (!lastRecord.html_path || !lastRecord.timestamp || !lastRecord.page_id) {
-      console.error('   ✗ 删除队列记录格式不正确');
-      process.exit(1);
-    }
+  const lastRecord = queue[queue.length - 1];
+  console.log(`   ✓ 最新记录: ${JSON.stringify(lastRecord, null, 2)}`);
 
-    // 验证旧 HTML 文件仍然存在
-    const oldHTMLPath = path.join(DATA_DIR, lastRecord.html_path);
-    if (fs.existsSync(oldHTMLPath)) {
-      console.log(`   ✓ 旧 HTML 文件仍然存在: ${lastRecord.html_path}`);
-    } else {
-      console.error(`   ✗ 旧 HTML 文件不存在: ${lastRecord.html_path}`);
-      process.exit(1);
-    }
+  // 验证记录格式
+  if (!lastRecord.html_path || !lastRecord.timestamp || !lastRecord.page_id) {
+    console.error('   ✗ 删除队列记录格式不正确');
+    process.exit(1);
+  }
+
+  // 验证旧 HTML 文件仍然存在
+  const oldHTMLPath = path.join(DATA_DIR, lastRecord.html_path);
+  if (fs.existsSync(oldHTMLPath)) {
+    console.log(`   ✓ 旧 HTML 文件仍然存在: ${lastRecord.html_path}`);
+  } else {
+    console.error(`   ✗ 旧 HTML 文件不存在: ${lastRecord.html_path}`);
+    process.exit(1);
   }
 
   console.log('\n');
 
   // 4. 再次更新页面（第二次）
   console.log('4. 更新页面（第二次）...');
+  const queueLengthBeforeSecondUpdate = queue.length;
   await updatePage(pageId, '<html><body><h1>Version 3</h1></body></html>');
   console.log('   ✓ 页面更新成功\n');
 
@@ -123,9 +129,14 @@ async function main() {
   queue = readDeletionQueue();
   console.log(`   ✓ 删除队列中现在有 ${queue.length} 条记录`);
 
-  if (queue.length >= 2) {
-    console.log('   ✓ 两次更新都被记录到删除队列');
+  if (queue.length !== queueLengthBeforeSecondUpdate + 1) {
+    console.error(`   ✗ 第二次更新后删除队列长度异常: 期望 ${queueLengthBeforeSecondUpdate + 1}，实际 ${queue.length}`);
+    process.exit(1);
   }
+
+  console.log('   ✓ 两次更新都被记录到删除队列');
+
+  await fetch(`${SERVER_URL}/api/pages/${pageId}`, { method: 'DELETE' });
 
   console.log('\n=== 所有测试通过 ===');
   console.log('\n提示：');

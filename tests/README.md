@@ -6,4 +6,4 @@
 - `server/` - Server-side tests and utilities
 
 ## Running Tests
-Refer to [../docs/TESTING_GUIDE.md](../docs/TESTING_GUIDE.md) for testing procedures.
+Refer to [../docs/BUILD.md](../docs/BUILD.md) for build and test procedures.

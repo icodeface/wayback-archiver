@@ -144,6 +144,23 @@ function markFrames(): HTMLIFrameElement[] {
   return frames;
 }
 
+function resolveFrameOrigin(frame: HTMLIFrameElement): string | null {
+  if (frame.hasAttribute('srcdoc')) {
+    return window.location.origin;
+  }
+
+  const rawSrc = frame.getAttribute('src') || frame.src || 'about:blank';
+  if (rawSrc === 'about:blank' || rawSrc === 'about:srcdoc' || rawSrc === '') {
+    return window.location.origin;
+  }
+
+  try {
+    return new URL(rawSrc, window.location.href).origin;
+  } catch {
+    return null;
+  }
+}
+
 function embedCapturedFrames(parentHTML: string, capturedFrames: Map<string, FrameCaptureResult>, skippedFrames: Map<string, FrameCaptureResult>): string {
   if (capturedFrames.size === 0 && skippedFrames.size === 0) {
     return parentHTML;
@@ -180,7 +197,8 @@ function embedCapturedFrames(parentHTML: string, capturedFrames: Map<string, Fra
 async function requestFrameCapture(frame: HTMLIFrameElement): Promise<FrameCaptureResult | null> {
   const frameId = frame.getAttribute(FRAME_ATTR);
   const frameWindow = frame.contentWindow;
-  if (!frameId || !frameWindow) {
+  const targetOrigin = resolveFrameOrigin(frame);
+  if (!frameId || !frameWindow || targetOrigin !== window.location.origin) {
     return null;
   }
 
@@ -193,7 +211,7 @@ async function requestFrameCapture(frame: HTMLIFrameElement): Promise<FrameCaptu
     }, CONFIG.FRAME_CAPTURE_TIMEOUT);
 
     function handleMessage(event: MessageEvent): void {
-      if (event.source !== frameWindow || !isCaptureResult(event.data) || event.data.requestId !== requestId) {
+      if (event.source !== frameWindow || event.origin !== targetOrigin || !isCaptureResult(event.data) || event.data.requestId !== requestId) {
         return;
       }
 
@@ -209,7 +227,7 @@ async function requestFrameCapture(frame: HTMLIFrameElement): Promise<FrameCaptu
         source: SOURCE,
         type: 'capture-frame',
         requestId,
-      } satisfies FrameCaptureRequest, '*');
+      } satisfies FrameCaptureRequest, targetOrigin);
     } catch {
       window.clearTimeout(timeoutId);
       window.removeEventListener('message', handleMessage);
@@ -261,7 +279,9 @@ export function setupFrameCaptureBridge(): void {
   }
 
   window.addEventListener('message', (event: MessageEvent) => {
-    if (!isCaptureRequest(event.data) || event.source !== window.parent) {
+    // Only honor requests from a same-origin parent. Cross-origin parents can
+    // always postMessage into the iframe, so accepting them would leak DOM.
+    if (!isCaptureRequest(event.data) || event.source !== window.parent || event.origin !== window.location.origin) {
       return;
     }
 
@@ -290,7 +310,7 @@ export function setupFrameCaptureBridge(): void {
         url: window.location.href,
         title: document.title,
         frames: captured.frames,
-      } satisfies FrameCaptureResult, '*');
+      } satisfies FrameCaptureResult, event.origin);
     })();
   });
 }

@@ -2,9 +2,30 @@ package database
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestBuildConnectionString_DefaultSSLMode(t *testing.T) {
+	connStr := buildConnectionString("localhost", "5432", "postgres", "", "wayback", "disable")
+
+	for _, want := range []string{"host='localhost'", "port='5432'", "dbname='wayback'", "user='postgres'", "sslmode='disable'"} {
+		if !strings.Contains(connStr, want) {
+			t.Fatalf("connection string %q missing %q", connStr, want)
+		}
+	}
+}
+
+func TestBuildConnectionString_CustomSSLMode(t *testing.T) {
+	connStr := buildConnectionString("db.internal", "5432", "app", "secret value", "wayback", "require")
+
+	for _, want := range []string{"host='db.internal'", "user='app'", "password='secret value'", "sslmode='require'"} {
+		if !strings.Contains(connStr, want) {
+			t.Fatalf("connection string %q missing %q", connStr, want)
+		}
+	}
+}
 
 // skipIfNoDB connects to the test database or skips the test.
 func skipIfNoDB(t *testing.T) *DB {
