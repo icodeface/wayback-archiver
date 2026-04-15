@@ -66,6 +66,7 @@ func main() {
 		cfg.Database.User,
 		cfg.Database.Password,
 		cfg.Database.DBName,
+		cfg.Database.SSLMode,
 	)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)

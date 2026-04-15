@@ -40,6 +40,7 @@ function initializeArchiver(): void {
   let captureData: CaptureData | null = null;
   let isCapturing = false;
   let hasArchived = false;
+  let sendPromise: Promise<void> | null = null;
   let currentPageId: number | null = null;
   let initialHTMLSize = 0; // Track initial capture size for update quality guard
 
@@ -115,24 +116,37 @@ function initializeArchiver(): void {
     }
   }
 
-  async function sendCapture(): Promise<void> {
+  function sendCapture(): Promise<void> {
     if (!captureData || hasArchived) {
-      return;
+      return sendPromise || Promise.resolve();
     }
 
-    hasArchived = true;
-    try {
-      const response = await sendToServer(captureData);
-      currentPageId = response.page_id;
-      console.log('[Wayback] Page ID:', currentPageId, 'Action:', response.action);
+    if (sendPromise) {
+      return sendPromise;
+    }
 
-      // Start DOM change monitor for newly created pages
-      if (response.action === 'created') {
-        startDOMChangeMonitor();
+    const pendingCapture = captureData;
+
+    sendPromise = (async () => {
+      try {
+        const response = await sendToServer(pendingCapture);
+        currentPageId = response.page_id;
+        hasArchived = true;
+        console.log('[Wayback] Page ID:', currentPageId, 'Action:', response.action);
+
+        // Even when POST returns unchanged, we still need to watch for later
+        // DOM mutations so dynamic content can upgrade the existing snapshot.
+        if (response.action === 'created' || response.action === 'unchanged') {
+          startDOMChangeMonitor();
+        }
+      } catch (error) {
+        console.error('[Wayback] Send failed:', error);
+      } finally {
+        sendPromise = null;
       }
-    } catch (error) {
-      console.error('[Wayback] Send failed:', error);
-    }
+    })();
+
+    return sendPromise;
   }
 
   function stopDOMChangeMonitor(): void {
@@ -298,6 +312,7 @@ function initializeArchiver(): void {
     captureData = null;
     isCapturing = false;
     hasArchived = false;
+    sendPromise = null;
     currentPageId = null;
     initialHTMLSize = 0;
     if (collectorObserver) {

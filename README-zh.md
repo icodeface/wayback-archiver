@@ -143,7 +143,7 @@ export https_proxy=http://127.0.0.1:7897
 | `DB_USER` | `postgres` | 数据库用户 |
 | `DB_PASSWORD` | *（空）* | 数据库密码 |
 | `DB_NAME` | `wayback` | 数据库名称 |
-| `DB_SSLMODE` | `disable` | SSL 模式 |
+| `DB_SSLMODE` | `disable` | 服务端连接 PostgreSQL 时使用的 SSL 模式 |
 | `SERVER_PORT` | `8080` | HTTP 服务端口 |
 | `DATA_DIR` | `./data` | HTML 和资源的存储目录 |
 | `LOG_DIR` | `./data/logs` | 日志文件目录 |
@@ -166,6 +166,12 @@ export https_proxy=http://127.0.0.1:7897
 - **远程部署**：设置 `ENABLE_COMPRESSION: true`
   - 上传减少 95%+（大型 HTML 快照）
   - 重新构建脚本：`cd browser && npm run build`
+
+### 捕获说明
+
+- `/api/archive` 和 `/api/archive/:id` 会拒绝解压后超过 32 MiB 的 JSON 请求体，并返回 HTTP `413`
+- 出于安全考虑，iframe 捕获桥仅接受同源父页面请求；跨源 iframe 会回退为原始归档 URL
+- 浏览器脚本会跳过本地/私网地址，例如 `localhost`、`127.0.0.1`、`172.16.0.0/12`、`169.254.0.0/16`、`::1`、`fc00::/7`、`fe80::/10` 和 `.local`
 
 ## API
 

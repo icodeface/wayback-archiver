@@ -170,12 +170,30 @@
                     sidebar.innerHTML = '<div class="empty-state">No log files</div>';
                     return;
                 }
-                sidebar.innerHTML = data.files.map(f => `
-                    <div class="file-item${currentFile === f.name ? ' active' : ''}" onclick="selectFile('${f.name}')">
-                        <div class="file-name">${f.date}</div>
-                        <div class="file-meta">${formatSize(f.size)}</div>
-                    </div>
-                `).join('');
+                sidebar.innerHTML = '';
+                const fragment = document.createDocumentFragment();
+                data.files.forEach((f) => {
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    if (currentFile === f.name) {
+                        item.classList.add('active');
+                    }
+                    item.setAttribute('data-filename', f.name);
+                    item.addEventListener('click', () => selectFile(f.name));
+
+                    const name = document.createElement('div');
+                    name.className = 'file-name';
+                    name.textContent = f.date;
+
+                    const meta = document.createElement('div');
+                    meta.className = 'file-meta';
+                    meta.textContent = formatSize(f.size);
+
+                    item.appendChild(name);
+                    item.appendChild(meta);
+                    fragment.appendChild(item);
+                });
+                sidebar.appendChild(fragment);
                 // Auto-select first file if none selected
                 if (!currentFile && data.files.length > 0) {
                     selectFile(data.files[0].name);
@@ -189,7 +207,7 @@
             currentFile = filename;
             document.querySelectorAll('.file-item').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.file-item').forEach(el => {
-                if (el.querySelector('.file-name').textContent === filename.replace('wayback-','').replace('.log','')) {
+                if (el.getAttribute('data-filename') === filename) {
                     el.classList.add('active');
                 }
             });
@@ -200,7 +218,7 @@
         async function loadLogContent() {
             if (!currentFile) return;
             try {
-                const res = await fetch(`/api/logs/${currentFile}?tail=2000`);
+                const res = await fetch(`/api/logs/${encodeURIComponent(currentFile)}?tail=2000`);
                 const data = await res.json();
                 renderLog(data.content || '');
             } catch (e) {

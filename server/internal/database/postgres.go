@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -14,22 +15,13 @@ type DB struct {
 	conn *sql.DB
 }
 
-func New(host, port, user, password, dbname string) (*DB, error) {
-	// 构建连接字符串，确保 dbname 参数正确传递
-	connStr := fmt.Sprintf("host=%s port=%s dbname=%s sslmode=disable",
-		host, port, dbname)
-
-	// 只有在 user 不为空时才添加
-	if user != "" {
-		connStr = fmt.Sprintf("host=%s port=%s user=%s dbname=%s sslmode=disable",
-			host, port, user, dbname)
+func New(host, port, user, password, dbname string, sslmode ...string) (*DB, error) {
+	mode := "disable"
+	if len(sslmode) > 0 && sslmode[0] != "" {
+		mode = sslmode[0]
 	}
 
-	// 只有在 password 不为空时才添加
-	if password != "" {
-		connStr = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-			host, port, user, password, dbname)
-	}
+	connStr := buildConnectionString(host, port, user, password, dbname, mode)
 
 	conn, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -51,6 +43,30 @@ func New(host, port, user, password, dbname string) (*DB, error) {
 	}
 
 	return db, nil
+}
+
+func buildConnectionString(host, port, user, password, dbname, sslmode string) string {
+	parts := []string{
+		fmt.Sprintf("host=%s", quoteConnValue(host)),
+		fmt.Sprintf("port=%s", quoteConnValue(port)),
+		fmt.Sprintf("dbname=%s", quoteConnValue(dbname)),
+		fmt.Sprintf("sslmode=%s", quoteConnValue(sslmode)),
+	}
+
+	if user != "" {
+		parts = append(parts, fmt.Sprintf("user=%s", quoteConnValue(user)))
+	}
+	if password != "" {
+		parts = append(parts, fmt.Sprintf("password=%s", quoteConnValue(password)))
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func quoteConnValue(value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+	return "'" + escaped + "'"
 }
 
 // ensureDomainColumn adds the domain column, index, and backfills existing rows if needed.

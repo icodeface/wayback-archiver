@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -243,5 +244,43 @@ func TestUpdatePage_NonExistentPage(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500 for non-existent page, got %d", w.Code)
+	}
+}
+
+func TestArchiveEndpoints_RequestBodyTooLarge(t *testing.T) {
+	router := setupRouter(&Handler{})
+	oversizedHTML := strings.Repeat("a", int(maxCaptureRequestBodyBytes)+1024)
+	body, err := json.Marshal(models.CaptureRequest{
+		URL:   "https://example.com/too-large",
+		Title: "Too Large",
+		HTML:  oversizedHTML,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "POST archive", method: http.MethodPost, path: "/api/archive"},
+		{name: "PUT archive update", method: http.MethodPut, path: "/api/archive/1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest(tt.method, tt.path, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("expected 413, got %d: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "32 MiB") {
+				t.Fatalf("expected body limit message, got %s", w.Body.String())
+			}
+		})
 	}
 }

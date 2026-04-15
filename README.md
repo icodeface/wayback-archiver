@@ -147,7 +147,7 @@ The server automatically loads `.env` from the working directory if it exists. Y
 | `DB_USER` | `postgres` | Database user. PostgreSQL defaults to the current system username, so leaving this unset is usually recommended. |
 | `DB_PASSWORD` | *(empty)* | Database password |
 | `DB_NAME` | `wayback` | Database name |
-| `DB_SSLMODE` | `disable` | SSL mode |
+| `DB_SSLMODE` | `disable` | PostgreSQL SSL mode used by the server connection |
 | `SERVER_HOST` | `127.0.0.1` | Server bind address (`0.0.0.0` = all interfaces, `127.0.0.1` = localhost only) |
 | `SERVER_PORT` | `8080` | HTTP server port |
 | `ALLOWED_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080,null` | CORS allowed origins (comma-separated). For remote deployment, add your domain: `https://your-domain.com,null` |
@@ -202,6 +202,11 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 - Reduces upload bandwidth by 95%+ (especially for large HTML snapshots)
 - Response compression is automatic (no configuration needed)
 - Minimal CPU overhead, significant network savings
+
+**Capture Notes:**
+- `/api/archive` and `/api/archive/:id` reject decompressed JSON bodies larger than 32 MiB with HTTP `413`
+- For security, the iframe capture bridge only serves same-origin parent pages; cross-origin iframes fall back to their original archived URL
+- The browser script skips local/private targets including `localhost`, `127.0.0.1`, `172.16.0.0/12`, `169.254.0.0/16`, `::1`, `fc00::/7`, `fe80::/10`, and `.local`
 
 ## API
 

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	gzipMiddleware "github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"wayback/internal/config"
+	"wayback/internal/models"
 )
 
 // setupRouterWithGzip creates a test router with gzip middleware
@@ -253,6 +255,37 @@ func TestGzipDecompression_RequestBody(t *testing.T) {
 	t.Logf("Original size: %d bytes, Compressed size: %d bytes (%.1f%% reduction)",
 		len(originalData), compressedBuf.Len(),
 		(1-float64(compressedBuf.Len())/float64(len(originalData)))*100)
+}
+
+func TestGzipDecompression_RequestBodyLimitAfterInflation(t *testing.T) {
+	r := setupRouterWithGzip()
+	payload, err := json.Marshal(models.CaptureRequest{
+		URL:   "https://example.com/oversized-gzip",
+		Title: "Oversized gzip",
+		HTML:  strings.Repeat("a", int(maxCaptureRequestBodyBytes)+1024),
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	var compressed bytes.Buffer
+	gzw := gzip.NewWriter(&compressed)
+	if _, err := gzw.Write(payload); err != nil {
+		t.Fatalf("gzip write failed: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/archive", &compressed)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d: %s", w.Code, w.Body.String())
+	}
 }
 
 func TestGzipDecompression_LargeRequestBody(t *testing.T) {

@@ -256,7 +256,9 @@
             document.getElementById('content').innerHTML = '<div class="empty">No URL specified. Use ?url=... to view timeline.</div>';
             document.getElementById('targetUrl').style.display = 'none';
         } else {
-            document.getElementById('targetUrl').innerHTML = `<a href="${escapeHtml(targetUrl)}" target="_blank" rel="noopener">${escapeHtml(targetUrl)}</a>`;
+            const targetUrlEl = document.getElementById('targetUrl');
+            targetUrlEl.innerHTML = '';
+            targetUrlEl.appendChild(createSafeExternalLink(targetUrl));
             document.title = `Timeline: ${targetUrl}`;
             loadTimeline(targetUrl);
         }
@@ -341,6 +343,35 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function createSafeExternalLink(rawURL) {
+            const link = document.createElement('a');
+            link.textContent = rawURL || '';
+
+            const safeURL = normalizeExternalURL(rawURL);
+            if (safeURL) {
+                link.href = safeURL;
+                link.target = '_blank';
+                link.rel = 'noopener';
+            } else {
+                link.href = '#';
+                link.addEventListener('click', (event) => event.preventDefault());
+            }
+
+            return link;
+        }
+
+        function normalizeExternalURL(rawURL) {
+            try {
+                const parsed = new URL(rawURL, window.location.href);
+                if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                    return null;
+                }
+                return parsed.toString();
+            } catch {
+                return null;
+            }
         }
 
         fetch('/api/version').then(r => r.json()).then(d => {

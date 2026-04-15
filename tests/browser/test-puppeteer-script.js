@@ -20,7 +20,7 @@ async function testPuppeteerScript() {
   await page.goto('https://www.baidu.com', { waitUntil: 'networkidle0' });
 
   // Load the script after navigation
-  const scriptPath = path.join(__dirname, '../browser/dist/wayback-puppeteer.js');
+  const scriptPath = path.join(__dirname, '../../browser/dist/wayback-puppeteer.js');
   console.log('Loading script:', scriptPath);
   await page.addScriptTag({ path: scriptPath });
 

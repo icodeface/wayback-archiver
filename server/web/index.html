@@ -692,51 +692,81 @@
                 return;
             }
 
-            pageList.innerHTML = pages.map(page => {
+            pageList.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+
+            pages.forEach(page => {
                 const firstVisited = formatDate(page.first_visited);
                 const lastVisited = formatDate(page.last_visited);
                 const isMultipleVisits = page.first_visited !== page.last_visited;
 
-                return `
-                    <li class="page-item" data-archive-id="${page.id}">
-                        <div class="page-header">
-                            <div class="page-title-group">
-                                <h2 class="page-title">${escapeHtml(page.title || 'Untitled')}</h2>
-                                <span class="page-id">#${page.id}</span>
-                            </div>
-                            <div class="page-actions">
-                                <button class="timeline-btn" onclick="openTimeline(event, '${escapeHtml(page.url)}')">Timeline</button>
-                                <button class="delete-btn" data-page-id="${page.id}" onclick="deletePage(event, ${page.id})">Delete</button>
-                            </div>
-                        </div>
-                        <a href="${escapeHtml(page.url)}" class="page-url" target="_blank" rel="noopener">${escapeHtml(page.url)}</a>
-                        <div class="page-meta">
-                            <span class="meta-item">
-                                <span class="meta-icon">⏱</span>
-                                ${firstVisited}
-                            </span>
-                            ${isMultipleVisits ? `
-                            <span class="meta-item">
-                                <span class="meta-icon">↻</span>
-                                ${lastVisited}
-                            </span>
-                            ` : ''}
-                        </div>
-                    </li>
-                `;
-            }).join('');
+                const item = document.createElement('li');
+                item.className = 'page-item';
+                item.setAttribute('data-archive-id', String(page.id));
 
-            // Add click handlers to page items
-            document.querySelectorAll('.page-item').forEach(item => {
+                const header = document.createElement('div');
+                header.className = 'page-header';
+
+                const titleGroup = document.createElement('div');
+                titleGroup.className = 'page-title-group';
+
+                const title = document.createElement('h2');
+                title.className = 'page-title';
+                title.textContent = page.title || 'Untitled';
+
+                const pageId = document.createElement('span');
+                pageId.className = 'page-id';
+                pageId.textContent = `#${page.id}`;
+
+                const actions = document.createElement('div');
+                actions.className = 'page-actions';
+
+                const timelineBtn = document.createElement('button');
+                timelineBtn.className = 'timeline-btn';
+                timelineBtn.type = 'button';
+                timelineBtn.textContent = 'Timeline';
+                timelineBtn.addEventListener('click', (event) => openTimeline(event, page.url));
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.type = 'button';
+                deleteBtn.setAttribute('data-page-id', String(page.id));
+                deleteBtn.textContent = 'Delete';
+                deleteBtn.addEventListener('click', (event) => deletePage(event, page.id));
+
+                const urlLink = createSafeExternalLink(page.url, 'page-url');
+
+                const meta = document.createElement('div');
+                meta.className = 'page-meta';
+                meta.appendChild(createMetaItem('⏱', firstVisited));
+                if (isMultipleVisits) {
+                    meta.appendChild(createMetaItem('↻', lastVisited));
+                }
+
+                titleGroup.appendChild(title);
+                titleGroup.appendChild(pageId);
+
+                actions.appendChild(timelineBtn);
+                actions.appendChild(deleteBtn);
+
+                header.appendChild(titleGroup);
+                header.appendChild(actions);
+
+                item.appendChild(header);
+                item.appendChild(urlLink);
+                item.appendChild(meta);
+
                 item.addEventListener('click', (e) => {
-                    // Don't navigate if clicking on the original URL link or delete button
                     if (e.target.closest('.page-url') || e.target.closest('.delete-btn') || e.target.closest('.timeline-btn')) {
                         return;
                     }
-                    const archiveId = item.getAttribute('data-archive-id');
-                    window.open(`/view/${archiveId}`, '_blank');
+                    window.open(`/view/${page.id}`, '_blank');
                 });
+
+                fragment.appendChild(item);
             });
+
+            pageList.appendChild(fragment);
         }
 
         function openTimeline(event, pageUrl) {
@@ -831,10 +861,47 @@
             }
         }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+        function createMetaItem(icon, text) {
+            const item = document.createElement('span');
+            item.className = 'meta-item';
+
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'meta-icon';
+            iconSpan.textContent = icon;
+
+            item.appendChild(iconSpan);
+            item.appendChild(document.createTextNode(text));
+            return item;
+        }
+
+        function createSafeExternalLink(rawURL, className) {
+            const link = document.createElement('a');
+            link.className = className;
+            link.textContent = rawURL || '';
+
+            const safeURL = normalizeExternalURL(rawURL);
+            if (safeURL) {
+                link.href = safeURL;
+                link.target = '_blank';
+                link.rel = 'noopener';
+            } else {
+                link.href = '#';
+                link.addEventListener('click', (event) => event.preventDefault());
+            }
+
+            return link;
+        }
+
+        function normalizeExternalURL(rawURL) {
+            try {
+                const parsed = new URL(rawURL, window.location.href);
+                if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                    return null;
+                }
+                return parsed.toString();
+            } catch {
+                return null;
+            }
         }
 
         loadPages(1);
