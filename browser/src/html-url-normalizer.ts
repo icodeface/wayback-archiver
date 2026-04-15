@@ -1,7 +1,7 @@
 const URL_ATTRS = ['src', 'href', 'poster'];
 const SRCSET_ATTRS = ['srcset', 'imagesrcset'];
 
-function shouldSkipURL(value: string): boolean {
+function shouldSkipCapturedURL(value: string): boolean {
   return value === '' ||
     value.startsWith('data:') ||
     value.startsWith('javascript:') ||
@@ -13,7 +13,7 @@ function shouldSkipURL(value: string): boolean {
 
 function toAbsoluteURL(value: string, baseURL: string): string {
   const trimmed = value.trim();
-  if (shouldSkipURL(trimmed)) {
+  if (shouldSkipCapturedURL(trimmed)) {
     return value;
   }
 
