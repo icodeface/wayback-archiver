@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const ts = require('typescript');
 
 // Step 1: Compile TypeScript
 console.log('Compiling TypeScript...');
@@ -16,8 +17,10 @@ const version = process.env.VERSION
   || execSync('git describe --tags --always --dirty 2>/dev/null || echo "dev"', { encoding: 'utf8' }).trim().replace(/^v/, '');
 
 const distDir = path.join(__dirname, 'dist');
+const srcDir = path.join(__dirname, 'src');
 const userscriptPath = path.join(distDir, 'wayback-userscript.js');
 const puppeteerPath = path.join(distDir, 'wayback-puppeteer.js');
+const distPackageJSONPath = path.join(distDir, 'package.json');
 const pakoPath = path.join(__dirname, 'node_modules/pako/dist/pako.min.js');
 
 // Module files to bundle in dependency order
@@ -25,9 +28,6 @@ const userscriptModules = [
   'config.js',
   'types.js',
   'page-filter.js',
-  'content-fetcher.js',
-  'css-parser.js',
-  'resource-collector.js',
   'page-freezer.js',
   'style-inliner.js',
   'dom-collector.js',
@@ -80,13 +80,117 @@ const footer = `
 })();
 `;
 
-function bundleModules(moduleFiles) {
+function resolveSourceModulePath(moduleFile) {
+  const baseName = moduleFile.replace(/\.js$/, '');
+  const candidates = [
+    path.join(srcDir, `${baseName}.ts`),
+    path.join(srcDir, `${baseName}.js`),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Source module not found for ${moduleFile}`);
+}
+
+function collectBindings(nameNode, out) {
+  if (!nameNode) {
+    return;
+  }
+
+  if (ts.isIdentifier(nameNode)) {
+    out.push(nameNode.text);
+    return;
+  }
+
+  if (ts.isArrayBindingPattern(nameNode) || ts.isObjectBindingPattern(nameNode)) {
+    for (const element of nameNode.elements) {
+      if (ts.isBindingElement(element)) {
+        collectBindings(element.name, out);
+      }
+    }
+  }
+}
+
+function topLevelRuntimeDeclarations(filePath) {
+  const sourceText = fs.readFileSync(filePath, 'utf8');
+  const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.ES2020, true, ts.ScriptKind.JS);
+  const declarations = [];
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name) {
+      declarations.push({
+        name: statement.name.text,
+        filePath,
+      });
+      continue;
+    }
+
+    if (ts.isClassDeclaration(statement) && statement.name) {
+      declarations.push({
+        name: statement.name.text,
+        filePath,
+      });
+      continue;
+    }
+
+    if (!ts.isVariableStatement(statement)) {
+      continue;
+    }
+
+    for (const declaration of statement.declarationList.declarations) {
+      const names = [];
+      collectBindings(declaration.name, names);
+      for (const name of names) {
+        declarations.push({ name, filePath });
+      }
+    }
+  }
+
+  return declarations;
+}
+
+function assertValidBundleModules(moduleFiles, bundleName) {
+  const declarationsByName = new Map();
+
+  for (const moduleFile of moduleFiles) {
+    resolveSourceModulePath(moduleFile);
+
+    const filePath = path.join(distDir, moduleFile);
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Built module not found for ${bundleName}: ${moduleFile}`);
+    }
+
+    for (const declaration of topLevelRuntimeDeclarations(filePath)) {
+      const matches = declarationsByName.get(declaration.name) || [];
+      matches.push(declaration.filePath);
+      declarationsByName.set(declaration.name, matches);
+    }
+  }
+
+  const duplicates = Array.from(declarationsByName.entries())
+    .filter(([, files]) => files.length > 1)
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  if (duplicates.length > 0) {
+    const detail = duplicates
+      .map(([name, files]) => `${name}: ${files.map((file) => path.basename(file)).join(', ')}`)
+      .join('\n');
+    throw new Error(`Duplicate top-level runtime declarations in ${bundleName} bundle:\n${detail}`);
+  }
+}
+
+function bundleModules(moduleFiles, bundleName) {
+  assertValidBundleModules(moduleFiles, bundleName);
+
   let bundledContent = '';
   for (const moduleFile of moduleFiles) {
     const filePath = path.join(distDir, moduleFile);
     if (!fs.existsSync(filePath)) {
-      console.warn(`Warning: Module file not found: ${moduleFile}`);
-      continue;
+      throw new Error(`Module file not found for ${bundleName}: ${moduleFile}`);
     }
     let content = fs.readFileSync(filePath, 'utf8');
     content = content.replace(/^import\s+.*?from\s+['"][^'"]+['"];?\s*$/gm, '');
@@ -102,7 +206,7 @@ function bundleModules(moduleFiles) {
 }
 
 // Build userscript
-const userscriptContent = header + bundleModules(userscriptModules) + footer;
+const userscriptContent = header + bundleModules(userscriptModules, 'userscript') + footer;
 fs.writeFileSync(userscriptPath, userscriptContent, 'utf8');
 console.log('\n✓ Build complete: wayback-userscript.js');
 console.log(`✓ Bundle size: ${userscriptContent.length} bytes`);
@@ -115,9 +219,11 @@ const puppeteerContent = `(function() {
 // === pako.min.js ===
 ${pakoContent}
 
-${bundleModules(puppeteerModules)}
+${bundleModules(puppeteerModules, 'puppeteer')}
 })();
 `;
 fs.writeFileSync(puppeteerPath, puppeteerContent, 'utf8');
+fs.writeFileSync(distPackageJSONPath, JSON.stringify({ type: 'module' }, null, 2) + '\n', 'utf8');
 console.log('✓ Build complete: wayback-puppeteer.js');
 console.log(`✓ Bundle size: ${puppeteerContent.length} bytes`);
+console.log('✓ Wrote dist/package.json');
