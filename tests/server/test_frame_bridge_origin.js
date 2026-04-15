@@ -39,35 +39,50 @@ async function main() {
         throw new Error('victim iframe not ready');
       }
 
+      let publicMessages = 0;
       const timer = window.setTimeout(() => {
         window.removeEventListener('message', onMessage);
-        resolve({ leaked: false });
-      }, 3000);
+        resolve({ forgedAccepted: false, publicMessages });
+      }, 4000);
 
       function onMessage(event) {
-        if (event.data && event.data.source === 'wayback-frame-capture' && event.data.type === 'frame-result') {
-          window.clearTimeout(timer);
-          window.removeEventListener('message', onMessage);
-          resolve({
-            leaked: true,
-            title: event.data.title,
-            html: event.data.html,
-          });
+        if (event.data && event.data.source === 'wayback-frame-capture') {
+          publicMessages += 1;
         }
       }
 
       window.addEventListener('message', onMessage);
+
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (event) => {
+        window.clearTimeout(timer);
+        window.removeEventListener('message', onMessage);
+        resolve({
+          forgedAccepted: true,
+          publicMessages,
+          data: event.data,
+        });
+      };
+
       frame.contentWindow.postMessage({
         source: 'wayback-frame-capture',
         type: 'capture-frame',
+        frameId: 'forged-frame-id',
+        parentOrigin: window.location.origin,
+        targetOrigin: new URL(frame.src, window.location.href).origin,
         requestId: 'attacker-request',
-      }, '*');
+        timestamp: Date.now(),
+        token: 'forged-token',
+      }, '*', [channel.port2]);
     }));
 
     await page.close();
 
-    if (result.leaked) {
-      throw new Error(`cross-origin frame bridge leaked content: ${result.title}`);
+    if (result.forgedAccepted) {
+      throw new Error(`forged frame bridge request unexpectedly succeeded: ${JSON.stringify(result.data)}`);
+    }
+    if (result.publicMessages !== 0) {
+      throw new Error(`forged request triggered unexpected public bridge messages: ${result.publicMessages}`);
     }
 
     console.log('PASS test_frame_bridge_origin');

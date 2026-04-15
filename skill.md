@@ -186,7 +186,7 @@ data/
 - **Dynamic content support**: Captures live DOM state, auto-updates on significant mutations
 - **SPA-aware**: Detects SPA navigation, resets capture state per route
 - **Anti-refresh protection**: Archived pages frozen (timers, WebSockets, navigation APIs neutralized)
-- **Iframe bridge hardening**: Same-origin parents only; cross-origin iframes are not DOM-exported back to the parent page
+- **Hardened cross-origin iframe capture**: Embedded cross-origin documents are still captured, but bridge requests are signed and frame HTML returns over a private `MessageChannel`
 - **Capture body guardrail**: `/api/archive` and `/api/archive/:id` reject decompressed JSON bodies above 32 MiB
 - **Private page filter**: Browser side skips loopback, RFC1918, link-local, ULA/loopback IPv6, and `.local` pages
 

@@ -205,7 +205,7 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 
 **Capture Notes:**
 - `/api/archive` and `/api/archive/:id` reject decompressed JSON bodies larger than 32 MiB with HTTP `413`
-- For security, the iframe capture bridge only serves same-origin parent pages; cross-origin iframes fall back to their original archived URL
+- Cross-origin iframe snapshots remain enabled, but the browser bridge now signs requests and returns frame HTML over a private `MessageChannel` instead of public `window.postMessage`
 - The browser script skips local/private targets including `localhost`, `127.0.0.1`, `172.16.0.0/12`, `169.254.0.0/16`, `::1`, `fc00::/7`, `fe80::/10`, and `.local`
 
 ## API
