@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -102,6 +104,94 @@ func TestValidateResourceURL_ValidPublicURL(t *testing.T) {
 		if err != nil {
 			t.Errorf("Unexpected error for valid URL %s: %v", url, err)
 		}
+	}
+}
+
+func TestValidateResourceURL_DoesNotCacheResolvedPublicHost(t *testing.T) {
+	originalLookup := lookupIPFunc
+	lookupCalls := 0
+	lookupIPFunc = func(host string) ([]net.IP, error) {
+		lookupCalls++
+		return []net.IP{net.ParseIP("8.8.8.8")}, nil
+	}
+	t.Cleanup(func() {
+		lookupIPFunc = originalLookup
+	})
+
+	for range 3 {
+		err := validateResourceURL("https://cache-hit.example.test/resource.css")
+		if err != nil {
+			t.Fatalf("validateResourceURL returned unexpected error: %v", err)
+		}
+	}
+
+	if lookupCalls != 3 {
+		t.Fatalf("expected each validation to perform DNS lookup, got %d lookups", lookupCalls)
+	}
+}
+
+func TestValidateResourceURL_DoesNotCacheLookupFailures(t *testing.T) {
+	originalLookup := lookupIPFunc
+	lookupCalls := 0
+	lookupIPFunc = func(host string) ([]net.IP, error) {
+		lookupCalls++
+		return nil, errors.New("temporary dns failure")
+	}
+	t.Cleanup(func() {
+		lookupIPFunc = originalLookup
+	})
+
+	for range 2 {
+		err := validateResourceURL("https://dns-flaky.example.test/resource.css")
+		if err != nil {
+			t.Fatalf("DNS failure should still allow request to continue, got: %v", err)
+		}
+	}
+
+	if lookupCalls != 2 {
+		t.Fatalf("failed DNS lookups should not be cached, got %d lookups", lookupCalls)
+	}
+}
+
+func TestValidateResourceURL_DoesNotCacheBlockedHostResult(t *testing.T) {
+	originalLookup := lookupIPFunc
+	lookupCalls := 0
+	lookupIPFunc = func(host string) ([]net.IP, error) {
+		lookupCalls++
+		return []net.IP{net.ParseIP("127.0.0.1")}, nil
+	}
+	t.Cleanup(func() {
+		lookupIPFunc = originalLookup
+	})
+
+	for range 2 {
+		err := validateResourceURL("https://blocked-cache.example.test/private.css")
+		if err == nil || !strings.Contains(err.Error(), "private IP") {
+			t.Fatalf("expected blocked host to return private IP error, got: %v", err)
+		}
+	}
+
+	if lookupCalls != 2 {
+		t.Fatalf("expected each blocked validation to perform DNS lookup, got %d lookups", lookupCalls)
+	}
+}
+
+func TestValidateResourceURL_IPLiteralBypassesLookup(t *testing.T) {
+	originalLookup := lookupIPFunc
+	lookupCalls := 0
+	lookupIPFunc = func(host string) ([]net.IP, error) {
+		lookupCalls++
+		return []net.IP{net.ParseIP("8.8.8.8")}, nil
+	}
+	t.Cleanup(func() {
+		lookupIPFunc = originalLookup
+	})
+
+	if err := validateResourceURL("https://8.8.8.8/test.css"); err != nil {
+		t.Fatalf("public IP literal should validate without lookup: %v", err)
+	}
+	if lookupCalls != 0 {
+		t.Fatalf("IP literal should bypass DNS lookup, got %d lookups", lookupCalls)
 	}
 }
 
