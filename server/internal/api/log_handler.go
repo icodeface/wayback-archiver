@@ -1,12 +1,42 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 )
+
+func parseTailQuery(c *gin.Context) (int, bool) {
+	tail := 2000
+	if t := c.Query("tail"); t != "" {
+		v, err := strconv.Atoi(t)
+		if err != nil || v <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tail"})
+			return 0, false
+		}
+		tail = v
+	}
+	return tail, true
+}
+
+func logReadStatus(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+
+	message := err.Error()
+	switch {
+	case errors.Is(err, strconv.ErrSyntax), strings.Contains(message, "invalid filename"), strings.Contains(message, "invalid log filename"):
+		return http.StatusBadRequest
+	case strings.Contains(message, "symlink not allowed"), strings.Contains(message, "log file too large"):
+		return http.StatusInternalServerError
+	default:
+		return http.StatusNotFound
+	}
+}
 
 // ListLogs returns available log files.
 func (h *Handler) ListLogs(c *gin.Context) {
@@ -21,16 +51,14 @@ func (h *Handler) ListLogs(c *gin.Context) {
 // GetLog returns the content of a specific log file.
 func (h *Handler) GetLog(c *gin.Context) {
 	filename := c.Param("filename")
-	tail := 2000
-	if t := c.Query("tail"); t != "" {
-		if v, err := strconv.Atoi(t); err == nil && v > 0 {
-			tail = v
-		}
+	tail, ok := parseTailQuery(c)
+	if !ok {
+		return
 	}
 
 	content, err := h.logger.ReadLogFile(filename, tail)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		c.JSON(logReadStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -61,16 +89,14 @@ func (h *Handler) GetLatestLog(c *gin.Context) {
 	// files are sorted newest first
 	latest := files[0].Name
 
-	tail := 2000
-	if t := c.Query("tail"); t != "" {
-		if v, err := strconv.Atoi(t); err == nil && v > 0 {
-			tail = v
-		}
+	tail, ok := parseTailQuery(c)
+	if !ok {
+		return
 	}
 
 	content, err := h.logger.ReadLogFile(latest, tail)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(logReadStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 

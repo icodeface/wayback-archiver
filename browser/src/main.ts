@@ -9,6 +9,7 @@
 // @grant        GM_cookie
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_addValueChangeListener
 // @connect      localhost
 // @run-at       document-idle
 // ==/UserScript==
@@ -20,6 +21,7 @@ import { waitForDOMStable } from './page-freezer';
 import { sendToServer, updateOnServer } from './archiver';
 import { DOMCollector } from './dom-collector';
 import { captureDocumentHTMLWithFrames, setupFrameCaptureBridge } from './frame-capture';
+import { chooseFlushAction, choosePendingFlushDependency, shouldCommitMonitorUpdate } from './spa-coordinator';
 
 // Early exit check before any initialization
 if (shouldSkipPage()) {
@@ -43,6 +45,7 @@ function initializeArchiver(): void {
   let isCapturing = false;
   let hasArchived = false;
   let sendPromise: Promise<void> | null = null;
+  let updatePromise: Promise<void> | null = null;
   let currentPageId: number | null = null;
   let initialHTMLSize = 0; // Track initial capture size for update quality guard
 
@@ -57,12 +60,44 @@ function initializeArchiver(): void {
   // Track pending SPA transition timers so we can cancel them on rapid re-navigation
   let spaCollectorTimerId: number | null = null;
   let spaCaptureTimerId: number | null = null;
+  // Incremented on SPA resets so stale async work can self-cancel.
+  let pageEpoch = 0;
+
+  async function captureSnapshot(headers?: Record<string, string>, expectedEpoch = pageEpoch): Promise<CaptureData | null> {
+    const captured = await captureDocumentHTMLWithFrames();
+    if (expectedEpoch !== pageEpoch) {
+      return null;
+    }
+
+    let html = captured.html;
+    if (domCollector.collectedCount > 0) {
+      console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes into snapshot...`);
+      html = domCollector.mergeInto(html);
+    }
+
+    return {
+      url: window.location.href,
+      title: document.title,
+      html,
+      frames: captured.frames,
+      headers,
+    };
+  }
+
+  function shouldAcceptUpdatedHTML(newHTML: string): boolean {
+    if (initialHTMLSize > 0 && newHTML.length < initialHTMLSize * 0.7) {
+      console.log(`[Wayback] Skipping update: HTML shrunk too much (${newHTML.length} vs initial ${initialHTMLSize}, ${Math.round(newHTML.length / initialHTMLSize * 100)}%)`);
+      return false;
+    }
+    return true;
+  }
 
   async function prepareCapture(): Promise<void> {
     if (isCapturing || hasArchived) {
       return;
     }
 
+    const expectedEpoch = pageEpoch;
     isCapturing = true;
     console.log('[Wayback] Preparing capture for:', window.location.href);
 
@@ -70,6 +105,9 @@ function initializeArchiver(): void {
       // Wait for DOM to stabilize
       console.log('[Wayback] Waiting for DOM to stabilize...');
       await waitForDOMStable(CONFIG.MUTATION_OBSERVER_TIMEOUT, CONFIG.DOM_STABLE_TIME);
+      if (expectedEpoch !== pageEpoch) {
+        return;
+      }
 
       // Collect cookies (including HttpOnly) via GM_cookie
       let headers: Record<string, string> | undefined;
@@ -91,25 +129,13 @@ function initializeArchiver(): void {
         }
       }
 
-      // 在克隆 DOM 上内联布局样式，并把 iframe 当前内容嵌入快照
-      const captured = await captureDocumentHTMLWithFrames();
-      let html = captured.html;
-
-      // Merge any nodes removed by virtual scrolling before/during capture
-      if (domCollector.collectedCount > 0) {
-        console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes into initial capture...`);
-        html = domCollector.mergeInto(html);
+      const preparedCapture = await captureSnapshot(headers, expectedEpoch);
+      if (!preparedCapture) {
+        return;
       }
 
-      captureData = {
-        url: window.location.href,
-        title: document.title,
-        html,
-        frames: captured.frames,
-        headers,
-      };
-
-      initialHTMLSize = html.length;
+      captureData = preparedCapture;
+      initialHTMLSize = preparedCapture.html.length;
       console.log('[Wayback] ✓ Data prepared, size:', JSON.stringify(captureData).length, 'bytes');
     } catch (error) {
       console.error('[Wayback] Failed to prepare:', error);
@@ -149,6 +175,53 @@ function initializeArchiver(): void {
     })();
 
     return sendPromise;
+  }
+
+  function flushCurrentPage(): Promise<void> {
+    const action = chooseFlushAction({
+      capturePrepared: captureData !== null,
+      hasArchived,
+      sendInFlight: sendPromise !== null,
+      updateInFlight: updatePromise !== null,
+      documentHidden: document.visibilityState === 'hidden',
+      currentPageId,
+    });
+
+    if (action === 'send-capture') {
+      return sendCapture();
+    }
+
+    if (action !== 'update-current-page' || currentPageId === null) {
+      const pendingDependency = choosePendingFlushDependency({
+        sendInFlight: sendPromise !== null,
+        updateInFlight: updatePromise !== null,
+      });
+      if (pendingDependency === 'send') {
+        return sendPromise || Promise.resolve();
+      }
+      return Promise.resolve();
+    }
+
+    const flushPageID = currentPageId;
+    const flushEpoch = pageEpoch;
+    updatePromise = (async () => {
+      try {
+        const newCaptureData = await captureSnapshot(captureData?.headers, flushEpoch);
+        if (!newCaptureData || !shouldAcceptUpdatedHTML(newCaptureData.html)) {
+          return;
+        }
+        if (!shouldCommitMonitorUpdate(flushEpoch, pageEpoch, flushPageID, currentPageId)) {
+          return;
+        }
+        await updateOnServer(flushPageID, newCaptureData);
+      } catch (error) {
+        console.error('[Wayback] Flush failed:', error);
+      } finally {
+        updatePromise = null;
+      }
+    })();
+
+    return updatePromise;
   }
 
   function stopDOMChangeMonitor(): void {
@@ -205,7 +278,7 @@ function initializeArchiver(): void {
 
     // Periodic check: every UPDATE_CHECK_INTERVAL, upload if DOM has changed
     const intervalId = nativeSetInterval(() => {
-      if (isUpdating) return;
+      if (isUpdating || updatePromise) return;
 
       // Guard: page ID changed (SPA navigation) — stop
       if (!monitorPageId || monitorPageId !== currentPageId) {
@@ -242,36 +315,30 @@ function initializeArchiver(): void {
       mutationCount = 0;
       isUpdating = true;
       const isFinal = domCollector.reachedLimit;
+      const monitorEpoch = pageEpoch;
 
       (async () => {
         try {
           console.log(`[Wayback] DOM changed (${currentMutations} mutations), triggering update...`);
 
-          // 在克隆 DOM 上内联布局样式，并把 iframe 当前内容嵌入快照
-          const captured = await captureDocumentHTMLWithFrames();
-          let newHTML = captured.html;
-
-          // Merge any nodes that were removed by virtual scrolling back into the snapshot
-          if (domCollector.collectedCount > 0) {
-            console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes...`);
-            newHTML = domCollector.mergeInto(newHTML);
-          }
-
-          // Guard: reject update if HTML shrunk significantly (< 70% of initial capture)
-          if (initialHTMLSize > 0 && newHTML.length < initialHTMLSize * 0.7) {
-            console.log(`[Wayback] Skipping update: HTML shrunk too much (${newHTML.length} vs initial ${initialHTMLSize}, ${Math.round(newHTML.length / initialHTMLSize * 100)}%)`);
+          const newCaptureData = await captureSnapshot(captureData?.headers, monitorEpoch);
+          if (!newCaptureData || !shouldAcceptUpdatedHTML(newCaptureData.html)) {
             return;
           }
 
-          const newCaptureData: CaptureData = {
-            url: window.location.href,
-            title: document.title,
-            html: newHTML,
-            frames: captured.frames,
-            headers: captureData?.headers,
-          };
+          if (!shouldCommitMonitorUpdate(monitorEpoch, pageEpoch, monitorPageId, currentPageId)) {
+            return;
+          }
 
-          await updateOnServer(monitorPageId, newCaptureData);
+          updatePromise = (async () => {
+            try {
+              await updateOnServer(monitorPageId, newCaptureData);
+            } finally {
+              updatePromise = null;
+            }
+          })();
+
+          await updatePromise;
         } catch (error) {
           console.error('[Wayback] Update failed:', error);
         } finally {
@@ -311,10 +378,12 @@ function initializeArchiver(): void {
 
   function resetState(): void {
     stopDOMChangeMonitor();
+    pageEpoch += 1;
     captureData = null;
     isCapturing = false;
     hasArchived = false;
     sendPromise = null;
+    updatePromise = null;
     currentPageId = null;
     initialHTMLSize = 0;
     if (collectorObserver) {
@@ -349,12 +418,12 @@ function initializeArchiver(): void {
   // Send on page unload events
   window.addEventListener('beforeunload', () => {
     console.log('[Wayback] beforeunload');
-    sendCapture();
+    void flushCurrentPage();
   });
 
   window.addEventListener('pagehide', () => {
     console.log('[Wayback] pagehide');
-    sendCapture();
+    void flushCurrentPage();
   });
 
   // Handle SPA navigation — send current capture, then re-capture the new page
@@ -367,7 +436,7 @@ function initializeArchiver(): void {
         }
         console.log('[Wayback] SPA navigate detected:', e.navigationType);
         // 等待 sendCapture 完成后再重置状态，防止竞态条件
-        sendCapture().then(() => {
+        flushCurrentPage().then(() => {
           resetState();
           // Start collector early (after SPA transition completes) to catch virtual scroll removals
           spaCollectorTimerId = nativeSetTimeout(() => {
@@ -397,7 +466,7 @@ function initializeArchiver(): void {
     console.log('[Wayback] URL changed:', lastURL, '->', newURL);
     lastURL = newURL;
     // 等待 sendCapture 完成后再重置状态，防止竞态条件
-    sendCapture().then(() => {
+    flushCurrentPage().then(() => {
       resetState();
       // Start collector early (after SPA transition completes) to catch virtual scroll removals
       spaCollectorTimerId = nativeSetTimeout(() => {
@@ -431,7 +500,7 @@ function initializeArchiver(): void {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       console.log('[Wayback] hidden');
-      sendCapture();
+      void flushCurrentPage();
     }
   });
 }

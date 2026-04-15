@@ -5,6 +5,7 @@
   "main": "dist/wayback-userscript.js",
   "scripts": {
     "build": "tsc && node build.js",
+    "test": "tsc -p tsconfig.test.json && node --test tests/**/*.test.js",
     "watch": "tsc --watch"
   },
   "devDependencies": {

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,9 +78,17 @@ func validateResourcePath(baseDir, resourcePath string) (string, error) {
 
 // ViewPage 查看归档页面（静态快照模式，禁用JavaScript）
 func (h *Handler) ViewPage(c *gin.Context) {
-	id := c.Param("id")
-	page, err := h.db.GetPageByID(id)
-	if err != nil || page == nil {
+	pageID, ok := parsePageIDParam(c)
+	if !ok {
+		return
+	}
+
+	page, err := h.db.GetPageByID(strconv.FormatInt(pageID, 10))
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Database error")
+		return
+	}
+	if page == nil {
 		c.String(http.StatusNotFound, "Page not found")
 		return
 	}
@@ -154,8 +163,11 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 	}
 
 	// 否则，按原来的逻辑处理（从数据库查询）
-	pageIDInt := int64(0)
-	fmt.Sscanf(pageID, "%d", &pageIDInt)
+	pageIDInt, err := strconv.ParseInt(pageID, 10, 64)
+	if err != nil || pageIDInt <= 0 {
+		c.String(http.StatusBadRequest, "Invalid page ID")
+		return
+	}
 
 	resource, err := h.findResourceForPage(originalURL, pageIDInt)
 	if err != nil {
@@ -301,22 +313,7 @@ func resourceLooksLikeHTML(filePath string) bool {
 }
 
 func (h *Handler) findResourceForPage(originalURL string, pageID int64) (*models.Resource, error) {
-	resource, err := h.findResourceForPageOnly(originalURL, pageID)
-	if err != nil || resource != nil {
-		return resource, err
-	}
-
-	urlPath := originalURL
-	if idx := strings.IndexByte(urlPath, '?'); idx != -1 {
-		urlPath = urlPath[:idx]
-	}
-
-	resource, err = h.db.GetResourceByURL(urlPath)
-	if err != nil || resource != nil {
-		return resource, err
-	}
-
-	return h.db.GetResourceByURLLike(urlPath + "%")
+	return h.findResourceForPageOnly(originalURL, pageID)
 }
 
 func (h *Handler) findResourceForPageOnly(originalURL string, pageID int64) (*models.Resource, error) {

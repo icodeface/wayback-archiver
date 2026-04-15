@@ -256,6 +256,31 @@ func TestProcessResource_304NoCacheDoesNotRestoreOldFreshness(t *testing.T) {
 	}
 }
 
+func TestProcessResource_DownloadFailureDoesNotFallbackAcrossQueryVariants(t *testing.T) {
+	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
+	defer db.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css")
+		_, _ = w.Write([]byte("body { color: red; }"))
+	}))
+
+	baseURL := routeStorageHTTPClientToServer(t, fs, server)
+	pageURL := baseURL + "/page"
+	resourceURL1 := baseURL + "/style.css?token=one"
+	resourceURL2 := baseURL + "/style.css?token=two"
+
+	if _, _, _, err := dedup.ProcessResource(resourceURL1, "css", pageURL, nil); err != nil {
+		t.Fatalf("ProcessResource(resourceURL1) failed: %v", err)
+	}
+
+	server.Close()
+
+	if _, _, _, err := dedup.ProcessResource(resourceURL2, "css", pageURL, nil); err == nil {
+		t.Fatalf("expected download failure for query variant without unsafe fallback")
+	}
+}
+
 func TestProcessResource_LastModifiedRevalidationAvoidsBodyRedownload(t *testing.T) {
 	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
 	defer db.Close()
@@ -494,5 +519,58 @@ func TestUpdateCapture_PreservesOldSnapshotOnCommitFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(fs.baseDir, tempHTMLPath)); !os.IsNotExist(err) {
 		t.Fatalf("failed update should delete temporary HTML, got err=%v", err)
+	}
+}
+
+func TestUpdateCapture_ClearsBodyTextWhenSnapshotBecomesEmpty(t *testing.T) {
+	dedup, db, _ := newFrameCaptureTestDeduplicator(t)
+	defer db.Close()
+
+	pageURL := fmt.Sprintf("https://body-text-clear.example.com/page-%d", time.Now().UnixNano())
+	createReq := &models.CaptureRequest{
+		URL:   pageURL,
+		Title: "before body text clear",
+		HTML:  `<html><body>search term should disappear</body></html>`,
+	}
+
+	pageID, action, err := dedup.ProcessCapture(createReq)
+	if err != nil {
+		t.Fatalf("ProcessCapture failed: %v", err)
+	}
+	if action != models.ArchiveActionCreated {
+		t.Fatalf("action = %q, want %q", action, models.ArchiveActionCreated)
+	}
+	defer db.DeletePage(pageID)
+
+	matches, err := db.SearchPages("disappear", nil, nil, "")
+	if err != nil {
+		t.Fatalf("SearchPages(before update) failed: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected body text to be searchable before update")
+	}
+
+	updateReq := &models.CaptureRequest{
+		URL:   pageURL,
+		Title: "after body text clear",
+		HTML:  `<html><body><script>ignored</script></body></html>`,
+	}
+
+	action, err = dedup.UpdateCapture(pageID, updateReq)
+	if err != nil {
+		t.Fatalf("UpdateCapture failed: %v", err)
+	}
+	if action != models.ArchiveActionUpdated {
+		t.Fatalf("action = %q, want %q", action, models.ArchiveActionUpdated)
+	}
+
+	matches, err = db.SearchPages("disappear", nil, nil, "")
+	if err != nil {
+		t.Fatalf("SearchPages(after update) failed: %v", err)
+	}
+	for _, match := range matches {
+		if match.ID == pageID {
+			t.Fatalf("updated page should no longer match cleared body text")
+		}
 	}
 }

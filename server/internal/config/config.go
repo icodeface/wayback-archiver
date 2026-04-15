@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 )
 
 // Config holds all application configuration
@@ -30,8 +31,19 @@ type DatabaseConfig struct {
 type ServerConfig struct {
 	Host             string
 	Port             int
+	AllowedOrigins   []string
 	EnableDebugAPI   bool
 	CompressionLevel int // Compression level (1-9, -1=default). Response compression always enabled, auto-negotiated via Accept-Encoding
+}
+
+var defaultAllowedOrigins = []string{
+	"http://localhost:8080",
+	"http://127.0.0.1:8080",
+	"null",
+}
+
+func DefaultAllowedOrigins() []string {
+	return append([]string(nil), defaultAllowedOrigins...)
 }
 
 // StorageConfig holds storage settings
@@ -80,6 +92,7 @@ func LoadFromEnv() (*Config, error) {
 		Server: ServerConfig{
 			Host:             getEnv("SERVER_HOST", "127.0.0.1"),
 			Port:             getEnvInt("SERVER_PORT", 8080),
+			AllowedOrigins:   getEnvCSV("ALLOWED_ORIGINS", defaultAllowedOrigins),
 			EnableDebugAPI:   getEnvBool("ENABLE_DEBUG_API", false),
 			CompressionLevel: getEnvInt("COMPRESSION_LEVEL", -1), // -1 = DefaultCompression
 		},
@@ -130,6 +143,26 @@ func getEnvBool(key string, defaultValue bool) bool {
 		}
 	}
 	return defaultValue
+}
+
+func getEnvCSV(key string, defaultValue []string) []string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return append([]string(nil), defaultValue...)
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return append([]string(nil), defaultValue...)
+	}
+	return result
 }
 
 // ConnectionString returns the PostgreSQL connection string

@@ -1,48 +1,91 @@
 package api
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"wayback/internal/storage"
 )
 
-// ListPages 列出所有归档页面（支持分页和时间过滤）
-func (h *Handler) ListPages(c *gin.Context) {
-	// 从查询参数获取分页信息，默认每页100条
+func parsePageIDParam(c *gin.Context) (int64, bool) {
+	idStr := c.Param("id")
+	pageID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || pageID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid page id"})
+		return 0, false
+	}
+	return pageID, true
+}
+
+func parsePaginationParams(c *gin.Context) (int, int, bool) {
 	limit := 100
 	offset := 0
 
 	if limitStr := c.Query("limit"); limitStr != "" {
-		fmt.Sscanf(limitStr, "%d", &limit)
-		if limit <= 0 || limit > 1000 {
-			limit = 100
+		parsed, err := strconv.Atoi(limitStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return 0, 0, false
 		}
+		if parsed <= 0 || parsed > 1000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 1000"})
+			return 0, 0, false
+		}
+		limit = parsed
 	}
 
 	if offsetStr := c.Query("offset"); offsetStr != "" {
-		fmt.Sscanf(offsetStr, "%d", &offset)
-		if offset < 0 {
-			offset = 0
+		parsed, err := strconv.Atoi(offsetStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+			return 0, 0, false
 		}
+		if parsed < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be non-negative"})
+			return 0, 0, false
+		}
+		offset = parsed
 	}
 
-	// 解析时间参数
+	return limit, offset, true
+}
+
+func parseDateFilters(c *gin.Context) (*time.Time, *time.Time, bool) {
 	var from, to *time.Time
 	if fromStr := c.Query("from"); fromStr != "" {
-		if t, err := time.Parse("2006-01-02", fromStr); err == nil {
-			from = &t
+		t, err := time.Parse("2006-01-02", fromStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date, expected YYYY-MM-DD"})
+			return nil, nil, false
 		}
+		from = &t
 	}
 	if toStr := c.Query("to"); toStr != "" {
-		if t, err := time.Parse("2006-01-02", toStr); err == nil {
-			to = &t
+		t, err := time.Parse("2006-01-02", toStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date, expected YYYY-MM-DD"})
+			return nil, nil, false
 		}
+		to = &t
+	}
+	return from, to, true
+}
+
+// ListPages 列出所有归档页面（支持分页和时间过滤）
+func (h *Handler) ListPages(c *gin.Context) {
+	limit, offset, ok := parsePaginationParams(c)
+	if !ok {
+		return
+	}
+
+	from, to, ok := parseDateFilters(c)
+	if !ok {
+		return
 	}
 
 	domain := c.Query("domain")
@@ -61,17 +104,21 @@ func (h *Handler) ListPages(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"pages": pages,
-		"total": total,
-		"limit": limit,
+		"pages":  pages,
+		"total":  total,
+		"limit":  limit,
 		"offset": offset,
 	})
 }
 
 // GetPage 获取单个页面详情
 func (h *Handler) GetPage(c *gin.Context) {
-	id := c.Param("id")
-	page, err := h.db.GetPageByID(id)
+	pageID, ok := parsePageIDParam(c)
+	if !ok {
+		return
+	}
+
+	page, err := h.db.GetPageByID(strconv.FormatInt(pageID, 10))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -91,17 +138,9 @@ func (h *Handler) SearchPages(c *gin.Context) {
 		return
 	}
 
-	// 解析时间参数
-	var from, to *time.Time
-	if fromStr := c.Query("from"); fromStr != "" {
-		if t, err := time.Parse("2006-01-02", fromStr); err == nil {
-			from = &t
-		}
-	}
-	if toStr := c.Query("to"); toStr != "" {
-		if t, err := time.Parse("2006-01-02", toStr); err == nil {
-			to = &t
-		}
+	from, to, ok := parseDateFilters(c)
+	if !ok {
+		return
 	}
 
 	domain := c.Query("domain")
@@ -137,7 +176,11 @@ func (h *Handler) GetPageTimeline(c *gin.Context) {
 
 // DeletePage 删除页面
 func (h *Handler) DeletePage(c *gin.Context) {
-	id := c.Param("id")
+	pageID, ok := parsePageIDParam(c)
+	if !ok {
+		return
+	}
+	id := strconv.FormatInt(pageID, 10)
 
 	// 先检查页面是否存在
 	page, err := h.db.GetPageByID(id)
@@ -151,8 +194,6 @@ func (h *Handler) DeletePage(c *gin.Context) {
 	}
 
 	// 删除页面记录
-	var pageID int64
-	fmt.Sscanf(id, "%d", &pageID)
 	if err := h.db.DeletePage(pageID); err != nil {
 		log.Printf("Failed to delete page %s: %v", id, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -172,8 +213,12 @@ func (h *Handler) DeletePage(c *gin.Context) {
 
 // GetPageContent 返回页面正文的 Markdown 格式（精简版，方便 AI 读取）
 func (h *Handler) GetPageContent(c *gin.Context) {
-	id := c.Param("id")
-	page, err := h.db.GetPageByID(id)
+	pageID, ok := parsePageIDParam(c)
+	if !ok {
+		return
+	}
+
+	page, err := h.db.GetPageByID(strconv.FormatInt(pageID, 10))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

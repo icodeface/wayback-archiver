@@ -1,10 +1,12 @@
 const BRIDGE_SECRET_STORAGE_KEY = 'wayback-bridge-secret-v1';
 const BRIDGE_REQUEST_MAX_AGE_MS = 15000;
+const BRIDGE_SECRET_SETTLE_MS = 75;
 const FALLBACK_BRIDGE_SECRET = 'wayback-puppeteer-bridge-secret-v1';
 
 let cachedBridgeSecret: Promise<string> | null = null;
 let cachedBridgeKey: Promise<CryptoKey> | null = null;
 let cachedBridgeKeySecret = '';
+let bridgeSecretListenerRegistered = false;
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -55,6 +57,31 @@ function buildBridgePayload(
   ].join('\n');
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function syncCachedBridgeSecret(secret: string): void {
+  cachedBridgeSecret = Promise.resolve(secret);
+  if (cachedBridgeKeySecret !== secret) {
+    cachedBridgeKey = null;
+    cachedBridgeKeySecret = '';
+  }
+}
+
+function registerBridgeSecretListener(): void {
+  if (bridgeSecretListenerRegistered || typeof GM_addValueChangeListener !== 'function') {
+    return;
+  }
+
+  GM_addValueChangeListener(BRIDGE_SECRET_STORAGE_KEY, (_name, _oldValue, newValue) => {
+    if (typeof newValue === 'string' && newValue) {
+      syncCachedBridgeSecret(newValue);
+    }
+  });
+  bridgeSecretListenerRegistered = true;
+}
+
 async function getBridgeSecret(): Promise<string> {
   if (cachedBridgeSecret) {
     return cachedBridgeSecret;
@@ -62,6 +89,8 @@ async function getBridgeSecret(): Promise<string> {
 
   cachedBridgeSecret = (async () => {
     if (typeof GM_getValue === 'function' && typeof GM_setValue === 'function') {
+      registerBridgeSecretListener();
+
       const existing = GM_getValue(BRIDGE_SECRET_STORAGE_KEY, '');
       if (typeof existing === 'string' && existing) {
         return existing;
@@ -69,11 +98,28 @@ async function getBridgeSecret(): Promise<string> {
 
       const generated = generateBridgeSecret();
       GM_setValue(BRIDGE_SECRET_STORAGE_KEY, generated);
+
+      // Multiple tabs can race on first-time initialization. Re-read after a
+      // short settle window so every page converges on the stored value.
+      await sleep(BRIDGE_SECRET_SETTLE_MS);
+      const settled = GM_getValue(BRIDGE_SECRET_STORAGE_KEY, '');
+      if (typeof settled === 'string' && settled) {
+        return settled;
+      }
+
       return generated;
     }
 
     return FALLBACK_BRIDGE_SECRET;
-  })();
+  })()
+    .then((secret) => {
+      syncCachedBridgeSecret(secret);
+      return secret;
+    })
+    .catch((error) => {
+      cachedBridgeSecret = null;
+      throw error;
+    });
 
   return cachedBridgeSecret;
 }

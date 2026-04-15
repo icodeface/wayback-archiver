@@ -303,7 +303,7 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 		cachedLastModified(cached),
 	)
 	if err != nil {
-		log.Printf("Download failed for %s: %v, trying fallback", url, err)
+		log.Printf("Download failed for %s: %v", url, err)
 		return d.processResourceFallback(url, err)
 	}
 	if metadata.notModified {
@@ -321,7 +321,7 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 			d.cacheDelete(url)
 			data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(url, pageURL, headers, streamThreshold, "", "")
 			if err != nil {
-				log.Printf("Download failed for %s after cache revalidation miss: %v, trying fallback", url, err)
+				log.Printf("Download failed for %s after cache revalidation miss: %v", url, err)
 				return d.processResourceFallback(url, err)
 			}
 		} else {
@@ -462,25 +462,9 @@ func cachedLastModified(cached *resourceCacheEntry) string {
 }
 
 // processResourceFallback 下载失败时的兜底逻辑
-// 不读取文件内容到内存，仅返回 DB 中的路径信息（调用方按需从磁盘读取）
+// 下载失败时直接返回错误，避免静默复用旧版本资源导致错误归档。
 func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (int64, string, []byte, error) {
-	existing, dbErr := d.db.GetResourceByURL(url)
-	if (dbErr != nil || existing == nil) && strings.Contains(url, "?") {
-		urlPath := url[:strings.IndexByte(url, '?')]
-		existing, dbErr = d.db.GetResourceByURLLike(urlPath + "%")
-		if existing != nil {
-			log.Printf("Fallback: found resource by URL path match: %s -> %s", url, existing.URL)
-		}
-	}
-	if dbErr != nil || existing == nil {
-		return 0, "", nil, fmt.Errorf("download failed and no fallback: %w", downloadErr)
-	}
-	log.Printf("Fallback: reusing previous resource (ID: %d) for: %s", existing.ID, url)
-	if updateErr := d.db.UpdateResourceLastSeen(existing.ID); updateErr != nil {
-		log.Printf("Failed to update last_seen for fallback resource: %v", updateErr)
-	}
-	// 不读取文件到内存、不缓存，避免大文件导致内存膨胀
-	return existing.ID, existing.FilePath, nil, nil
+	return 0, "", nil, fmt.Errorf("download failed: %w", downloadErr)
 }
 
 type cssWorkItem struct {
@@ -922,10 +906,7 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		}
 	}
 
-	var bodyTextPtr *string
-	if bodyText != "" {
-		bodyTextPtr = &bodyText
-	}
+	bodyTextPtr := &bodyText
 
 	if err := d.db.ReplacePageSnapshot(pageID, tempHTMLPath, newContentHash, req.Title, bodyTextPtr, resourceIDs); err != nil {
 		return "", fmt.Errorf("replace page snapshot failed: %w", err)

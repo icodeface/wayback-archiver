@@ -230,3 +230,41 @@ func TestLoadFromEnv_DebugAPIEnabled(t *testing.T) {
 		t.Fatal("EnableDebugAPI = false, want true")
 	}
 }
+
+func TestLoadFromEnv_DefaultAllowedOrigins(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	want := []string{"http://localhost:8080", "http://127.0.0.1:8080", "null"}
+	if len(cfg.Server.AllowedOrigins) != len(want) {
+		t.Fatalf("AllowedOrigins len = %d, want %d (%v)", len(cfg.Server.AllowedOrigins), len(want), cfg.Server.AllowedOrigins)
+	}
+	for i, origin := range want {
+		if cfg.Server.AllowedOrigins[i] != origin {
+			t.Fatalf("AllowedOrigins[%d] = %q, want %q", i, cfg.Server.AllowedOrigins[i], origin)
+		}
+	}
+}
+
+func TestLoadFromEnv_CustomAllowedOrigins(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "https://allowed.example.com, https://admin.example.com ,null")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	want := []string{"https://allowed.example.com", "https://admin.example.com", "null"}
+	if len(cfg.Server.AllowedOrigins) != len(want) {
+		t.Fatalf("AllowedOrigins len = %d, want %d (%v)", len(cfg.Server.AllowedOrigins), len(want), cfg.Server.AllowedOrigins)
+	}
+	for i, origin := range want {
+		if cfg.Server.AllowedOrigins[i] != origin {
+			t.Fatalf("AllowedOrigins[%d] = %q, want %q", i, cfg.Server.AllowedOrigins[i], origin)
+		}
+	}
+}
