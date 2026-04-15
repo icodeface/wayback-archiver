@@ -32,6 +32,7 @@ const userscriptModules = [
   'style-inliner.js',
   'dom-collector.js',
   'html-url-normalizer.js',
+  'bridge-auth.js',
   'frame-capture.js',
   'archiver.js',
   'main.js',
@@ -45,6 +46,7 @@ const puppeteerModules = [
   'style-inliner.js',
   'dom-collector.js',
   'html-url-normalizer.js',
+  'bridge-auth.js',
   'frame-capture.js',
   'puppeteer.js',
 ];
@@ -59,6 +61,8 @@ const header = `// ==UserScript==
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @connect      localhost
 // @connect      *
 // @require      https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js

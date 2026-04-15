@@ -7,6 +7,8 @@
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @connect      localhost
 // @run-at       document-idle
 // ==/UserScript==

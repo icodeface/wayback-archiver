@@ -2,6 +2,7 @@ import { CONFIG } from './config';
 import { waitForDOMStable, serializeCSSOMToDOM } from './page-freezer';
 import { inlineLayoutStyles } from './style-inliner';
 import { normalizeCapturedHTMLURLs } from './html-url-normalizer';
+import { createBridgeRequestToken, verifyBridgeRequestToken } from './bridge-auth';
 import { FrameCapture } from './types';
 
 const FRAME_ATTR = 'data-wayback-frame-id';
@@ -12,7 +13,12 @@ type FrameCaptureStatus = 'ok' | 'empty' | 'placeholder' | 'login_required';
 type FrameCaptureRequest = {
   source: typeof SOURCE;
   type: 'capture-frame';
+  frameId: string;
+  parentOrigin: string;
+  targetOrigin: string;
   requestId: string;
+  timestamp: number;
+  token: string;
 };
 
 type FrameCaptureResult = {
@@ -109,7 +115,12 @@ function isCaptureRequest(data: unknown): data is FrameCaptureRequest {
   return !!data && typeof data === 'object' &&
     (data as { source?: string }).source === SOURCE &&
     (data as { type?: string }).type === 'capture-frame' &&
-    typeof (data as { requestId?: string }).requestId === 'string';
+    typeof (data as { frameId?: string }).frameId === 'string' &&
+    typeof (data as { parentOrigin?: string }).parentOrigin === 'string' &&
+    typeof (data as { targetOrigin?: string }).targetOrigin === 'string' &&
+    typeof (data as { requestId?: string }).requestId === 'string' &&
+    typeof (data as { timestamp?: number }).timestamp === 'number' &&
+    typeof (data as { token?: string }).token === 'string';
 }
 
 function isCaptureResult(data: unknown): data is FrameCaptureResult {
@@ -198,39 +209,54 @@ async function requestFrameCapture(frame: HTMLIFrameElement): Promise<FrameCaptu
   const frameId = frame.getAttribute(FRAME_ATTR);
   const frameWindow = frame.contentWindow;
   const targetOrigin = resolveFrameOrigin(frame);
-  if (!frameId || !frameWindow || targetOrigin !== window.location.origin) {
+  if (!frameId || !frameWindow || !targetOrigin) {
     return null;
   }
 
   const requestId = frameId;
+  const parentOrigin = window.location.origin;
+  const timestamp = Date.now();
+  const token = await createBridgeRequestToken(frameId, requestId, parentOrigin, targetOrigin, timestamp);
 
   return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const responsePort = channel.port1;
     const timeoutId = window.setTimeout(() => {
-      window.removeEventListener('message', handleMessage);
+      responsePort.removeEventListener('message', handleMessage);
+      responsePort.close();
       resolve(null);
     }, CONFIG.FRAME_CAPTURE_TIMEOUT);
 
     function handleMessage(event: MessageEvent): void {
-      if (event.source !== frameWindow || event.origin !== targetOrigin || !isCaptureResult(event.data) || event.data.requestId !== requestId) {
+      if (!isCaptureResult(event.data) || event.data.requestId !== requestId) {
         return;
       }
 
       window.clearTimeout(timeoutId);
-      window.removeEventListener('message', handleMessage);
+      responsePort.removeEventListener('message', handleMessage);
+      responsePort.close();
       resolve(isMeaningfulCapturedHTML(event.data.html) ? event.data : null);
     }
 
-    window.addEventListener('message', handleMessage);
+    responsePort.addEventListener('message', handleMessage);
+    responsePort.start();
 
     try {
       frameWindow.postMessage({
         source: SOURCE,
         type: 'capture-frame',
+        frameId,
+        parentOrigin,
+        targetOrigin,
         requestId,
-      } satisfies FrameCaptureRequest, targetOrigin);
+        timestamp,
+        token,
+      } satisfies FrameCaptureRequest, targetOrigin, [channel.port2]);
     } catch {
       window.clearTimeout(timeoutId);
-      window.removeEventListener('message', handleMessage);
+      responsePort.removeEventListener('message', handleMessage);
+      responsePort.close();
+      channel.port2.close();
       resolve(null);
     }
   });
@@ -279,38 +305,51 @@ export function setupFrameCaptureBridge(): void {
   }
 
   window.addEventListener('message', (event: MessageEvent) => {
-    // Only honor requests from a same-origin parent. Cross-origin parents can
-    // always postMessage into the iframe, so accepting them would leak DOM.
-    if (!isCaptureRequest(event.data) || event.source !== window.parent || event.origin !== window.location.origin) {
+    if (!isCaptureRequest(event.data) || event.source !== window.parent || event.ports.length === 0) {
       return;
     }
 
     void (async () => {
-      try {
-        await waitForDOMStable(CONFIG.FRAME_MUTATION_OBSERVER_TIMEOUT, CONFIG.FRAME_DOM_STABLE_TIME);
-      } catch {
-        // Fall through and capture best-effort current DOM.
-      }
+      const replyPort = event.ports[0];
+      const { frameId, parentOrigin, requestId, targetOrigin, timestamp, token } = event.data;
 
       try {
-        await waitForMeaningfulBodyContent();
-        await waitForFrameReady(window.location.href);
-      } catch {
-        // Fall through and capture best-effort current DOM.
-      }
+        if (event.origin !== parentOrigin || window.location.origin !== targetOrigin) {
+          return;
+        }
 
-      const captured = await captureDocumentHTMLWithFrames();
-      const status = assessFrameDocument(document, window.location.href);
-      window.parent.postMessage({
-        source: SOURCE,
-        type: 'frame-result',
-        requestId: event.data.requestId,
-        status,
-        html: captured.html,
-        url: window.location.href,
-        title: document.title,
-        frames: captured.frames,
-      } satisfies FrameCaptureResult, event.origin);
+        if (!await verifyBridgeRequestToken(token, frameId, requestId, parentOrigin, targetOrigin, timestamp)) {
+          return;
+        }
+
+        try {
+          await waitForDOMStable(CONFIG.FRAME_MUTATION_OBSERVER_TIMEOUT, CONFIG.FRAME_DOM_STABLE_TIME);
+        } catch {
+          // Fall through and capture best-effort current DOM.
+        }
+
+        try {
+          await waitForMeaningfulBodyContent();
+          await waitForFrameReady(window.location.href);
+        } catch {
+          // Fall through and capture best-effort current DOM.
+        }
+
+        const captured = await captureDocumentHTMLWithFrames();
+        const status = assessFrameDocument(document, window.location.href);
+        replyPort.postMessage({
+          source: SOURCE,
+          type: 'frame-result',
+          requestId,
+          status,
+          html: captured.html,
+          url: window.location.href,
+          title: document.title,
+          frames: captured.frames,
+        } satisfies FrameCaptureResult);
+      } finally {
+        replyPort.close();
+      }
     })();
   });
 }

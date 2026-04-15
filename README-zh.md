@@ -170,7 +170,7 @@ export https_proxy=http://127.0.0.1:7897
 ### 捕获说明
 
 - `/api/archive` 和 `/api/archive/:id` 会拒绝解压后超过 32 MiB 的 JSON 请求体，并返回 HTTP `413`
-- 出于安全考虑，iframe 捕获桥仅接受同源父页面请求；跨源 iframe 会回退为原始归档 URL
+- 跨源 iframe 仍会通过浏览器侧捕获桥上传快照，但请求会带签名，且子 frame 通过私有 `MessageChannel` 回传 HTML，不再走公开的 `window.postMessage`
 - 浏览器脚本会跳过本地/私网地址，例如 `localhost`、`127.0.0.1`、`172.16.0.0/12`、`169.254.0.0/16`、`::1`、`fc00::/7`、`fe80::/10` 和 `.local`
 
 ## API

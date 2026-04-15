@@ -43,6 +43,8 @@ initializeArchiver()
 
 3. **虚拟滚动收集**：`DOMCollector` 在页面加载时立即启动，早于捕获流程，确保不遗漏任何被虚拟滚动移除的节点。详见 [virtual-scroll-capture.md](virtual-scroll-capture.md)。
 
+4. **Iframe 桥接加固**：跨源 iframe 仍允许捕获，但请求会带短时效签名；子 frame 不再通过公开 `window.postMessage` 把 HTML 回传给父页面，而是通过私有 `MessageChannel` 返回结果，降低页面脚本伪造请求或被动偷听子文档 DOM 的风险。
+
 ### 发送到服务端
 
 ```
