@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-contrib/gzip"
@@ -21,6 +26,69 @@ var (
 	Version   = "dev"
 	BuildTime = ""
 )
+
+const shutdownTimeout = 30 * time.Second
+
+type backgroundTaskWaiter interface {
+	WaitForBackgroundTasks()
+}
+
+func waitForBackgroundTasks(ctx context.Context, waiter backgroundTaskWaiter) error {
+	if waiter == nil {
+		return nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		waiter.WaitForBackgroundTasks()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func serveWithGracefulShutdown(ctx context.Context, server *http.Server, waiter backgroundTaskWaiter, serve func() error) error {
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- serve()
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+	}
+
+	log.Printf("Shutdown signal received, draining HTTP server and background archive tasks...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Warning: HTTP shutdown did not complete cleanly: %v", err)
+	} else {
+		log.Printf("HTTP server stopped accepting new requests")
+	}
+
+	if err := waitForBackgroundTasks(shutdownCtx, waiter); err != nil {
+		log.Printf("Warning: background archive tasks did not finish before shutdown deadline: %v", err)
+	} else {
+		log.Printf("Background archive tasks completed")
+	}
+
+	if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+
+	return nil
+}
 
 func main() {
 	// Handle --version / -v
@@ -160,10 +228,21 @@ func main() {
 
 	api.SetupRoutes(r, handler, &cfg.Auth, &cfg.Server, Version, BuildTime)
 
-	// 启动服务器
+	// 启动服务器，并在退出信号时优雅停机。
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	log.Printf("Server starting on %s", addr)
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	server := &http.Server{
+		Addr:    addr,
+		Handler: r,
+	}
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	err = serveWithGracefulShutdown(sigCtx, server, dedup, func() error {
+		log.Printf("Server starting on %s", addr)
+		return server.ListenAndServe()
+	})
+	if err != nil {
+		log.Fatalf("Server exited with error: %v", err)
 	}
 }
