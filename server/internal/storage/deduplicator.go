@@ -641,6 +641,13 @@ type processedInlineHTML struct {
 	filePath   string
 }
 
+func frameProcessingKey(frame models.FrameCapture) string {
+	if frame.Key != "" {
+		return frame.Key
+	}
+	return frame.URL
+}
+
 var (
 	iframeTagMatchRe     = regexp.MustCompile(`(?is)<iframe\b[^>]*>`)
 	iframeFrameKeyAttrRe = regexp.MustCompile(`(?i)\sdata-wayback-frame-key=["']([^"']+)["']`)
@@ -823,15 +830,16 @@ func (d *Deduplicator) processCSSWorkItems(cssWorkItems []cssWorkItem, pageURL s
 }
 
 func (d *Deduplicator) archiveFrameCapture(frame models.FrameCapture, headers map[string]string, cookies []models.CaptureCookie, pageID int64, timestamp string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) (int64, string, error) {
-	if cached, ok := archived[frame.URL]; ok {
+	cacheKey := frameProcessingKey(frame)
+	if cached, ok := archived[cacheKey]; ok {
 		appendUniqueResourceID(resourceIDs, seen, cached.resourceID)
 		return cached.resourceID, cached.filePath, nil
 	}
-	if visiting[frame.URL] {
+	if visiting[cacheKey] {
 		return 0, "", fmt.Errorf("cyclic iframe reference: %s", frame.URL)
 	}
-	visiting[frame.URL] = true
-	defer delete(visiting, frame.URL)
+	visiting[cacheKey] = true
+	defer delete(visiting, cacheKey)
 
 	rewrittenHTML, err := d.rewriteCapturedHTML(frame.HTML, frame.URL, headers, cookies, pageID, timestamp, frameMap, resourceIDs, seen, visiting, archived)
 	if err != nil {
@@ -843,7 +851,7 @@ func (d *Deduplicator) archiveFrameCapture(frame models.FrameCapture, headers ma
 		return 0, "", err
 	}
 
-	archived[frame.URL] = processedInlineHTML{resourceID: resourceID, filePath: filePath}
+	archived[cacheKey] = processedInlineHTML{resourceID: resourceID, filePath: filePath}
 	appendUniqueResourceID(resourceIDs, seen, resourceID)
 	return resourceID, filePath, nil
 }
