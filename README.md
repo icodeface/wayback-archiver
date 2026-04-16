@@ -233,6 +233,7 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 
 Returns `{ status, page_id, action }` where `action` is `created` or `unchanged` (content identical, only `last_visited` updated).
 When `action` is `created`, the response is sent immediately after the page row and raw HTML are stored; resource downloads and HTML rewriting continue in the background.
+The server tracks background create progress with `snapshot_state` (`pending`, `ready`, `failed`). Only `ready` snapshots are treated as fully deduplicated; if background finalize fails, a later capture of the same URL and content hash reuses the same page row and automatically retries finalize instead of getting stuck as `unchanged`.
 
 ### PUT /api/archive/:id
 

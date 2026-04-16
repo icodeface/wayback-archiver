@@ -178,7 +178,7 @@ func (d *Deduplicator) finishPageTask(pageID int64, seq uint64) {
 	}
 }
 
-func (d *Deduplicator) runPageTask(pageID int64, seq uint64, label string, fn func() error) {
+func (d *Deduplicator) runPageTask(pageID int64, seq uint64, label string, fn func() error, onError func(error)) {
 	d.bgTasks.Add(1)
 	go func() {
 		defer d.bgTasks.Done()
@@ -187,6 +187,9 @@ func (d *Deduplicator) runPageTask(pageID int64, seq uint64, label string, fn fu
 			if errors.Is(err, errStalePageTask) {
 				log.Printf("[%s] Skipped stale background task for page %d", label, pageID)
 				return
+			}
+			if onError != nil {
+				onError(err)
 			}
 			log.Printf("[%s] Background task failed for page %d: %v", label, pageID, err)
 		}
@@ -201,29 +204,69 @@ func pageCreateKey(url, contentHash string) string {
 	return url + "\x00" + contentHash
 }
 
-func (d *Deduplicator) preparePageCreate(req *models.CaptureRequest, capturedAt time.Time, contentHash string) (int64, string, string, error) {
+type pageCreatePreparation struct {
+	pageID            int64
+	action            string
+	tempHTMLPath      string
+	enqueueFinalize   bool
+	rollbackOnFailure bool
+}
+
+func (d *Deduplicator) preparePageCreate(req *models.CaptureRequest, capturedAt time.Time, contentHash string) (*pageCreatePreparation, error) {
 	unlock := d.pageCreateMu.lock(pageCreateKey(req.URL, contentHash))
 	defer unlock()
 
 	existingPage, err := d.db.GetPageByURLAndHash(req.URL, contentHash)
 	if err != nil {
-		return 0, "", "", fmt.Errorf("check existing page failed: %w", err)
+		return nil, fmt.Errorf("check existing page failed: %w", err)
 	}
 	if existingPage != nil {
-		log.Printf("Page content unchanged, updating last visited: %s (ID: %d)", req.URL, existingPage.ID)
-		if err := d.db.UpdatePageLastVisited(existingPage.ID, capturedAt); err != nil {
-			return 0, "", "", fmt.Errorf("update last visited failed: %w", err)
+		if existingPage.SnapshotState == models.SnapshotStateReady {
+			log.Printf("Page content unchanged, updating last visited: %s (ID: %d)", req.URL, existingPage.ID)
+			if err := d.db.UpdatePageLastVisited(existingPage.ID, capturedAt); err != nil {
+				return nil, fmt.Errorf("update last visited failed: %w", err)
+			}
+			return &pageCreatePreparation{pageID: existingPage.ID, action: models.ArchiveActionUnchanged}, nil
 		}
-		return existingPage.ID, models.ArchiveActionUnchanged, "", nil
-	}
-
-	if d.testBeforePageCreate != nil {
-		d.testBeforePageCreate(req.URL, contentHash)
+		if existingPage.SnapshotState == models.SnapshotStatePending {
+			log.Printf("Page finalize already in progress, reusing pending page: %s (ID: %d)", req.URL, existingPage.ID)
+			if err := d.db.UpdatePageLastVisited(existingPage.ID, capturedAt); err != nil {
+				return nil, fmt.Errorf("update pending page last visited failed: %w", err)
+			}
+			return &pageCreatePreparation{pageID: existingPage.ID, action: models.ArchiveActionCreated}, nil
+		}
 	}
 
 	tempHTMLPath, err := d.storage.SaveHTML(req.URL, req.HTML, capturedAt)
 	if err != nil {
-		return 0, "", "", fmt.Errorf("save temp html failed: %w", err)
+		return nil, fmt.Errorf("save temp html failed: %w", err)
+	}
+	bodyText := ExtractBodyText(req.HTML)
+
+	if existingPage != nil {
+		oldHTMLPath, err := d.db.ResetPageForCreateRetry(existingPage.ID, req.Title, tempHTMLPath, capturedAt)
+		if err != nil {
+			if deleteErr := d.storage.DeleteHTML(tempHTMLPath); deleteErr != nil {
+				log.Printf("Failed to delete temporary HTML %s after retry reset error: %v", tempHTMLPath, deleteErr)
+			}
+			return nil, fmt.Errorf("reset incomplete page failed: %w", err)
+		}
+		if bodyText != "" {
+			if err := d.db.UpdatePageBodyText(existingPage.ID, bodyText); err != nil {
+				log.Printf("Failed to save body text for retried page %d: %v", existingPage.ID, err)
+			}
+		}
+		if oldHTMLPath != "" && oldHTMLPath != tempHTMLPath {
+			if err := d.storage.DeleteHTML(oldHTMLPath); err != nil {
+				log.Printf("Failed to delete superseded HTML %s for page %d: %v", oldHTMLPath, existingPage.ID, err)
+			}
+		}
+		log.Printf("Retrying incomplete page finalize: %s (ID: %d, state: %s)", req.URL, existingPage.ID, existingPage.SnapshotState)
+		return &pageCreatePreparation{pageID: existingPage.ID, action: models.ArchiveActionCreated, tempHTMLPath: tempHTMLPath, enqueueFinalize: true}, nil
+	}
+
+	if d.testBeforePageCreate != nil {
+		d.testBeforePageCreate(req.URL, contentHash)
 	}
 
 	pageID, err := d.db.CreatePage(req.URL, req.Title, tempHTMLPath, contentHash, capturedAt)
@@ -231,40 +274,55 @@ func (d *Deduplicator) preparePageCreate(req *models.CaptureRequest, capturedAt 
 		if deleteErr := d.storage.DeleteHTML(tempHTMLPath); deleteErr != nil {
 			log.Printf("Failed to delete temporary HTML %s after create page error: %v", tempHTMLPath, deleteErr)
 		}
-		return 0, "", "", fmt.Errorf("create page failed: %w", err)
+		return nil, fmt.Errorf("create page failed: %w", err)
 	}
 
-	bodyText := ExtractBodyText(req.HTML)
 	if bodyText != "" {
 		if err := d.db.UpdatePageBodyText(pageID, bodyText); err != nil {
 			log.Printf("Failed to save body text for page %d: %v", pageID, err)
 		}
 	}
 
-	return pageID, models.ArchiveActionCreated, tempHTMLPath, nil
+	return &pageCreatePreparation{pageID: pageID, action: models.ArchiveActionCreated, tempHTMLPath: tempHTMLPath, enqueueFinalize: true, rollbackOnFailure: true}, nil
 }
 
 func (d *Deduplicator) ProcessCaptureAsync(req *models.CaptureRequest) (int64, string, error) {
 	capturedAt := time.Now()
 	contentHash := hashCaptureContent(req.HTML, req.Frames)
 
-	pageID, action, tempHTMLPath, err := d.preparePageCreate(req, capturedAt, contentHash)
+	prep, err := d.preparePageCreate(req, capturedAt, contentHash)
 	if err != nil {
 		return 0, "", err
 	}
-	if action == models.ArchiveActionUnchanged {
-		return pageID, action, nil
+	if prep.action == models.ArchiveActionUnchanged {
+		return prep.pageID, prep.action, nil
+	}
+	if !prep.enqueueFinalize {
+		return prep.pageID, prep.action, nil
 	}
 
-	seq := d.nextPageTaskSeq(pageID)
+	seq := d.nextPageTaskSeq(prep.pageID)
 	clonedReq := cloneCaptureRequest(req)
-	d.runPageTask(pageID, seq, "Create", func() error {
-		staleCheck := func() bool { return !d.isLatestPageTask(pageID, seq) }
-		return d.finalizeCreateCapture(pageID, tempHTMLPath, capturedAt, clonedReq, staleCheck)
+	d.runPageTask(prep.pageID, seq, "Create", func() error {
+		staleCheck := func() bool { return !d.isLatestPageTask(prep.pageID, seq) }
+		err := d.finalizeCreateCapture(prep.pageID, prep.tempHTMLPath, capturedAt, clonedReq, staleCheck)
+		if errors.Is(err, errStalePageTask) {
+			if deleteErr := d.storage.DeleteHTML(prep.tempHTMLPath); deleteErr != nil {
+				log.Printf("[Create] Failed to delete stale HTML %s for page %d: %v", prep.tempHTMLPath, prep.pageID, deleteErr)
+			}
+		}
+		return err
+	}, func(err error) {
+		if !d.isLatestPageTask(prep.pageID, seq) {
+			return
+		}
+		if markErr := d.db.MarkPageCreateFailed(prep.pageID); markErr != nil {
+			log.Printf("[Create] Failed to mark page %d as failed after %v: %v", prep.pageID, err, markErr)
+		}
 	})
 
-	log.Printf("Page created (ID: %d, hash: %s): %s", pageID, contentHash[:16], req.URL)
-	return pageID, models.ArchiveActionCreated, nil
+	log.Printf("Page created (ID: %d, hash: %s): %s", prep.pageID, contentHash[:16], req.URL)
+	return prep.pageID, models.ArchiveActionCreated, nil
 }
 
 func (d *Deduplicator) UpdateCaptureAsync(pageID int64, req *models.CaptureRequest) (string, error) {
@@ -287,7 +345,7 @@ func (d *Deduplicator) UpdateCaptureAsync(pageID int64, req *models.CaptureReque
 		staleCheck := func() bool { return !d.isLatestPageTask(pageID, seq) }
 		_, err := d.updateCapture(pageID, clonedReq, staleCheck)
 		return err
-	})
+	}, nil)
 
 	return models.ArchiveActionUpdated, nil
 }
@@ -1004,12 +1062,15 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 	capturedAt := time.Now()
 	contentHash := hashCaptureContent(req.HTML, req.Frames)
 
-	pageID, action, tempHTMLPath, err := d.preparePageCreate(req, capturedAt, contentHash)
+	prep, err := d.preparePageCreate(req, capturedAt, contentHash)
 	if err != nil {
 		return 0, "", err
 	}
-	if action == models.ArchiveActionUnchanged {
-		return pageID, action, nil
+	if prep.action == models.ArchiveActionUnchanged {
+		return prep.pageID, prep.action, nil
+	}
+	if !prep.enqueueFinalize {
+		return prep.pageID, prep.action, nil
 	}
 
 	finalized := false
@@ -1017,25 +1078,33 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		if finalized {
 			return
 		}
-		if tempHTMLPath != "" {
-			if err := d.storage.DeleteHTML(tempHTMLPath); err != nil {
-				log.Printf("Failed to delete temporary HTML %s: %v", tempHTMLPath, err)
+		if prep.rollbackOnFailure {
+			if prep.tempHTMLPath != "" {
+				if err := d.storage.DeleteHTML(prep.tempHTMLPath); err != nil {
+					log.Printf("Failed to delete temporary HTML %s: %v", prep.tempHTMLPath, err)
+				}
 			}
+			if prep.pageID != 0 {
+				if err := d.db.DeletePage(prep.pageID); err != nil {
+					log.Printf("Failed to rollback page %d after capture error: %v", prep.pageID, err)
+				}
+			}
+			return
 		}
-		if pageID != 0 {
-			if err := d.db.DeletePage(pageID); err != nil {
-				log.Printf("Failed to rollback page %d after capture error: %v", pageID, err)
+		if prep.pageID != 0 {
+			if err := d.db.MarkPageCreateFailed(prep.pageID); err != nil {
+				log.Printf("Failed to mark page %d as failed after capture error: %v", prep.pageID, err)
 			}
 		}
 	}()
 
-	log.Printf("Page created (ID: %d, hash: %s): %s", pageID, contentHash[:16], req.URL)
-	if err := d.finalizeCreateCapture(pageID, tempHTMLPath, capturedAt, req, nil); err != nil {
+	log.Printf("Page created (ID: %d, hash: %s): %s", prep.pageID, contentHash[:16], req.URL)
+	if err := d.finalizeCreateCapture(prep.pageID, prep.tempHTMLPath, capturedAt, req, nil); err != nil {
 		return 0, "", err
 	}
 
 	finalized = true
-	return pageID, models.ArchiveActionCreated, nil
+	return prep.pageID, models.ArchiveActionCreated, nil
 }
 
 // UpdateCapture 更新已存在页面的捕获内容
@@ -1173,11 +1242,8 @@ func (d *Deduplicator) finalizeCreateCapture(pageID int64, tempHTMLPath string, 
 		return errStalePageTask
 	}
 
-	if err := d.db.DeletePageResources(pageID); err != nil {
-		return fmt.Errorf("clear page resources failed: %w", err)
-	}
-	if err := d.db.LinkPageResources(pageID, resourceIDs); err != nil {
-		return fmt.Errorf("link page resources failed: %w", err)
+	if err := d.db.FinalizePageCreate(pageID, resourceIDs); err != nil {
+		return fmt.Errorf("finalize page create failed: %w", err)
 	}
 
 	return nil

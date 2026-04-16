@@ -10,6 +10,7 @@ CREATE TABLE pages (
     captured_at TIMESTAMP WITH TIME ZONE NOT NULL,
     html_path TEXT NOT NULL,
     content_hash CHAR(64),
+    snapshot_state VARCHAR(16) NOT NULL DEFAULT 'pending',
     first_visited TIMESTAMP WITH TIME ZONE,
     last_visited TIMESTAMP WITH TIME ZONE,
     body_text TEXT,

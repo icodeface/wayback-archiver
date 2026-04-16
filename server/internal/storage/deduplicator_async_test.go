@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,31 @@ import (
 
 	"wayback/internal/models"
 )
+
+func waitForSnapshotState(t *testing.T, db interface {
+	GetPageByID(string) (*models.Page, error)
+}, pageID int64, want string) *models.Page {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		page, err := db.GetPageByID(fmt.Sprintf("%d", pageID))
+		if err == nil && page != nil && page.SnapshotState == want {
+			return page
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	page, err := db.GetPageByID(fmt.Sprintf("%d", pageID))
+	if err != nil {
+		t.Fatalf("GetPageByID failed: %v", err)
+	}
+	if page == nil {
+		t.Fatalf("expected page %d to exist", pageID)
+	}
+	t.Fatalf("page snapshot_state = %q, want %q", page.SnapshotState, want)
+	return nil
+}
 
 func TestCloneCaptureRequest_CopiesCookies(t *testing.T) {
 	original := &models.CaptureRequest{
@@ -155,6 +181,79 @@ func TestProcessCaptureAsync_PreservesCookiesForBackgroundDownloads(t *testing.T
 	}
 }
 
+func TestProcessCaptureAsync_ReusesPendingCreateWithoutRestartingFinalize(t *testing.T) {
+	dedup, db, _ := newFrameCaptureTestDeduplicator(t)
+	defer func() {
+		dedup.WaitForBackgroundTasks()
+		db.Close()
+	}()
+
+	req := &models.CaptureRequest{
+		URL:   fmt.Sprintf("https://pending-create-reuse.example.com/%d", time.Now().UnixNano()),
+		Title: "pending create reuse",
+		HTML:  "<html><body>pending create reuse</body></html>",
+	}
+
+	startedFinalize := make(chan struct{}, 1)
+	releaseFinalize := make(chan struct{})
+	var finalizeCalls atomic.Int32
+	dedup.testBeforeCreateFinalize = func(pageID int64, htmlPath string, resourceIDs []int64) error {
+		call := finalizeCalls.Add(1)
+		if call == 1 {
+			startedFinalize <- struct{}{}
+			<-releaseFinalize
+		}
+		return nil
+	}
+
+	pageID, action, err := dedup.ProcessCaptureAsync(req)
+	if err != nil {
+		t.Fatalf("ProcessCaptureAsync failed: %v", err)
+	}
+	if action != models.ArchiveActionCreated {
+		t.Fatalf("action = %q, want %q", action, models.ArchiveActionCreated)
+	}
+	defer db.DeletePage(pageID)
+
+	select {
+	case <-startedFinalize:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first async finalize to start")
+	}
+
+	pageID2, action2, err := dedup.ProcessCaptureAsync(req)
+	if err != nil {
+		t.Fatalf("second ProcessCaptureAsync failed: %v", err)
+	}
+	if action2 != models.ArchiveActionCreated {
+		t.Fatalf("second action = %q, want %q", action2, models.ArchiveActionCreated)
+	}
+	if pageID2 != pageID {
+		t.Fatalf("second pageID = %d, want %d", pageID2, pageID)
+	}
+
+	page, err := db.GetPageByID(fmt.Sprintf("%d", pageID))
+	if err != nil {
+		t.Fatalf("GetPageByID failed: %v", err)
+	}
+	if page == nil {
+		t.Fatalf("expected page %d to exist", pageID)
+	}
+	if page.SnapshotState != models.SnapshotStatePending {
+		t.Fatalf("page snapshot_state = %q, want %q while finalize is blocked", page.SnapshotState, models.SnapshotStatePending)
+	}
+
+	close(releaseFinalize)
+	dedup.WaitForBackgroundTasks()
+	page = waitForSnapshotState(t, db, pageID, models.SnapshotStateReady)
+	if page.SnapshotState != models.SnapshotStateReady {
+		t.Fatalf("page snapshot_state = %q, want %q", page.SnapshotState, models.SnapshotStateReady)
+	}
+	if finalizeCalls.Load() != 1 {
+		t.Fatalf("expected pending duplicate capture to reuse existing finalize, got %d finalize calls", finalizeCalls.Load())
+	}
+}
+
 func TestUpdateCaptureAsync_ReturnsBeforeBackgroundFinalizeCompletes(t *testing.T) {
 	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
 	defer func() {
@@ -235,6 +334,72 @@ func TestUpdateCaptureAsync_ReturnsBeforeBackgroundFinalizeCompletes(t *testing.
 	}
 	if page.Title != "after async update" {
 		t.Fatalf("page title = %q, want %q", page.Title, "after async update")
+	}
+}
+
+func TestProcessCaptureAsync_RetriesFailedCreateForSameURLAndHash(t *testing.T) {
+	dedup, db, _ := newFrameCaptureTestDeduplicator(t)
+	defer func() {
+		dedup.WaitForBackgroundTasks()
+		db.Close()
+	}()
+
+	req := &models.CaptureRequest{
+		URL:   fmt.Sprintf("https://async-retry-create.example.com/%d", time.Now().UnixNano()),
+		Title: "retry async create",
+		HTML:  "<html><body>retry async create</body></html>",
+	}
+
+	shouldFail := true
+	dedup.testBeforeCreateFinalize = func(pageID int64, htmlPath string, resourceIDs []int64) error {
+		if shouldFail {
+			shouldFail = false
+			return errors.New("forced async finalize failure")
+		}
+		return nil
+	}
+
+	pageID, action, err := dedup.ProcessCaptureAsync(req)
+	if err != nil {
+		t.Fatalf("ProcessCaptureAsync failed: %v", err)
+	}
+	if action != models.ArchiveActionCreated {
+		t.Fatalf("action = %q, want %q", action, models.ArchiveActionCreated)
+	}
+	defer db.DeletePage(pageID)
+
+	dedup.WaitForBackgroundTasks()
+	page := waitForSnapshotState(t, db, pageID, models.SnapshotStateFailed)
+	if page.SnapshotState != models.SnapshotStateFailed {
+		t.Fatalf("page snapshot_state = %q, want %q", page.SnapshotState, models.SnapshotStateFailed)
+	}
+
+	retryPageID, retryAction, err := dedup.ProcessCaptureAsync(req)
+	if err != nil {
+		t.Fatalf("retry ProcessCaptureAsync failed: %v", err)
+	}
+	if retryAction != models.ArchiveActionCreated {
+		t.Fatalf("retry action = %q, want %q", retryAction, models.ArchiveActionCreated)
+	}
+	if retryPageID != pageID {
+		t.Fatalf("retry pageID = %d, want %d", retryPageID, pageID)
+	}
+
+	dedup.WaitForBackgroundTasks()
+	page = waitForSnapshotState(t, db, pageID, models.SnapshotStateReady)
+	if page.SnapshotState != models.SnapshotStateReady {
+		t.Fatalf("page snapshot_state = %q, want %q", page.SnapshotState, models.SnapshotStateReady)
+	}
+
+	pages, err := db.GetPagesByURL(req.URL)
+	if err != nil {
+		t.Fatalf("GetPagesByURL failed: %v", err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("expected 1 stored page snapshot after retry, got %d", len(pages))
+	}
+	if pages[0].SnapshotState != models.SnapshotStateReady {
+		t.Fatalf("stored page snapshot_state = %q, want %q", pages[0].SnapshotState, models.SnapshotStateReady)
 	}
 }
 
