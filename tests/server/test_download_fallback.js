@@ -1,5 +1,6 @@
 const puppeteer = require('puppeteer');
 const { execSync } = require('child_process');
+const path = require('path');
 
 /**
  * 测试下载失败兜底逻辑：
@@ -8,9 +9,12 @@ const { execSync } = require('child_process');
  * 3. 验证页面渲染正常
  */
 
-const WAYBACK = 'http://localhost:8080';
+const WAYBACK = process.env.WAYBACK || 'http://localhost:8080';
 const FAKE_URL = 'https://fallback-test-unreachable.invalid/fallback-style.css';
 const CSS_CONTENT = 'body { background-color: #ff6600 !important; color: white; }';
+const ROOT_DIR = path.resolve(__dirname, '..', '..');
+const DATA_DIR = process.env.WAYBACK_DATA_DIR || path.join(ROOT_DIR, 'data');
+const DB_USER = process.env.DB_USER || process.env.USER || 'postgres';
 
 let passed = 0, failed = 0;
 const failures = [];
@@ -25,26 +29,23 @@ async function test() {
 
   const crypto = require('crypto');
   const fs = require('fs');
-  const path = require('path');
 
   // 计算 CSS 内容哈希
   const hash = crypto.createHash('sha256').update(CSS_CONTENT).digest('hex');
 
   // 写入资源文件到磁盘
-  const os = require('os');
-  const dataDir = path.join(os.homedir(), 'IdeaProjects/wayback/server/data');
-  const resDir = path.join(dataDir, 'resources', hash.slice(0, 2), hash.slice(2, 4));
+  const resDir = path.join(DATA_DIR, 'resources', hash.slice(0, 2), hash.slice(2, 4));
   fs.mkdirSync(resDir, { recursive: true });
   const filePath = path.join(resDir, hash + '.css');
   fs.writeFileSync(filePath, CSS_CONTENT);
-  const relPath = path.relative(dataDir, filePath);
+  const relPath = path.relative(DATA_DIR, filePath);
   console.log(`Step 1: Wrote resource file to disk: ${relPath}`);
 
   // 直接插入 DB 记录
   const insertSQL = `INSERT INTO resources (url, content_hash, resource_type, file_path, file_size, first_seen, last_seen)
     VALUES ('${FAKE_URL}', '${hash}', 'css', '${relPath}', ${CSS_CONTENT.length}, NOW(), NOW())
     ON CONFLICT DO NOTHING`;
-  execSync(`psql -U postgres -d wayback -c "${insertSQL}"`);
+  execSync(`psql -U ${DB_USER} -d wayback -c "${insertSQL}"`);
   console.log('  Inserted resource record into DB');
 
   // Step 2: 归档页面，引用该不可达 URL
@@ -85,6 +86,19 @@ async function test() {
     failures.push('Could not find page in search');
     console.log('  [FAIL] Could not find page. Results:', JSON.stringify(searchData));
   } else {
+    const rewrittenDeadline = Date.now() + 15000;
+    let rewrittenHTML = '';
+    while (Date.now() < rewrittenDeadline) {
+      const viewRes = await fetch(`${WAYBACK}/view/${pageInfo.id}`);
+      rewrittenHTML = await viewRes.text();
+      if (rewrittenHTML.includes('/archive/') && rewrittenHTML.includes(FAKE_URL)) {
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    assert('Archived HTML rewritten before render', rewrittenHTML.includes('/archive/'),
+      'timed out waiting for async finalize to rewrite resource URLs');
+
     const browser = await puppeteer.launch({
       headless: true,
       executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',

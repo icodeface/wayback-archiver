@@ -3,6 +3,8 @@ package storage
 import (
 	"net"
 	"testing"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 func TestValidateResourceURL(t *testing.T) {
@@ -69,9 +71,9 @@ func TestValidateResourceURL(t *testing.T) {
 
 func TestIsPrivateIP(t *testing.T) {
 	tests := []struct {
-		name    string
-		ip      string
-		isPriv  bool
+		name   string
+		ip     string
+		isPriv bool
 	}{
 		// Private IPv4
 		{"10.0.0.1", "10.0.0.1", true},
@@ -163,5 +165,51 @@ func TestGetRootDomain(t *testing.T) {
 				t.Errorf("getRootDomain(%s) = %s, want %s", tt.hostname, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGetRootDomain_PublicSuffixCoverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		hostname string
+	}{
+		{name: "com.sg subdomain", hostname: "foo.example.com.sg"},
+		{name: "com.sg sibling site", hostname: "bar.other.com.sg"},
+		{name: "net.cn subdomain", hostname: "img.example.net.cn"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want, err := publicsuffix.EffectiveTLDPlusOne(tt.hostname)
+			if err != nil {
+				t.Fatalf("EffectiveTLDPlusOne(%s) failed: %v", tt.hostname, err)
+			}
+
+			got := getRootDomain(tt.hostname)
+			if got != want {
+				t.Fatalf("getRootDomain(%s) = %s, want %s", tt.hostname, got, want)
+			}
+		})
+	}
+}
+
+func TestIsSameRootDomain_PublicSuffixSeparation(t *testing.T) {
+	pageURL := "https://foo.example.com.sg/page"
+	resourceURL := "https://bar.other.com.sg/static/app.css"
+
+	pageRoot, err := publicsuffix.EffectiveTLDPlusOne("foo.example.com.sg")
+	if err != nil {
+		t.Fatalf("page EffectiveTLDPlusOne failed: %v", err)
+	}
+	resourceRoot, err := publicsuffix.EffectiveTLDPlusOne("bar.other.com.sg")
+	if err != nil {
+		t.Fatalf("resource EffectiveTLDPlusOne failed: %v", err)
+	}
+	if pageRoot == resourceRoot {
+		t.Fatalf("test setup invalid: %s and %s should not share registrable domain", pageRoot, resourceRoot)
+	}
+
+	if isSameRootDomain(pageURL, resourceURL) {
+		t.Fatalf("isSameRootDomain(%q, %q) = true, want false", pageURL, resourceURL)
 	}
 }

@@ -23,8 +23,8 @@ This directory contains security-related documentation for Wayback Archiver.
 - Prevents cross-site request forgery (CSRF)
 
 ### Cookie Leakage Prevention
-- Only forwards cookies to same root domain
-- Supports multi-segment TLDs (co.uk, com.au, etc.)
+- Only forwards cookies to the same registrable domain
+- Uses the public suffix list to handle multi-segment TLDs correctly
 
 ### Resource Size Limits
 - Maximum download size: 200MB
