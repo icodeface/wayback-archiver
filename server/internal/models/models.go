@@ -32,6 +32,21 @@ type CaptureRequest struct {
 	HTML    string            `json:"html" binding:"required"`
 	Frames  []FrameCapture    `json:"frames"`
 	Headers map[string]string `json:"headers"`
+	Cookies []CaptureCookie   `json:"cookies,omitempty"`
+}
+
+type CaptureCookie struct {
+	Name                  string  `json:"name" binding:"required"`
+	Value                 string  `json:"value"`
+	Domain                string  `json:"domain" binding:"required"`
+	Path                  string  `json:"path"`
+	HostOnly              bool    `json:"host_only"`
+	Secure                bool    `json:"secure"`
+	HTTPOnly              bool    `json:"http_only"`
+	Session               bool    `json:"session"`
+	SameSite              string  `json:"same_site,omitempty"`
+	ExpirationDate        float64 `json:"expiration_date,omitempty"`
+	PartitionTopLevelSite string  `json:"partition_top_level_site,omitempty"`
 }
 
 type FrameCapture struct {

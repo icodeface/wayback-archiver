@@ -23,7 +23,8 @@ This directory contains security-related documentation for Wayback Archiver.
 - Prevents cross-site request forgery (CSRF)
 
 ### Cookie Leakage Prevention
-- Only forwards cookies to the same registrable domain
+- Re-applies browser-style cookie matching before each resource request
+- Checks domain / hostOnly / path / secure / expiry / SameSite / partition top-level site
 - Uses the public suffix list to handle multi-segment TLDs correctly
 
 ### Resource Size Limits

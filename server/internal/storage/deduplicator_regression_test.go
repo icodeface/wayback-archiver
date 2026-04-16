@@ -56,14 +56,14 @@ func TestProcessResource_SameURLChangedContentCreatesNewVersion(t *testing.T) {
 	resourceURL := fmt.Sprintf("%s/app.js?nonce=%d", baseURL, time.Now().UnixNano())
 	pageURL := baseURL + "/page"
 
-	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "js", pageURL, nil)
+	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "js", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("ProcessResource(v1) failed: %v", err)
 	}
 
 	content = "console.log('v2');"
 
-	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "js", pageURL, nil)
+	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "js", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("ProcessResource(v2) failed: %v", err)
 	}
@@ -117,11 +117,11 @@ func TestProcessResource_FreshCacheSkipsRedownload(t *testing.T) {
 	resourceURL := fmt.Sprintf("%s/style.css?nonce=%d", baseURL, time.Now().UnixNano())
 	pageURL := baseURL + "/page"
 
-	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("first ProcessResource failed: %v", err)
 	}
-	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("second ProcessResource failed: %v", err)
 	}
@@ -161,11 +161,11 @@ func TestProcessResource_ETagRevalidationAvoidsBodyRedownload(t *testing.T) {
 	resourceURL := fmt.Sprintf("%s/etag-style.css?nonce=%d", baseURL, time.Now().UnixNano())
 	pageURL := baseURL + "/page"
 
-	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("first ProcessResource failed: %v", err)
 	}
-	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("second ProcessResource failed: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestProcessResource_304NoCacheDoesNotRestoreOldFreshness(t *testing.T) {
 	resourceURL := fmt.Sprintf("%s/no-cache-304.css?nonce=%d", baseURL, time.Now().UnixNano())
 	pageURL := baseURL + "/page"
 
-	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("first ProcessResource failed: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestProcessResource_304NoCacheDoesNotRestoreOldFreshness(t *testing.T) {
 	cached.freshUntil = time.Now().Add(-time.Second)
 	cached.cachedAt = time.Now()
 
-	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("second ProcessResource failed: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestProcessResource_304NoCacheDoesNotRestoreOldFreshness(t *testing.T) {
 		t.Fatalf("304 with Cache-Control: no-cache should clear freshness window")
 	}
 
-	resourceID3, filePath3, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID3, filePath3, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("third ProcessResource failed: %v", err)
 	}
@@ -270,13 +270,13 @@ func TestProcessResource_DownloadFailureDoesNotFallbackAcrossQueryVariants(t *te
 	resourceURL1 := baseURL + "/style.css?token=one"
 	resourceURL2 := baseURL + "/style.css?token=two"
 
-	if _, _, _, err := dedup.ProcessResource(resourceURL1, "css", pageURL, nil); err != nil {
+	if _, _, _, err := dedup.ProcessResource(resourceURL1, "css", pageURL, nil, nil); err != nil {
 		t.Fatalf("ProcessResource(resourceURL1) failed: %v", err)
 	}
 
 	server.Close()
 
-	if _, _, _, err := dedup.ProcessResource(resourceURL2, "css", pageURL, nil); err == nil {
+	if _, _, _, err := dedup.ProcessResource(resourceURL2, "css", pageURL, nil, nil); err == nil {
 		t.Fatalf("expected download failure for query variant without unsafe fallback")
 	}
 }
@@ -295,14 +295,14 @@ func TestProcessResource_DownloadFailureFallsBackToExactURL(t *testing.T) {
 	pageURL := baseURL + "/page"
 	resourceURL := fmt.Sprintf("%s/style.css?token=%d", baseURL, time.Now().UnixNano())
 
-	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("first ProcessResource failed: %v", err)
 	}
 
 	server.Close()
 
-	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("expected exact URL fallback to succeed, got: %v", err)
 	}
@@ -338,11 +338,11 @@ func TestProcessResource_LastModifiedRevalidationAvoidsBodyRedownload(t *testing
 	resourceURL := fmt.Sprintf("%s/last-modified.js?nonce=%d", baseURL, time.Now().UnixNano())
 	pageURL := baseURL + "/page"
 
-	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "js", pageURL, nil)
+	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "js", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("first ProcessResource failed: %v", err)
 	}
-	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "js", pageURL, nil)
+	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "js", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("second ProcessResource failed: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestProcessResource_ExpiredFreshCacheTriggersRedownload(t *testing.T) {
 	resourceURL := fmt.Sprintf("%s/expired-style.css?nonce=%d", baseURL, time.Now().UnixNano())
 	pageURL := baseURL + "/page"
 
-	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("first ProcessResource failed: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestProcessResource_ExpiredFreshCacheTriggersRedownload(t *testing.T) {
 	cached.freshUntil = time.Now().Add(-time.Second)
 	cached.cachedAt = time.Now()
 
-	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil, nil)
 	if err != nil {
 		t.Fatalf("second ProcessResource failed: %v", err)
 	}
