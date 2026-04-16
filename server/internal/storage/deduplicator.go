@@ -602,10 +602,32 @@ func cachedLastModified(cached *resourceCacheEntry) string {
 	return cached.lastMod
 }
 
-// processResourceFallback 下载失败时的兜底逻辑
-// 下载失败时直接返回错误，避免静默复用旧版本资源导致错误归档。
+// processResourceFallback 下载失败时的兜底逻辑。
+// 仅允许复用同一 URL 的历史资源，并要求本地文件仍然存在，避免跨 URL 误复用。
 func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (int64, string, []byte, error) {
-	return 0, "", nil, fmt.Errorf("download failed: %w", downloadErr)
+	resource, err := d.db.GetResourceByURL(url)
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("download failed: %w (fallback lookup failed: %v)", downloadErr, err)
+	}
+	if resource == nil || resource.FilePath == "" {
+		return 0, "", nil, fmt.Errorf("download failed: %w", downloadErr)
+	}
+
+	filePath := filepath.Join(d.storage.baseDir, resource.FilePath)
+	if _, err := os.Stat(filePath); err != nil {
+		if os.IsNotExist(err) {
+			return 0, "", nil, fmt.Errorf("download failed: %w", downloadErr)
+		}
+		return 0, "", nil, fmt.Errorf("download failed: %w (fallback stat failed: %v)", downloadErr, err)
+	}
+
+	if err := d.db.UpdateResourceLastSeen(resource.ID); err != nil {
+		return 0, "", nil, fmt.Errorf("download failed: %w (fallback last_seen update failed: %v)", downloadErr, err)
+	}
+
+	d.cacheStore(url, resource.ID, resource.FilePath, nil)
+	log.Printf("Fallback: reusing previous resource (ID: %d) for: %s", resource.ID, shortURLForLog(url))
+	return resource.ID, resource.FilePath, nil, nil
 }
 
 type cssWorkItem struct {

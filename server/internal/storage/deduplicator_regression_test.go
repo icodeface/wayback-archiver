@@ -281,6 +281,39 @@ func TestProcessResource_DownloadFailureDoesNotFallbackAcrossQueryVariants(t *te
 	}
 }
 
+func TestProcessResource_DownloadFailureFallsBackToExactURL(t *testing.T) {
+	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
+	defer db.Close()
+	cssToken := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css")
+		_, _ = w.Write([]byte("body { color: red; } /* " + cssToken + " */"))
+	}))
+
+	baseURL := routeStorageHTTPClientToServer(t, fs, server)
+	pageURL := baseURL + "/page"
+	resourceURL := fmt.Sprintf("%s/style.css?token=%d", baseURL, time.Now().UnixNano())
+
+	resourceID1, filePath1, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	if err != nil {
+		t.Fatalf("first ProcessResource failed: %v", err)
+	}
+
+	server.Close()
+
+	resourceID2, filePath2, _, err := dedup.ProcessResource(resourceURL, "css", pageURL, nil)
+	if err != nil {
+		t.Fatalf("expected exact URL fallback to succeed, got: %v", err)
+	}
+	if resourceID2 != resourceID1 {
+		t.Fatalf("fallback should reuse exact URL resource ID, got %d want %d", resourceID2, resourceID1)
+	}
+	if filePath2 != filePath1 {
+		t.Fatalf("fallback should reuse exact URL file path, got %q want %q", filePath2, filePath1)
+	}
+}
+
 func TestProcessResource_LastModifiedRevalidationAvoidsBodyRedownload(t *testing.T) {
 	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
 	defer db.Close()

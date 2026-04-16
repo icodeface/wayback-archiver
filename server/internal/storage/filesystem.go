@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -471,37 +473,23 @@ func isSameRootDomain(url1, url2 string) bool {
 	return getRootDomain(parsed1.Hostname()) == getRootDomain(parsed2.Hostname())
 }
 
-// getRootDomain extracts the root domain using public suffix list logic
+// getRootDomain extracts the registrable domain using the public suffix list.
 // e.g. "kp.m-team.cc" -> "m-team.cc", "img.example.co.uk" -> "example.co.uk"
 func getRootDomain(hostname string) string {
-	// 使用简化的公共后缀列表（常见的多段 TLD）
-	multiSegmentTLDs := map[string]bool{
-		"co.uk": true, "co.jp": true, "co.kr": true, "co.nz": true, "co.za": true,
-		"com.au": true, "com.br": true, "com.cn": true, "com.hk": true, "com.tw": true,
-		"net.au": true, "org.uk": true, "gov.uk": true, "ac.uk": true,
-		"ne.jp": true, "or.jp": true, "go.jp": true,
+	hostname = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostname)), ".")
+	if hostname == "" {
+		return ""
 	}
-
-	parts := strings.Split(hostname, ".")
-	if len(parts) <= 1 {
+	if ip := net.ParseIP(hostname); ip != nil {
 		return hostname
 	}
 
-	// 检查是否为多段 TLD（如 co.uk）
-	if len(parts) >= 3 {
-		twoSegmentSuffix := strings.Join(parts[len(parts)-2:], ".")
-		if multiSegmentTLDs[twoSegmentSuffix] {
-			// 返回 domain + TLD（如 example.co.uk）
-			return strings.Join(parts[len(parts)-3:], ".")
-		}
+	root, err := publicsuffix.EffectiveTLDPlusOne(hostname)
+	if err != nil {
+		return hostname
 	}
 
-	// 默认返回最后两段（如 example.com）
-	if len(parts) >= 2 {
-		return strings.Join(parts[len(parts)-2:], ".")
-	}
-
-	return hostname
+	return root
 }
 
 // SaveResource 保存资源文件，按哈希组织目录
