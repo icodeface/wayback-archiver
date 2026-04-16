@@ -19,9 +19,9 @@ func main() {
 
 	// 查询最近的页面记录
 	rows, err := db.Query(`
-		SELECT id, url, title, captured_at, created_at
+		SELECT id, url, title, captured_at, last_visited
 		FROM pages
-		ORDER BY created_at DESC
+		ORDER BY COALESCE(last_visited, captured_at) DESC
 		LIMIT 5
 	`)
 	if err != nil {
@@ -33,14 +33,17 @@ func main() {
 	for rows.Next() {
 		var id int64
 		var url, title string
-		var capturedAt, createdAt time.Time
-		if err := rows.Scan(&id, &url, &title, &capturedAt, &createdAt); err != nil {
+		var capturedAt time.Time
+		var lastVisited sql.NullTime
+		if err := rows.Scan(&id, &url, &title, &capturedAt, &lastVisited); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Printf("\nID: %d\n", id)
 		fmt.Printf("URL: %s\n", url)
 		fmt.Printf("Title: %s\n", title)
 		fmt.Printf("Captured: %s\n", capturedAt.Format("2006-01-02 15:04:05"))
-		fmt.Printf("Created: %s\n", createdAt.Format("2006-01-02 15:04:05"))
+		if lastVisited.Valid {
+			fmt.Printf("Last visited: %s\n", lastVisited.Time.Format("2006-01-02 15:04:05"))
+		}
 	}
 }

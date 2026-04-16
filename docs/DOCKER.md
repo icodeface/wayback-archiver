@@ -58,7 +58,7 @@ Create a `.env` file in the project root:
 
 ```bash
 # Optional: Set version info
-VERSION=v1.0.0
+VERSION=v1.1.0
 BUILD_TIME=2026-03-16
 
 # Optional: Configure CORS

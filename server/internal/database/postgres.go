@@ -44,6 +44,9 @@ func New(host, port, user, password, dbname string, sslmode ...string) (*DB, err
 	}
 
 	db := &DB{conn: conn}
+	if err := db.ensureResourcesContentHashNotUnique(); err != nil {
+		return nil, fmt.Errorf("failed to ensure resources content_hash is not unique: %w", err)
+	}
 	if err := db.ensureDomainColumn(); err != nil {
 		return nil, fmt.Errorf("failed to ensure domain column: %w", err)
 	}
@@ -76,6 +79,11 @@ func quoteConnValue(value string) string {
 	escaped := strings.ReplaceAll(value, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
 	return "'" + escaped + "'"
+}
+
+func (db *DB) ensureResourcesContentHashNotUnique() error {
+	_, err := db.conn.Exec(`ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_content_hash_key`)
+	return err
 }
 
 // ensureDomainColumn adds the domain column, index, and backfills existing rows if needed.

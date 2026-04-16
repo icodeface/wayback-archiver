@@ -105,7 +105,17 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
    export ALLOWED_ORIGINS=https://your-domain.com
    ```
 
-3. **重启服务**
+3. **执行数据库迁移**（从 **`< 1.1.0`** 升级时必需）
+   如果数据库用户具备 `ALTER TABLE` 权限，可以直接升级并启动新服务，由服务在启动时自动补齐该列。
+   如果没有权限，请先手动执行下面这组幂等 SQL：
+   ```sql
+   ALTER TABLE pages ADD COLUMN IF NOT EXISTS snapshot_state VARCHAR(16);
+   UPDATE pages SET snapshot_state = 'ready' WHERE snapshot_state IS NULL OR snapshot_state = '';
+   ALTER TABLE pages ALTER COLUMN snapshot_state SET DEFAULT 'pending';
+   ALTER TABLE pages ALTER COLUMN snapshot_state SET NOT NULL;
+   ```
+
+4. **重启服务**
    ```bash
    ./wayback-server
    ```
