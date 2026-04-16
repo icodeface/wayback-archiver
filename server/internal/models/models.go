@@ -3,16 +3,17 @@ package models
 import "time"
 
 type Page struct {
-	ID           int64     `json:"id"`
-	URL          string    `json:"url"`
-	Title        string    `json:"title"`
-	CapturedAt   time.Time `json:"captured_at"`
-	HTMLPath     string    `json:"html_path"`
-	ContentHash  string    `json:"content_hash"`
-	FirstVisited time.Time `json:"first_visited"`
-	LastVisited  time.Time `json:"last_visited"`
-	BodyText     string    `json:"body_text,omitempty"`
-	Domain       string    `json:"domain,omitempty"`
+	ID            int64     `json:"id"`
+	URL           string    `json:"url"`
+	Title         string    `json:"title"`
+	CapturedAt    time.Time `json:"captured_at"`
+	HTMLPath      string    `json:"html_path"`
+	ContentHash   string    `json:"content_hash"`
+	SnapshotState string    `json:"snapshot_state"`
+	FirstVisited  time.Time `json:"first_visited"`
+	LastVisited   time.Time `json:"last_visited"`
+	BodyText      string    `json:"body_text,omitempty"`
+	Domain        string    `json:"domain,omitempty"`
 }
 
 type Resource struct {
@@ -60,6 +61,10 @@ const (
 	ArchiveActionCreated   = "created"
 	ArchiveActionUnchanged = "unchanged"
 	ArchiveActionUpdated   = "updated"
+
+	SnapshotStatePending = "pending"
+	SnapshotStateReady   = "ready"
+	SnapshotStateFailed  = "failed"
 )
 
 type ArchiveResponse struct {

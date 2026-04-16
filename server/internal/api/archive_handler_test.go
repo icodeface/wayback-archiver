@@ -61,6 +61,27 @@ func waitForPageTitle(t *testing.T, handler *Handler, pageID int64, want string)
 	t.Fatalf("page title = %q, want %q", page.Title, want)
 }
 
+func waitForPageSnapshotState(t *testing.T, handler *Handler, pageID int64, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		page, err := handler.db.GetPageByID(strconv.FormatInt(pageID, 10))
+		if err == nil && page != nil && page.SnapshotState == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	page, err := handler.db.GetPageByID(strconv.FormatInt(pageID, 10))
+	if err != nil {
+		t.Fatalf("GetPageByID failed: %v", err)
+	}
+	if page == nil {
+		t.Fatalf("expected page %d to exist", pageID)
+	}
+	t.Fatalf("page snapshot_state = %q, want %q", page.SnapshotState, want)
+}
+
 func setupRouter(handler *Handler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -108,6 +129,7 @@ func TestArchivePage_ReturnsPageIDAndAction(t *testing.T) {
 
 	// Cleanup
 	defer handler.db.DeletePage(resp.PageID)
+	waitForPageSnapshotState(t, handler, resp.PageID, models.SnapshotStateReady)
 
 	// Archive same content again — should be unchanged
 	w2 := httptest.NewRecorder()

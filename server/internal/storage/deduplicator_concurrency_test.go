@@ -72,7 +72,6 @@ func TestProcessCaptureAsync_ConcurrentIdenticalRequestsReuseSinglePage(t *testi
 	close(releaseFirst)
 
 	createdCount := 0
-	unchangedCount := 0
 	pageIDs := make(map[int64]struct{}, 2)
 	var pageID int64
 	for i := 0; i < 2; i++ {
@@ -85,8 +84,6 @@ func TestProcessCaptureAsync_ConcurrentIdenticalRequestsReuseSinglePage(t *testi
 		switch result.action {
 		case models.ArchiveActionCreated:
 			createdCount++
-		case models.ArchiveActionUnchanged:
-			unchangedCount++
 		default:
 			t.Fatalf("unexpected action %q", result.action)
 		}
@@ -98,13 +95,25 @@ func TestProcessCaptureAsync_ConcurrentIdenticalRequestsReuseSinglePage(t *testi
 	if len(pageIDs) != 1 {
 		t.Fatalf("expected both captures to reuse one page record, got %d IDs", len(pageIDs))
 	}
-	if createdCount != 1 || unchangedCount != 1 {
-		t.Fatalf("expected one created and one unchanged result, got created=%d unchanged=%d", createdCount, unchangedCount)
+	if createdCount != 2 {
+		t.Fatalf("expected both concurrent pending captures to report created, got %d", createdCount)
 	}
 
 	t.Cleanup(func() {
 		_ = db.DeletePage(pageID)
 	})
+
+	dedup.WaitForBackgroundTasks()
+	page, err := db.GetPageByID(fmt.Sprintf("%d", pageID))
+	if err != nil {
+		t.Fatalf("GetPageByID failed: %v", err)
+	}
+	if page == nil {
+		t.Fatalf("expected page %d to exist", pageID)
+	}
+	if page.SnapshotState != models.SnapshotStateReady {
+		t.Fatalf("page snapshot_state = %q, want %q", page.SnapshotState, models.SnapshotStateReady)
+	}
 
 	pages, err := db.GetPagesByURL(req.URL)
 	if err != nil {

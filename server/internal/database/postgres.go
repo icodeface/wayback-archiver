@@ -15,6 +15,12 @@ type DB struct {
 	conn *sql.DB
 }
 
+const pageSelectColumns = "id, url, title, captured_at, html_path, content_hash, snapshot_state, first_visited, last_visited"
+
+type pageScanner interface {
+	Scan(dest ...any) error
+}
+
 func New(host, port, user, password, dbname string, sslmode ...string) (*DB, error) {
 	mode := "disable"
 	if len(sslmode) > 0 && sslmode[0] != "" {
@@ -40,6 +46,9 @@ func New(host, port, user, password, dbname string, sslmode ...string) (*DB, err
 	db := &DB{conn: conn}
 	if err := db.ensureDomainColumn(); err != nil {
 		return nil, fmt.Errorf("failed to ensure domain column: %w", err)
+	}
+	if err := db.ensureSnapshotStateColumn(); err != nil {
+		return nil, fmt.Errorf("failed to ensure snapshot_state column: %w", err)
 	}
 
 	return db, nil
@@ -86,6 +95,26 @@ func (db *DB) ensureDomainColumn() error {
 	return err
 }
 
+func (db *DB) ensureSnapshotStateColumn() error {
+	if _, err := db.conn.Exec(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS snapshot_state VARCHAR(16)`); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(`UPDATE pages SET snapshot_state = 'ready' WHERE snapshot_state IS NULL OR snapshot_state = ''`); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(`ALTER TABLE pages ALTER COLUMN snapshot_state SET DEFAULT 'pending'`); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(`ALTER TABLE pages ALTER COLUMN snapshot_state SET NOT NULL`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func scanPage(scanner pageScanner, page *models.Page) error {
+	return scanner.Scan(&page.ID, &page.URL, &page.Title, &page.CapturedAt, &page.HTMLPath, &page.ContentHash, &page.SnapshotState, &page.FirstVisited, &page.LastVisited)
+}
+
 // extractDomain extracts the hostname from a URL string.
 func extractDomain(rawURL string) string {
 	u, err := url.Parse(rawURL)
@@ -103,8 +132,8 @@ func (db *DB) Close() error {
 func (db *DB) CreatePage(url, title, htmlPath, contentHash string, capturedAt time.Time) (int64, error) {
 	var id int64
 	err := db.conn.QueryRow(
-		"INSERT INTO pages (url, title, html_path, content_hash, captured_at, first_visited, last_visited, domain) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
-		url, title, htmlPath, contentHash, capturedAt, capturedAt, capturedAt, extractDomain(url),
+		"INSERT INTO pages (url, title, html_path, content_hash, snapshot_state, captured_at, first_visited, last_visited, domain) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+		url, title, htmlPath, contentHash, models.SnapshotStatePending, capturedAt, capturedAt, capturedAt, extractDomain(url),
 	).Scan(&id)
 	return id, err
 }
@@ -118,10 +147,11 @@ func (db *DB) UpdatePageBodyText(id int64, bodyText string) error {
 // GetPageByURLAndHash 根据 URL 和内容哈希查找页面
 func (db *DB) GetPageByURLAndHash(url, contentHash string) (*models.Page, error) {
 	var p models.Page
-	err := db.conn.QueryRow(
-		"SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited FROM pages WHERE url = $1 AND content_hash = $2",
+	row := db.conn.QueryRow(
+		"SELECT "+pageSelectColumns+" FROM pages WHERE url = $1 AND content_hash = $2 ORDER BY CASE snapshot_state WHEN 'ready' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, first_visited ASC LIMIT 1",
 		url, contentHash,
-	).Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited)
+	)
+	err := scanPage(row, &p)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -263,7 +293,7 @@ func (db *DB) GetResourceByURLLike(pattern string) (*models.Resource, error) {
 
 // ListPages 列出页面（分页，支持时间和域名过滤）
 func (db *DB) ListPages(limit, offset int, from, to *time.Time, domain string) ([]models.Page, error) {
-	query := "SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited FROM pages"
+	query := "SELECT " + pageSelectColumns + " FROM pages"
 	args := []interface{}{}
 	argIndex := 1
 
@@ -306,7 +336,7 @@ func (db *DB) ListPages(limit, offset int, from, to *time.Time, domain string) (
 	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
-		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited); err != nil {
+		if err := scanPage(rows, &p); err != nil {
 			return nil, err
 		}
 		pages = append(pages, p)
@@ -355,10 +385,11 @@ func (db *DB) GetTotalPagesCount(from, to *time.Time, domain string) (int, error
 // GetPageByID 根据 ID 获取页面
 func (db *DB) GetPageByID(id string) (*models.Page, error) {
 	var p models.Page
-	err := db.conn.QueryRow(
-		"SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited FROM pages WHERE id = $1",
+	row := db.conn.QueryRow(
+		"SELECT "+pageSelectColumns+" FROM pages WHERE id = $1",
 		id,
-	).Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited)
+	)
+	err := scanPage(row, &p)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -371,7 +402,7 @@ func (db *DB) GetPageByID(id string) (*models.Page, error) {
 
 // SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
 func (db *DB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
-	query := "SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited FROM pages WHERE (url ILIKE $1 OR title ILIKE $1 OR body_text ILIKE $1)"
+	query := "SELECT " + pageSelectColumns + " FROM pages WHERE (url ILIKE $1 OR title ILIKE $1 OR body_text ILIKE $1)"
 	args := []interface{}{"%" + keyword + "%"}
 	argIndex := 2
 
@@ -405,7 +436,7 @@ func (db *DB) SearchPages(keyword string, from, to *time.Time, domain string) ([
 	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
-		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited); err != nil {
+		if err := scanPage(rows, &p); err != nil {
 			return nil, err
 		}
 		pages = append(pages, p)
@@ -416,7 +447,7 @@ func (db *DB) SearchPages(keyword string, from, to *time.Time, domain string) ([
 // GetPagesWithoutBodyText 获取所有没有 body_text 的页面（用于回填）
 func (db *DB) GetPagesWithoutBodyText() ([]models.Page, error) {
 	rows, err := db.conn.Query(
-		"SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited FROM pages WHERE body_text IS NULL ORDER BY id",
+		"SELECT " + pageSelectColumns + " FROM pages WHERE body_text IS NULL ORDER BY id",
 	)
 	if err != nil {
 		return nil, err
@@ -426,7 +457,7 @@ func (db *DB) GetPagesWithoutBodyText() ([]models.Page, error) {
 	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
-		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited); err != nil {
+		if err := scanPage(rows, &p); err != nil {
 			return nil, err
 		}
 		pages = append(pages, p)
@@ -532,8 +563,8 @@ func (db *DB) GetResourceByURLPath(urlPath string, pageID int64) (*models.Resour
 // UpdatePageContent 更新页面内容（HTML路径、哈希、标题、最后访问时间）
 func (db *DB) UpdatePageContent(id int64, htmlPath, contentHash, title string) error {
 	_, err := db.conn.Exec(
-		"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, last_visited = NOW() WHERE id = $4",
-		htmlPath, contentHash, title, id,
+		"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = NOW() WHERE id = $5",
+		htmlPath, contentHash, title, models.SnapshotStateReady, id,
 	)
 	return err
 }
@@ -548,15 +579,15 @@ func (db *DB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title string,
 
 	if bodyText != nil {
 		if _, err := tx.Exec(
-			"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, body_text = $4, last_visited = NOW() WHERE id = $5",
-			htmlPath, contentHash, title, *bodyText, id,
+			"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, body_text = $4, snapshot_state = $5, last_visited = NOW() WHERE id = $6",
+			htmlPath, contentHash, title, *bodyText, models.SnapshotStateReady, id,
 		); err != nil {
 			return err
 		}
 	} else {
 		if _, err := tx.Exec(
-			"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, last_visited = NOW() WHERE id = $4",
-			htmlPath, contentHash, title, id,
+			"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = NOW() WHERE id = $5",
+			htmlPath, contentHash, title, models.SnapshotStateReady, id,
 		); err != nil {
 			return err
 		}
@@ -578,10 +609,63 @@ func (db *DB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title string,
 	return tx.Commit()
 }
 
+func (db *DB) ResetPageForCreateRetry(id int64, title, htmlPath string, capturedAt time.Time) (string, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	var oldHTMLPath string
+	if err := tx.QueryRow("SELECT html_path FROM pages WHERE id = $1 FOR UPDATE", id).Scan(&oldHTMLPath); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(
+		"UPDATE pages SET title = $1, html_path = $2, snapshot_state = $3, last_visited = $4 WHERE id = $5",
+		title, htmlPath, models.SnapshotStatePending, capturedAt, id,
+	); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return oldHTMLPath, nil
+}
+
+func (db *DB) FinalizePageCreate(id int64, resourceIDs []int64) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("UPDATE pages SET snapshot_state = $1 WHERE id = $2", models.SnapshotStateReady, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM page_resources WHERE page_id = $1", id); err != nil {
+		return err
+	}
+	for _, resourceID := range resourceIDs {
+		if _, err := tx.Exec(
+			"INSERT INTO page_resources (page_id, resource_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+			id, resourceID,
+		); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (db *DB) MarkPageCreateFailed(id int64) error {
+	_, err := db.conn.Exec("UPDATE pages SET snapshot_state = $1 WHERE id = $2", models.SnapshotStateFailed, id)
+	return err
+}
+
 // GetPagesByURL 获取同一 URL 的所有快照（按时间倒序）
 func (db *DB) GetPagesByURL(pageURL string) ([]models.Page, error) {
 	rows, err := db.conn.Query(
-		"SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited FROM pages WHERE url = $1 ORDER BY first_visited DESC",
+		"SELECT "+pageSelectColumns+" FROM pages WHERE url = $1 ORDER BY first_visited DESC",
 		pageURL,
 	)
 	if err != nil {
@@ -592,7 +676,7 @@ func (db *DB) GetPagesByURL(pageURL string) ([]models.Page, error) {
 	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
-		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited); err != nil {
+		if err := scanPage(rows, &p); err != nil {
 			return nil, err
 		}
 		pages = append(pages, p)
@@ -610,10 +694,11 @@ func (db *DB) GetSnapshotNeighbors(pageURL string, currentID int64) (prev *model
 
 	// 前一个快照（比当前更早）
 	var p models.Page
-	err = db.conn.QueryRow(
-		"SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited FROM pages WHERE url = $1 AND first_visited < (SELECT first_visited FROM pages WHERE id = $2) ORDER BY first_visited DESC LIMIT 1",
+	row := db.conn.QueryRow(
+		"SELECT "+pageSelectColumns+" FROM pages WHERE url = $1 AND first_visited < (SELECT first_visited FROM pages WHERE id = $2) ORDER BY first_visited DESC LIMIT 1",
 		pageURL, currentID,
-	).Scan(&p.ID, &p.URL, &p.Title, &p.CapturedAt, &p.HTMLPath, &p.ContentHash, &p.FirstVisited, &p.LastVisited)
+	)
+	err = scanPage(row, &p)
 	if err == nil {
 		prev = &p
 	} else if err != sql.ErrNoRows {
@@ -623,10 +708,11 @@ func (db *DB) GetSnapshotNeighbors(pageURL string, currentID int64) (prev *model
 
 	// 后一个快照（比当前更新）
 	var n models.Page
-	err = db.conn.QueryRow(
-		"SELECT id, url, title, captured_at, html_path, content_hash, first_visited, last_visited FROM pages WHERE url = $1 AND first_visited > (SELECT first_visited FROM pages WHERE id = $2) ORDER BY first_visited ASC LIMIT 1",
+	row = db.conn.QueryRow(
+		"SELECT "+pageSelectColumns+" FROM pages WHERE url = $1 AND first_visited > (SELECT first_visited FROM pages WHERE id = $2) ORDER BY first_visited ASC LIMIT 1",
 		pageURL, currentID,
-	).Scan(&n.ID, &n.URL, &n.Title, &n.CapturedAt, &n.HTMLPath, &n.ContentHash, &n.FirstVisited, &n.LastVisited)
+	)
+	err = scanPage(row, &n)
 	if err == nil {
 		next = &n
 	} else if err != sql.ErrNoRows {

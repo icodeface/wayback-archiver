@@ -196,6 +196,7 @@ export https_proxy=http://127.0.0.1:7897
 
 返回 `{ status, page_id, action }`，其中 `action` 为 `created`（新建）或 `unchanged`（内容未变，仅更新 `last_visited`）。
 当 `action=created` 时，接口会在页面记录和原始 HTML 保存后立即返回；资源下载和 HTML 重写会在后台继续执行。
+服务端会用 `snapshot_state`（`pending`、`ready`、`failed`）跟踪后台创建进度。只有 `ready` 才会被视为可复用的完整快照；如果后台 finalize 失败，之后同一 `URL + content_hash` 的再次归档会复用原 `page_id` 并自动重试 finalize，而不是误判成 `unchanged`。
 
 ### PUT /api/archive/:id
 
