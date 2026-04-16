@@ -56,6 +56,15 @@ createdb wayback
 psql wayback < init_db.sql
 ```
 
+> **Upgrade note for existing installs:** Any installation upgrading from **`< 1.1.0`** to `1.1.0` or later needs the `pages.snapshot_state` column. The server applies this automatically during startup when the database user has sufficient privileges. Otherwise, run the following idempotent SQL manually first:
+>
+> ```sql
+> ALTER TABLE pages ADD COLUMN IF NOT EXISTS snapshot_state VARCHAR(16);
+> UPDATE pages SET snapshot_state = 'ready' WHERE snapshot_state IS NULL OR snapshot_state = '';
+> ALTER TABLE pages ALTER COLUMN snapshot_state SET DEFAULT 'pending';
+> ALTER TABLE pages ALTER COLUMN snapshot_state SET NOT NULL;
+> ```
+
 ### 3. Start Server
 
 ```bash

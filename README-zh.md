@@ -97,6 +97,15 @@ createdb -U postgres wayback
 psql -U postgres wayback < init_db.sql
 ```
 
+> **旧版本升级说明：** 从 **`< 1.1.0`** 升级到 `1.1.0` 或更新版本时，需要补齐 `pages.snapshot_state` 列。当前版本服务启动时会自动补齐这组变更；如果数据库账号没有 `ALTER TABLE` 权限，也可以手动执行下面这组幂等 SQL：
+>
+> ```sql
+> ALTER TABLE pages ADD COLUMN IF NOT EXISTS snapshot_state VARCHAR(16);
+> UPDATE pages SET snapshot_state = 'ready' WHERE snapshot_state IS NULL OR snapshot_state = '';
+> ALTER TABLE pages ALTER COLUMN snapshot_state SET DEFAULT 'pending';
+> ALTER TABLE pages ALTER COLUMN snapshot_state SET NOT NULL;
+> ```
+
 ### 3. 启动服务器
 
 ```bash
