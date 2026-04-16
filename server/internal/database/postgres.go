@@ -81,6 +81,15 @@ func quoteConnValue(value string) string {
 	return "'" + escaped + "'"
 }
 
+func escapeLikePattern(value string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	return replacer.Replace(value)
+}
+
 func (db *DB) ensureResourcesContentHashNotUnique() error {
 	_, err := db.conn.Exec(`ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_content_hash_key`)
 	return err
@@ -531,13 +540,15 @@ func (db *DB) GetLinkedResourceByURLAndPageID(url string, pageID int64) (*models
 // GetResourceByURLPrefix 根据 URL 前缀匹配资源（处理 DB 中 URL 带 #fragment 的情况）
 func (db *DB) GetResourceByURLPrefix(urlPrefix string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
+	escapedPrefix := escapeLikePattern(urlPrefix)
 	err := db.conn.QueryRow(`
 		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
-		WHERE pr.page_id = $1 AND (r.url LIKE $2 OR r.url LIKE $3)
+		WHERE pr.page_id = $1 AND (r.url LIKE $2 ESCAPE '\' OR r.url LIKE $3 ESCAPE '\')
+		ORDER BY r.last_seen DESC, r.id DESC
 		LIMIT 1
-	`, pageID, urlPrefix+"#%", urlPrefix+"%23%").Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	`, pageID, escapedPrefix+"#%", escapedPrefix+"%23%").Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -551,13 +562,15 @@ func (db *DB) GetResourceByURLPrefix(urlPrefix string, pageID int64) (*models.Re
 // GetResourceByURLPath 根据 URL 路径匹配资源（忽略查询参数，用于同一图片不同 token 的情况）
 func (db *DB) GetResourceByURLPath(urlPath string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
+	escapedPath := escapeLikePattern(urlPath)
 	err := db.conn.QueryRow(`
 		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
-		WHERE pr.page_id = $1 AND (r.url = $2 OR r.url LIKE $3)
+		WHERE pr.page_id = $1 AND (r.url = $2 OR r.url LIKE $3 ESCAPE '\')
+		ORDER BY CASE WHEN r.url = $2 THEN 0 ELSE 1 END, r.last_seen DESC, r.id DESC
 		LIMIT 1
-	`, pageID, urlPath, urlPath+"?%").Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	`, pageID, urlPath, escapedPath+"?%").Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
