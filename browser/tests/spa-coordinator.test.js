@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   chooseFlushAction,
   choosePendingFlushDependency,
+  shouldClearAsyncState,
   shouldCommitMonitorUpdate,
 } = require('../dist-test/spa-coordinator.js');
 
@@ -97,4 +98,12 @@ test('shouldCommitMonitorUpdate rejects updates when current page id changed', (
 
 test('shouldCommitMonitorUpdate allows current async work for same page epoch', () => {
   assert.equal(shouldCommitMonitorUpdate(3, 3, 42, 42), true);
+});
+
+test('shouldClearAsyncState only clears the currently tracked promise', async () => {
+  const settledPromise = Promise.resolve();
+  const newerPromise = new Promise(() => {});
+
+  assert.equal(shouldClearAsyncState(settledPromise, settledPromise), true);
+  assert.equal(shouldClearAsyncState(newerPromise, settledPromise), false);
 });

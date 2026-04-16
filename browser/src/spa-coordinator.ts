@@ -37,3 +37,7 @@ export function choosePendingFlushDependency(input: Pick<FlushDecisionInput, 'se
 export function shouldCommitMonitorUpdate(taskEpoch: number, currentEpoch: number, monitorPageId: number | null, currentPageId: number | null): boolean {
   return taskEpoch === currentEpoch && monitorPageId !== null && monitorPageId === currentPageId;
 }
+
+export function shouldClearAsyncState<T>(currentPromise: Promise<T> | null, settledPromise: Promise<T>): boolean {
+  return currentPromise === settledPromise;
+}

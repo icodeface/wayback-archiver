@@ -127,7 +127,7 @@ export class DOMCollector {
       // Fix virtual scroll layout: sort children by translateY and convert to normal flow
       this.fixVirtualScrollLayout(doc);
     }
-    return doc.documentElement.outerHTML;
+    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
   }
 
   /**

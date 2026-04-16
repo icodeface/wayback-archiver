@@ -65,7 +65,17 @@ function evaluateUserscript(url) {
 }
 
 async function main() {
-  const { shouldSkipURL } = await import('../../browser/dist/page-filter.js');
+  const [{ shouldSkipURL }, archiverModule] = await Promise.all([
+    import('../../browser/dist/page-filter.js'),
+    import('../../browser/dist/archiver.js'),
+  ]);
+
+  if (typeof archiverModule.sendToServer !== 'function' || typeof archiverModule.updateOnServer !== 'function') {
+    console.error('FAIL dist archiver import: expected sendToServer/updateOnServer exports');
+    process.exit(1);
+  }
+
+  console.log('PASS dist archiver import');
 
   const cases = [
     ['localhost', 'http://localhost:8080/', true],
@@ -107,16 +117,17 @@ async function main() {
   }
 
   const bundledCases = [
-    ['bundled localhost', 'http://localhost:8080/'],
-    ['bundled private ipv4', 'http://192.168.1.9/'],
+    ['bundled localhost', 'http://localhost:8080/', true],
+    ['bundled private ipv4', 'http://192.168.1.9/', true],
+    ['bundled public domain', 'https://example.com/', false],
   ];
 
-  for (const [name, url] of bundledCases) {
+  for (const [name, url, expectedSkip] of bundledCases) {
     const logs = evaluateUserscript(url);
     const skipped = logs.some((line) => line.includes('[Wayback] Skipping page:'));
     const loaded = logs.some((line) => line.includes('[Wayback] Script loaded for:'));
 
-    if (!skipped || loaded) {
+    if (skipped !== expectedSkip || loaded === expectedSkip) {
       failed++;
       console.error(`FAIL ${name}: bundled userscript logs = ${JSON.stringify(logs)}`);
     } else {

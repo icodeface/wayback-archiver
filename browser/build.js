@@ -3,15 +3,6 @@ const path = require('path');
 const { execSync } = require('child_process');
 const ts = require('typescript');
 
-// Step 1: Compile TypeScript
-console.log('Compiling TypeScript...');
-try {
-  execSync('npx tsc', { cwd: __dirname, stdio: 'inherit' });
-} catch (error) {
-  console.error('TypeScript compilation failed');
-  process.exit(1);
-}
-
 // Version from git tag or environment variable
 const version = process.env.VERSION
   || execSync('git describe --tags --always --dirty 2>/dev/null || echo "dev"', { encoding: 'utf8' }).trim().replace(/^v/, '');
@@ -22,6 +13,40 @@ const userscriptPath = path.join(distDir, 'wayback-userscript.js');
 const puppeteerPath = path.join(distDir, 'wayback-puppeteer.js');
 const distPackageJSONPath = path.join(distDir, 'package.json');
 const pakoPath = path.join(__dirname, 'node_modules/pako/dist/pako.min.js');
+
+function rewriteRelativeESMImports() {
+  for (const fileName of fs.readdirSync(distDir)) {
+    if (!fileName.endsWith('.js')) {
+      continue;
+    }
+
+    const filePath = path.join(distDir, fileName);
+    const content = fs.readFileSync(filePath, 'utf8');
+    const rewritten = content.replace(
+      /((?:import|export)\s+(?:[^'"]*?\s+from\s+)?)(['"])(\.{1,2}\/[^'"]+)(\2)/g,
+      (match, prefix, quote, specifier, suffix) => {
+        if (path.extname(specifier)) {
+          return match;
+        }
+        return `${prefix}${quote}${specifier}.js${suffix}`;
+      }
+    );
+
+    if (rewritten !== content) {
+      fs.writeFileSync(filePath, rewritten, 'utf8');
+    }
+  }
+}
+
+// Step 1: Compile TypeScript
+console.log('Compiling TypeScript...');
+try {
+  execSync('npx tsc', { cwd: __dirname, stdio: 'inherit' });
+  rewriteRelativeESMImports();
+} catch (error) {
+  console.error('TypeScript compilation failed');
+  process.exit(1);
+}
 
 // Module files to bundle in dependency order
 const userscriptModules = [
