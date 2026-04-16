@@ -206,3 +206,131 @@ func TestProcessCapture_UsesFrameSnapshotForNestedIframe(t *testing.T) {
 		t.Fatalf("inner iframe resource should contain uploaded snapshot")
 	}
 }
+
+func TestArchiveFrameCapture_SameURLDifferentFrameHTMLCreatesDistinctArchivedResources(t *testing.T) {
+	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
+	defer db.Close()
+
+	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)
+	frameURL := "https://frame-snapshot.invalid/embed/shared.html?nonce=" + nonce
+	frameA := models.FrameCapture{
+		Key:   "frame-a",
+		URL:   frameURL,
+		Title: "frame A",
+		HTML:  `<!DOCTYPE html><html><body><div id="frame-a-content">captured frame A ` + nonce + `</div></body></html>`,
+	}
+	frameB := models.FrameCapture{
+		Key:   "frame-b",
+		URL:   frameURL,
+		Title: "frame B",
+		HTML:  `<!DOCTYPE html><html><body><div id="frame-b-content">captured frame B ` + nonce + `</div></body></html>`,
+	}
+
+	frameMap := buildFrameCaptureMap([]models.FrameCapture{frameA, frameB})
+	var resourceIDs []int64
+	seen := make(map[int64]struct{})
+	visiting := make(map[string]bool)
+	archived := make(map[string]processedInlineHTML)
+
+	resourceIDA, filePathA, err := dedup.archiveFrameCapture(frameA, nil, nil, 1, "20260416120000", frameMap, &resourceIDs, seen, visiting, archived)
+	if err != nil {
+		t.Fatalf("archiveFrameCapture(frameA) failed: %v", err)
+	}
+	resourceIDB, filePathB, err := dedup.archiveFrameCapture(frameB, nil, nil, 1, "20260416120000", frameMap, &resourceIDs, seen, visiting, archived)
+	if err != nil {
+		t.Fatalf("archiveFrameCapture(frameB) failed: %v", err)
+	}
+
+	if resourceIDA == resourceIDB {
+		t.Fatalf("same URL but different frame snapshots should create distinct archived resources")
+	}
+	if filePathA == filePathB {
+		t.Fatalf("same URL but different frame snapshots should store distinct archived HTML files")
+	}
+	if len(resourceIDs) != 2 {
+		t.Fatalf("same URL but different frame snapshots should append two resource IDs, got %d", len(resourceIDs))
+	}
+
+	frameAHTML, err := os.ReadFile(filepath.Join(fs.baseDir, filePathA))
+	if err != nil {
+		t.Fatalf("ReadFile frame A archived html failed: %v", err)
+	}
+	if !strings.Contains(string(frameAHTML), `captured frame A `+nonce) {
+		t.Fatalf("frame A archived html should contain frame A snapshot, got: %s", string(frameAHTML))
+	}
+
+	frameBHTML, err := os.ReadFile(filepath.Join(fs.baseDir, filePathB))
+	if err != nil {
+		t.Fatalf("ReadFile frame B archived html failed: %v", err)
+	}
+	if !strings.Contains(string(frameBHTML), `captured frame B `+nonce) {
+		t.Fatalf("frame B archived html should contain frame B snapshot, got: %s", string(frameBHTML))
+	}
+}
+
+func TestRewriteCapturedHTML_SameURLDifferentFrameKeysArchivesBothSnapshots(t *testing.T) {
+	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
+	defer db.Close()
+
+	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)
+	frameURL := "https://frame-snapshot.invalid/embed/shared-page.html?nonce=" + nonce
+	htmlContent := `<html><body><iframe data-wayback-frame-key="frame-a" src="` + frameURL + `"></iframe><iframe data-wayback-frame-key="frame-b" src="` + frameURL + `"></iframe></body></html>`
+	frameMap := buildFrameCaptureMap([]models.FrameCapture{
+		{
+			Key:   "frame-a",
+			URL:   frameURL,
+			Title: "frame A",
+			HTML:  `<!DOCTYPE html><html><body><div id="frame-a-content">rewritten frame A ` + nonce + `</div></body></html>`,
+		},
+		{
+			Key:   "frame-b",
+			URL:   frameURL,
+			Title: "frame B",
+			HTML:  `<!DOCTYPE html><html><body><div id="frame-b-content">rewritten frame B ` + nonce + `</div></body></html>`,
+		},
+	})
+
+	var resourceIDs []int64
+	seen := make(map[int64]struct{})
+	rewrittenHTML, err := dedup.rewriteCapturedHTML(htmlContent, "https://frame-page.example.com/page-"+nonce, nil, nil, 1, "20260416121000", frameMap, &resourceIDs, seen, make(map[string]bool), make(map[string]processedInlineHTML))
+	if err != nil {
+		t.Fatalf("rewriteCapturedHTML failed: %v", err)
+	}
+
+	if len(resourceIDs) != 2 {
+		t.Fatalf("expected two archived iframe resources for same-URL different-key frames, got %d", len(resourceIDs))
+	}
+
+	foundFrameA := false
+	foundFrameB := false
+	for _, resourceID := range resourceIDs {
+		resource, err := db.GetResourceByID(resourceID)
+		if err != nil {
+			t.Fatalf("GetResourceByID(%d) failed: %v", resourceID, err)
+		}
+		if resource == nil {
+			t.Fatalf("expected resource %d to exist", resourceID)
+		}
+
+		archivedHTML, err := os.ReadFile(filepath.Join(fs.baseDir, resource.FilePath))
+		if err != nil {
+			t.Fatalf("ReadFile archived iframe html failed: %v", err)
+		}
+		content := string(archivedHTML)
+		if strings.Contains(content, `rewritten frame A `+nonce) {
+			foundFrameA = true
+		}
+		if strings.Contains(content, `rewritten frame B `+nonce) {
+			foundFrameB = true
+		}
+	}
+
+	if !foundFrameA || !foundFrameB {
+		t.Fatalf("expected archived iframe resources to preserve both frame snapshots; foundFrameA=%v foundFrameB=%v", foundFrameA, foundFrameB)
+	}
+
+	proxyURL := archiveProxyURL(1, "20260416121000", frameURL)
+	if strings.Count(rewrittenHTML, proxyURL) != 2 {
+		t.Fatalf("rewritten html should rewrite both iframe tags to archive proxy URL %q", proxyURL)
+	}
+}
