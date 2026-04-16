@@ -88,13 +88,14 @@ func TestServeFileStreaming_ContentTypes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
-		filename    string
-		content     string
-		wantType    string
+		filename string
+		content  string
+		wantType string
 	}{
 		{"style.css", "body{}", "text/css"},
 		{"script.js", "var x=1;", "javascript"},
 		{"image.img", "\x89PNG", "application/octet-stream"},
+		{"archived.font", "wOF2", "font/woff2"},
 		{"font.woff2", "\x00\x01", "font/woff2"},
 		{"font.ttf", "\x00\x01", "font/ttf"},
 	}

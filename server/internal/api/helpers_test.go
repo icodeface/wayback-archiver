@@ -1,6 +1,8 @@
 package api
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -105,6 +107,59 @@ func TestDetectFontType(t *testing.T) {
 			got := detectFontType(tt.filePath)
 			if got != tt.want {
 				t.Errorf("detectFontType() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDetectArchivedFontType(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{
+			name: "woff",
+			data: []byte("wOFFtest-font"),
+			want: "font/woff",
+		},
+		{
+			name: "woff2",
+			data: []byte("wOF2test-font"),
+			want: "font/woff2",
+		},
+		{
+			name: "ttf",
+			data: []byte{0x00, 0x01, 0x00, 0x00, 't', 'e', 's', 't'},
+			want: "font/ttf",
+		},
+		{
+			name: "otf",
+			data: []byte("OTTOtest-font"),
+			want: "font/otf",
+		},
+		{
+			name: "eot",
+			data: append(make([]byte, 34), 'L', 'P'),
+			want: "application/vnd.ms-fontobject",
+		},
+		{
+			name: "unknown",
+			data: []byte("not-a-font"),
+			want: "application/octet-stream",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filePath := filepath.Join(t.TempDir(), "font.font")
+			if err := os.WriteFile(filePath, tt.data, 0644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			got := detectArchivedFontType(filePath)
+			if got != tt.want {
+				t.Fatalf("detectArchivedFontType() = %q, want %q", got, tt.want)
 			}
 		})
 	}
