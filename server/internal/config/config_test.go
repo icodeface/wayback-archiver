@@ -239,7 +239,7 @@ func TestLoadFromEnv_DefaultAllowedOrigins(t *testing.T) {
 		t.Fatalf("LoadFromEnv() error = %v", err)
 	}
 
-	want := []string{"http://localhost:8080", "http://127.0.0.1:8080", "null"}
+	want := []string{"http://localhost:8080", "http://127.0.0.1:8080"}
 	if len(cfg.Server.AllowedOrigins) != len(want) {
 		t.Fatalf("AllowedOrigins len = %d, want %d (%v)", len(cfg.Server.AllowedOrigins), len(want), cfg.Server.AllowedOrigins)
 	}
@@ -258,7 +258,7 @@ func TestLoadFromEnv_CustomAllowedOrigins(t *testing.T) {
 		t.Fatalf("LoadFromEnv() error = %v", err)
 	}
 
-	want := []string{"https://allowed.example.com", "https://admin.example.com", "null"}
+	want := []string{"https://allowed.example.com", "https://admin.example.com"}
 	if len(cfg.Server.AllowedOrigins) != len(want) {
 		t.Fatalf("AllowedOrigins len = %d, want %d (%v)", len(cfg.Server.AllowedOrigins), len(want), cfg.Server.AllowedOrigins)
 	}

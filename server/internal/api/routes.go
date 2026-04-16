@@ -53,12 +53,17 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 		allowedOrigins[trimmed] = struct{}{}
 	}
 
-	// CORS 中间件 - 仅允许本地来源，防止 CSRF 攻击
+	// CORS 中间件 - 仅允许显式白名单中的 http(s) 来源；拒绝 Origin: null 这类 opaque origin
 	r.Use(func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
-		if _, ok := allowedOrigins[origin]; ok {
-			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
-			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		if origin != "" {
+			c.Writer.Header().Add("Vary", "Origin")
+		}
+		if origin != "null" {
+			if _, ok := allowedOrigins[origin]; ok {
+				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+				c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, PUT, GET, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")

@@ -39,11 +39,29 @@ type ServerConfig struct {
 var defaultAllowedOrigins = []string{
 	"http://localhost:8080",
 	"http://127.0.0.1:8080",
-	"null",
 }
 
 func DefaultAllowedOrigins() []string {
 	return append([]string(nil), defaultAllowedOrigins...)
+}
+
+// sanitizeAllowedOrigins removes unsupported opaque origins such as Origin: null.
+// `null` is sent not only by file:// pages, but also by sandboxed iframes and data URLs.
+func sanitizeAllowedOrigins(origins []string) []string {
+	result := make([]string, 0, len(origins))
+	seen := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed == "" || trimmed == "null" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 // StorageConfig holds storage settings
@@ -92,7 +110,7 @@ func LoadFromEnv() (*Config, error) {
 		Server: ServerConfig{
 			Host:             getEnv("SERVER_HOST", "127.0.0.1"),
 			Port:             getEnvInt("SERVER_PORT", 8080),
-			AllowedOrigins:   getEnvCSV("ALLOWED_ORIGINS", defaultAllowedOrigins),
+			AllowedOrigins:   sanitizeAllowedOrigins(getEnvCSV("ALLOWED_ORIGINS", defaultAllowedOrigins)),
 			EnableDebugAPI:   getEnvBool("ENABLE_DEBUG_API", false),
 			CompressionLevel: getEnvInt("COMPRESSION_LEVEL", -1), // -1 = DefaultCompression
 		},
