@@ -68,7 +68,8 @@ function isElementHidden(element: Element | null): boolean {
   }
 
   const styleAttr = normalizeText(element.getAttribute('style') || '');
-  return styleAttr.includes('display:none') || styleAttr.includes('visibility:hidden');
+  return /(?:^|[;\s])display\s*:\s*none(?:;|$)/.test(styleAttr) ||
+    /(?:^|[;\s])visibility\s*:\s*hidden(?:;|$)/.test(styleAttr);
 }
 
 function assessFrameDocument(doc: Document, url: string): FrameCaptureStatus {
@@ -262,7 +263,7 @@ async function requestFrameCapture(frame: HTMLIFrameElement): Promise<FrameCaptu
   });
 }
 
-export async function captureDocumentHTMLWithFrames(): Promise<DocumentCaptureResult> {
+export async function captureDocumentHTMLWithFrames(baseURL = window.location.href): Promise<DocumentCaptureResult> {
   const frames = markFrames();
   const capturedFrames = new Map<string, FrameCaptureResult>();
   const skippedFrames = new Map<string, FrameCaptureResult>();
@@ -292,7 +293,7 @@ export async function captureDocumentHTMLWithFrames(): Promise<DocumentCaptureRe
   }
 
   serializeCSSOMToDOM();
-  const html = normalizeCapturedHTMLURLs(inlineLayoutStyles(), window.location.href);
+  const html = normalizeCapturedHTMLURLs(inlineLayoutStyles(), baseURL);
   return {
     html: embedCapturedFrames(html, capturedFrames, skippedFrames),
     frames: dedupeFrames(collectedFrames),

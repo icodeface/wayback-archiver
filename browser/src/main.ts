@@ -21,7 +21,7 @@ import { waitForDOMStable } from './page-freezer';
 import { sendToServer, updateOnServer } from './archiver';
 import { DOMCollector } from './dom-collector';
 import { captureDocumentHTMLWithFrames, setupFrameCaptureBridge } from './frame-capture';
-import { chooseFlushAction, choosePendingFlushDependency, shouldCommitMonitorUpdate } from './spa-coordinator';
+import { chooseFlushAction, choosePendingFlushDependency, shouldClearAsyncState, shouldCommitMonitorUpdate } from './spa-coordinator';
 
 // Early exit check before any initialization
 if (shouldSkipPage()) {
@@ -36,6 +36,11 @@ if (shouldSkipPage()) {
 }
 
 function initializeArchiver(): void {
+  type CapturePageContext = {
+    url: string;
+    title: string;
+  };
+
   const nativeSetTimeout = window.setTimeout.bind(window);
   const nativeClearTimeout = window.clearTimeout.bind(window);
   const nativeSetInterval = window.setInterval.bind(window);
@@ -48,6 +53,8 @@ function initializeArchiver(): void {
   let updatePromise: Promise<void> | null = null;
   let currentPageId: number | null = null;
   let initialHTMLSize = 0; // Track initial capture size for update quality guard
+  let currentPageURL = window.location.href;
+  let currentPageTitle = document.title;
 
   // Collects nodes removed by virtual scrolling so we can merge them into snapshots
   const domCollector = new DOMCollector();
@@ -63,8 +70,14 @@ function initializeArchiver(): void {
   // Incremented on SPA resets so stale async work can self-cancel.
   let pageEpoch = 0;
 
-  async function captureSnapshot(headers?: Record<string, string>, expectedEpoch = pageEpoch): Promise<CaptureData | null> {
-    const captured = await captureDocumentHTMLWithFrames();
+  async function captureSnapshot(
+    headers?: Record<string, string>,
+    expectedEpoch = pageEpoch,
+    pageContext?: CapturePageContext,
+  ): Promise<CaptureData | null> {
+    const snapshotURL = pageContext?.url || window.location.href;
+    const snapshotTitle = pageContext?.title || document.title;
+    const captured = await captureDocumentHTMLWithFrames(snapshotURL);
     if (expectedEpoch !== pageEpoch) {
       return null;
     }
@@ -76,8 +89,8 @@ function initializeArchiver(): void {
     }
 
     return {
-      url: window.location.href,
-      title: document.title,
+      url: snapshotURL,
+      title: snapshotTitle,
       html,
       frames: captured.frames,
       headers,
@@ -136,6 +149,8 @@ function initializeArchiver(): void {
 
       captureData = preparedCapture;
       initialHTMLSize = preparedCapture.html.length;
+      currentPageURL = preparedCapture.url;
+      currentPageTitle = preparedCapture.title;
       console.log('[Wayback] ✓ Data prepared, size:', JSON.stringify(captureData).length, 'bytes');
     } catch (error) {
       console.error('[Wayback] Failed to prepare:', error);
@@ -155,7 +170,8 @@ function initializeArchiver(): void {
 
     const pendingCapture = captureData;
 
-    sendPromise = (async () => {
+    let activeSendPromise: Promise<void> | null = null;
+    activeSendPromise = (async () => {
       try {
         const response = await sendToServer(pendingCapture);
         currentPageId = response.page_id;
@@ -170,14 +186,18 @@ function initializeArchiver(): void {
       } catch (error) {
         console.error('[Wayback] Send failed:', error);
       } finally {
-        sendPromise = null;
+        if (activeSendPromise && shouldClearAsyncState(sendPromise, activeSendPromise)) {
+          sendPromise = null;
+        }
       }
     })();
+
+    sendPromise = activeSendPromise;
 
     return sendPromise;
   }
 
-  function flushCurrentPage(): Promise<void> {
+  function flushCurrentPage(pageContext?: CapturePageContext): Promise<void> {
     const action = chooseFlushAction({
       capturePrepared: captureData !== null,
       hasArchived,
@@ -204,9 +224,10 @@ function initializeArchiver(): void {
 
     const flushPageID = currentPageId;
     const flushEpoch = pageEpoch;
-    updatePromise = (async () => {
+    let activeFlushPromise: Promise<void> | null = null;
+    activeFlushPromise = (async () => {
       try {
-        const newCaptureData = await captureSnapshot(captureData?.headers, flushEpoch);
+        const newCaptureData = await captureSnapshot(captureData?.headers, flushEpoch, pageContext);
         if (!newCaptureData || !shouldAcceptUpdatedHTML(newCaptureData.html)) {
           return;
         }
@@ -217,9 +238,13 @@ function initializeArchiver(): void {
       } catch (error) {
         console.error('[Wayback] Flush failed:', error);
       } finally {
-        updatePromise = null;
+        if (activeFlushPromise && shouldClearAsyncState(updatePromise, activeFlushPromise)) {
+          updatePromise = null;
+        }
       }
     })();
+
+    updatePromise = activeFlushPromise;
 
     return updatePromise;
   }
@@ -330,13 +355,18 @@ function initializeArchiver(): void {
             return;
           }
 
-          updatePromise = (async () => {
+          let activeMonitorPromise: Promise<void> | null = null;
+          activeMonitorPromise = (async () => {
             try {
               await updateOnServer(monitorPageId, newCaptureData);
             } finally {
-              updatePromise = null;
+              if (activeMonitorPromise && shouldClearAsyncState(updatePromise, activeMonitorPromise)) {
+                updatePromise = null;
+              }
             }
           })();
+
+          updatePromise = activeMonitorPromise;
 
           await updatePromise;
         } catch (error) {
@@ -386,6 +416,8 @@ function initializeArchiver(): void {
     updatePromise = null;
     currentPageId = null;
     initialHTMLSize = 0;
+    currentPageURL = window.location.href;
+    currentPageTitle = document.title;
     if (collectorObserver) {
       collectorObserver.disconnect();
       collectorObserver = null;
@@ -435,8 +467,12 @@ function initializeArchiver(): void {
           return;
         }
         console.log('[Wayback] SPA navigate detected:', e.navigationType);
+        const flushContext = {
+          url: currentPageURL,
+          title: currentPageTitle,
+        };
         // 等待 sendCapture 完成后再重置状态，防止竞态条件
-        flushCurrentPage().then(() => {
+        flushCurrentPage(flushContext).then(() => {
           resetState();
           // Start collector early (after SPA transition completes) to catch virtual scroll removals
           spaCollectorTimerId = nativeSetTimeout(() => {
@@ -464,9 +500,13 @@ function initializeArchiver(): void {
     const newURL = window.location.href;
     if (newURL === lastURL) return;
     console.log('[Wayback] URL changed:', lastURL, '->', newURL);
+    const flushContext = {
+      url: currentPageURL,
+      title: currentPageTitle,
+    };
     lastURL = newURL;
     // 等待 sendCapture 完成后再重置状态，防止竞态条件
-    flushCurrentPage().then(() => {
+    flushCurrentPage(flushContext).then(() => {
       resetState();
       // Start collector early (after SPA transition completes) to catch virtual scroll removals
       spaCollectorTimerId = nativeSetTimeout(() => {
