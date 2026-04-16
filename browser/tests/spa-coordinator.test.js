@@ -64,6 +64,32 @@ test('chooseFlushAction still sends initial capture when page hides before first
   }), 'send-capture');
 });
 
+test('unload flush does nothing when initial capture data was never prepared', () => {
+  const action = chooseFlushAction({
+    capturePrepared: false,
+    hasArchived: false,
+    sendInFlight: false,
+    updateInFlight: false,
+    documentHidden: false,
+    currentPageId: null,
+  });
+
+  assert.equal(action, 'none');
+});
+
+test('unload flush sends the initial capture once data is ready', () => {
+  const action = chooseFlushAction({
+    capturePrepared: true,
+    hasArchived: false,
+    sendInFlight: false,
+    updateInFlight: false,
+    documentHidden: false,
+    currentPageId: null,
+  });
+
+  assert.equal(action, 'send-capture');
+});
+
 test('chooseFlushAction does not start a second update while final flush is in flight', () => {
   assert.equal(chooseFlushAction({
     capturePrepared: true,
