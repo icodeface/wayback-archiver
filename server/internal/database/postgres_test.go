@@ -225,6 +225,100 @@ func TestGetPagesByURL_NoResults(t *testing.T) {
 	}
 }
 
+func TestGetResourceByURLPath_EscapesPercentWildcards(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	pageID, err := db.CreatePage(
+		"https://db-url-path.example.com/page-"+suffix,
+		"URL Path Escape",
+		"html/test/url-path-escape.html",
+		strings.Repeat("a", 64),
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer db.DeletePage(pageID)
+
+	correctURL := "https://db-url-path.example.com/assets/report%20done.png?token=good"
+	wrongURL := "https://db-url-path.example.com/assets/reportX20done.png?token=bad"
+
+	correctID, err := db.CreateResource(correctURL, strings.Repeat("b", 64), "image", "resources/test/report-correct.img", 10)
+	if err != nil {
+		t.Fatalf("CreateResource(correct) failed: %v", err)
+	}
+	wrongID, err := db.CreateResource(wrongURL, strings.Repeat("c", 64), "image", "resources/test/report-wrong.img", 10)
+	if err != nil {
+		t.Fatalf("CreateResource(wrong) failed: %v", err)
+	}
+
+	for _, resourceID := range []int64{correctID, wrongID} {
+		if err := db.LinkPageResource(pageID, resourceID); err != nil {
+			t.Fatalf("LinkPageResource(%d) failed: %v", resourceID, err)
+		}
+	}
+
+	resource, err := db.GetResourceByURLPath("https://db-url-path.example.com/assets/report%20done.png", pageID)
+	if err != nil {
+		t.Fatalf("GetResourceByURLPath failed: %v", err)
+	}
+	if resource == nil {
+		t.Fatal("expected matching resource, got nil")
+	}
+	if resource.ID != correctID {
+		t.Fatalf("resource ID = %d, want %d (wrong wildcard match to %q)", resource.ID, correctID, wrongURL)
+	}
+}
+
+func TestGetResourceByURLPrefix_EscapesUnderscoreWildcards(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	pageID, err := db.CreatePage(
+		"https://db-url-prefix.example.com/page-"+suffix,
+		"URL Prefix Escape",
+		"html/test/url-prefix-escape.html",
+		strings.Repeat("d", 64),
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer db.DeletePage(pageID)
+
+	correctURL := "https://db-url-prefix.example.com/assets/icon_1.svg#section"
+	wrongURL := "https://db-url-prefix.example.com/assets/iconA1.svg#section"
+
+	correctID, err := db.CreateResource(correctURL, strings.Repeat("e", 64), "image", "resources/test/icon-correct.img", 10)
+	if err != nil {
+		t.Fatalf("CreateResource(correct) failed: %v", err)
+	}
+	wrongID, err := db.CreateResource(wrongURL, strings.Repeat("f", 64), "image", "resources/test/icon-wrong.img", 10)
+	if err != nil {
+		t.Fatalf("CreateResource(wrong) failed: %v", err)
+	}
+
+	for _, resourceID := range []int64{correctID, wrongID} {
+		if err := db.LinkPageResource(pageID, resourceID); err != nil {
+			t.Fatalf("LinkPageResource(%d) failed: %v", resourceID, err)
+		}
+	}
+
+	resource, err := db.GetResourceByURLPrefix("https://db-url-prefix.example.com/assets/icon_1.svg", pageID)
+	if err != nil {
+		t.Fatalf("GetResourceByURLPrefix failed: %v", err)
+	}
+	if resource == nil {
+		t.Fatal("expected matching resource, got nil")
+	}
+	if resource.ID != correctID {
+		t.Fatalf("resource ID = %d, want %d (wrong wildcard match to %q)", resource.ID, correctID, wrongURL)
+	}
+}
+
 func TestGetSnapshotNeighbors(t *testing.T) {
 	db := skipIfNoDB(t)
 	defer db.Close()
