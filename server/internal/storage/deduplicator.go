@@ -151,6 +151,9 @@ func cloneCaptureRequest(req *models.CaptureRequest) *models.CaptureRequest {
 			cloned.Headers[k] = v
 		}
 	}
+	if len(req.Cookies) > 0 {
+		cloned.Cookies = append([]models.CaptureCookie(nil), req.Cookies...)
+	}
 	return cloned
 }
 

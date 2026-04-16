@@ -7,11 +7,42 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"wayback/internal/models"
 )
+
+func TestCloneCaptureRequest_CopiesCookies(t *testing.T) {
+	original := &models.CaptureRequest{
+		URL:   "https://example.com/page",
+		Title: "cookie clone",
+		HTML:  "<html></html>",
+		Cookies: []models.CaptureCookie{{
+			Name:   "session",
+			Value:  "abc",
+			Domain: ".example.com",
+			Path:   "/",
+		}},
+	}
+
+	cloned := cloneCaptureRequest(original)
+	if cloned == nil {
+		t.Fatal("cloneCaptureRequest returned nil")
+	}
+	if len(cloned.Cookies) != 1 {
+		t.Fatalf("expected 1 cloned cookie, got %d", len(cloned.Cookies))
+	}
+	if cloned.Cookies[0] != original.Cookies[0] {
+		t.Fatalf("cloned cookie = %+v, want %+v", cloned.Cookies[0], original.Cookies[0])
+	}
+
+	cloned.Cookies[0].Value = "changed"
+	if original.Cookies[0].Value != "abc" {
+		t.Fatalf("mutating cloned cookies should not affect original request")
+	}
+}
 
 func TestProcessCaptureAsync_ReturnsBeforeResourceDownloadCompletes(t *testing.T) {
 	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
@@ -74,6 +105,53 @@ func TestProcessCaptureAsync_ReturnsBeforeResourceDownloadCompletes(t *testing.T
 	}
 	if !strings.Contains(string(htmlContent), archiveProxyURL(pageID, page.CapturedAt.Format("20060102150405"), cssURL)) {
 		t.Fatalf("background finalize should rewrite CSS URL to archive proxy")
+	}
+}
+
+func TestProcessCaptureAsync_PreservesCookiesForBackgroundDownloads(t *testing.T) {
+	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
+	defer func() {
+		dedup.WaitForBackgroundTasks()
+		db.Close()
+	}()
+
+	var receivedCookie atomic.Value
+	receivedCookie.Store("")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedCookie.Store(r.Header.Get("Cookie"))
+		w.Header().Set("Content-Type", "text/css")
+		_, _ = w.Write([]byte("body { color: red; }"))
+	}))
+	defer server.Close()
+
+	baseURL := routeStorageHTTPClientToServer(t, fs, server)
+	pageURL := fmt.Sprintf("%s/page-%d", baseURL, time.Now().UnixNano())
+	cssURL := baseURL + "/auth.css"
+	req := &models.CaptureRequest{
+		URL:   pageURL,
+		Title: "async create with cookies",
+		HTML:  `<html><head><link rel="stylesheet" href="` + cssURL + `"></head><body>async create with cookies</body></html>`,
+		Cookies: []models.CaptureCookie{{
+			Name:   "session",
+			Value:  "abc123",
+			Domain: "archive-test.example",
+			Path:   "/",
+		}},
+	}
+
+	pageID, action, err := dedup.ProcessCaptureAsync(req)
+	if err != nil {
+		t.Fatalf("ProcessCaptureAsync failed: %v", err)
+	}
+	if action != models.ArchiveActionCreated {
+		t.Fatalf("action = %q, want %q", action, models.ArchiveActionCreated)
+	}
+	defer db.DeletePage(pageID)
+
+	dedup.WaitForBackgroundTasks()
+
+	if got := receivedCookie.Load().(string); got != "session=abc123" {
+		t.Fatalf("background resource download cookie header = %q, want %q", got, "session=abc123")
 	}
 }
 
