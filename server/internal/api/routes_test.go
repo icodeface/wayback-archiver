@@ -138,6 +138,24 @@ func TestRoutes_CORS_AllowedOriginsEnvOverridesDefaultLocalhostSet(t *testing.T)
 	}
 }
 
+func TestRoutes_CORS_NullOriginIsRejectedEvenIfConfigured(t *testing.T) {
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{
+		AllowedOrigins: []string{"null", "http://localhost:8080"},
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("OPTIONS", "/api/archive", nil)
+	req.Header.Set("Origin", "null")
+	r.ServeHTTP(w, req)
+
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want null origin blocked", got)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want null origin blocked", got)
+	}
+}
+
 func TestRoutes_DebugAPI_DisabledByDefault(t *testing.T) {
 	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
 

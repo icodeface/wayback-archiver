@@ -62,7 +62,7 @@ VERSION=v1.0.0
 BUILD_TIME=2026-03-16
 
 # Optional: Configure CORS
-ALLOWED_ORIGINS=http://localhost:8080,https://your-domain.com,null
+ALLOWED_ORIGINS=http://localhost:8080,https://your-domain.com
 
 # Optional: Set authentication password
 AUTH_PASSWORD=your-secure-password
@@ -78,7 +78,7 @@ For remote deployment, you MUST set `AUTH_PASSWORD`:
 ```bash
 # In .env file
 AUTH_PASSWORD=your-secure-password
-ALLOWED_ORIGINS=https://your-domain.com,null
+ALLOWED_ORIGINS=https://your-domain.com
 ```
 
 Then update your userscript to include the password:

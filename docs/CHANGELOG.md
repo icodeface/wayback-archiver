@@ -17,8 +17,8 @@
 ### 远程部署支持
 
 - 新增 `ALLOWED_ORIGINS` 环境变量，支持配置 CORS 白名单
-- 默认值：`http://localhost:8080,http://127.0.0.1:8080,null`
-- 远程部署时可添加自定义域名：`ALLOWED_ORIGINS=https://your-domain.com,null`
+- 默认值：`http://localhost:8080,http://127.0.0.1:8080`
+- 远程部署时可添加自定义域名：`ALLOWED_ORIGINS=https://your-domain.com`
 
 ### 资源大小限制调整
 
@@ -31,7 +31,7 @@
 
 ```bash
 # CORS 配置（逗号分隔的允许来源列表）
-ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080,null
+ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
 ```
 
 ### 配置文件
@@ -102,7 +102,7 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 2. **更新配置**（可选）
    ```bash
    # 如果需要远程部署，添加 ALLOWED_ORIGINS
-   export ALLOWED_ORIGINS=https://your-domain.com,null
+   export ALLOWED_ORIGINS=https://your-domain.com
    ```
 
 3. **重启服务**
@@ -125,6 +125,7 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 1. ✅ 远程部署时设置 `AUTH_PASSWORD`
 2. ✅ 使用 HTTPS（通过 Nginx/Caddy 反向代理）
 3. ✅ 限制 `ALLOWED_ORIGINS` 仅包含信任的域名
+4. ✅ 拒绝 `Origin: null` 这类 opaque origins（包含 sandbox iframe / data URL / file-backed 页面）
 
 ### 推荐执行
 

@@ -150,7 +150,7 @@ The server automatically loads `.env` from the working directory if it exists. Y
 | `DB_SSLMODE` | `disable` | PostgreSQL SSL mode used by the server connection |
 | `SERVER_HOST` | `127.0.0.1` | Server bind address (`0.0.0.0` = all interfaces, `127.0.0.1` = localhost only) |
 | `SERVER_PORT` | `8080` | HTTP server port |
-| `ALLOWED_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080,null` | CORS allowed origins (comma-separated). For remote deployment, add your domain: `https://your-domain.com,null` |
+| `ALLOWED_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | CORS allowed origins (comma-separated). For remote deployment, add your domain: `https://your-domain.com` |
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
 | `LOG_DIR` | `./data/logs` | Log file directory |
 | `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`). **REQUIRED for remote deployment** |
@@ -181,7 +181,7 @@ Quick setup:
 
 ```bash
 # .env configuration
-ALLOWED_ORIGINS=https://your-domain.com,null
+ALLOWED_ORIGINS=https://your-domain.com
 AUTH_PASSWORD=your_secure_password
 SERVER_HOST=0.0.0.0
 
@@ -195,6 +195,7 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 - Always use HTTPS for remote deployment
 - Set a strong `AUTH_PASSWORD`
 - Limit `ALLOWED_ORIGINS` to trusted domains only
+- `Origin: null` is intentionally rejected because it also covers sandboxed iframes and data/file-backed opaque origins
 - Both CORS and Basic Auth are required for security (defense in depth)
 
 **Performance Notes:**

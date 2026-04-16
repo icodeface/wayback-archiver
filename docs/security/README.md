@@ -19,7 +19,8 @@ This directory contains security-related documentation for Wayback Archiver.
 
 ### CORS Protection
 - Configurable origin whitelist via `ALLOWED_ORIGINS`
-- Default: localhost and file:// protocol only
+- Default: localhost only (`http://localhost:8080`, `http://127.0.0.1:8080`)
+- Rejects `Origin: null` because it also includes sandboxed iframes and data/file-backed opaque origins
 - Prevents cross-site request forgery (CSRF)
 
 ### Cookie Leakage Prevention
