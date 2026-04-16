@@ -1,6 +1,7 @@
 package api
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -32,4 +33,46 @@ func detectFontType(filePath string) string {
 	default:
 		return "font/woff2"
 	}
+}
+
+// detectArchivedFontType inspects stored .font files to recover the original font MIME type.
+func detectArchivedFontType(filePath string) string {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "application/octet-stream"
+	}
+	defer f.Close()
+
+	header := make([]byte, 36)
+	n, err := f.Read(header)
+	if err != nil || n == 0 {
+		return "application/octet-stream"
+	}
+
+	return detectFontTypeFromHeader(header[:n])
+}
+
+func detectFontTypeFromHeader(header []byte) string {
+	if len(header) >= 4 {
+		switch string(header[:4]) {
+		case "wOFF":
+			return "font/woff"
+		case "wOF2":
+			return "font/woff2"
+		case "OTTO":
+			return "font/otf"
+		case "true":
+			return "font/ttf"
+		}
+
+		if header[0] == 0x00 && header[1] == 0x01 && header[2] == 0x00 && header[3] == 0x00 {
+			return "font/ttf"
+		}
+	}
+
+	if len(header) >= 36 && header[34] == 'L' && header[35] == 'P' {
+		return "application/vnd.ms-fontobject"
+	}
+
+	return "application/octet-stream"
 }

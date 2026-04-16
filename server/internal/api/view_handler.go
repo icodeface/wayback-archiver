@@ -464,6 +464,8 @@ func detectContentTypeByPath(filePath string) string {
 		return "image/svg+xml"
 	case ".ico":
 		return "image/x-icon"
+	case ".font":
+		return detectArchivedFontType(filePath)
 	case ".woff":
 		return "font/woff"
 	case ".woff2":
