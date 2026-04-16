@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -48,6 +49,9 @@ type Deduplicator struct {
 	cacheBytes    atomic.Int64  // 当前缓存占用字节数
 	cacheMu       sync.Mutex    // 保护缓存淘汰逻辑，防止并发 cacheStore 导致超限
 	globalSem     chan struct{} // 全局并发下载信号量，跨所有页面共享
+	pageTaskMu    sync.Mutex
+	pageTaskSeq   map[int64]uint64
+	bgTasks       sync.WaitGroup
 
 	// 测试钩子：用于稳定复现页面已创建/新 HTML 已写入后的失败路径。
 	testBeforeCreateFinalize func(pageID int64, htmlPath string, resourceIDs []int64) error
@@ -63,9 +67,146 @@ func NewDeduplicator(db *database.DB, storage *FileStorage, cfg config.ResourceC
 		deletionQueue: NewDeletionQueue(storage.baseDir),
 		config:        cfg,
 		globalSem:     make(chan struct{}, cfg.Workers),
+		pageTaskSeq:   make(map[int64]uint64),
 	}
 	d.startCacheCleanupLoop()
 	return d
+}
+
+var errStalePageTask = errors.New("stale page task")
+
+func cloneCaptureRequest(req *models.CaptureRequest) *models.CaptureRequest {
+	if req == nil {
+		return nil
+	}
+
+	cloned := &models.CaptureRequest{
+		URL:   req.URL,
+		Title: req.Title,
+		HTML:  req.HTML,
+	}
+	if len(req.Frames) > 0 {
+		cloned.Frames = append([]models.FrameCapture(nil), req.Frames...)
+	}
+	if len(req.Headers) > 0 {
+		cloned.Headers = make(map[string]string, len(req.Headers))
+		for k, v := range req.Headers {
+			cloned.Headers[k] = v
+		}
+	}
+	return cloned
+}
+
+func (d *Deduplicator) nextPageTaskSeq(pageID int64) uint64 {
+	d.pageTaskMu.Lock()
+	defer d.pageTaskMu.Unlock()
+	d.pageTaskSeq[pageID] += 1
+	return d.pageTaskSeq[pageID]
+}
+
+func (d *Deduplicator) isLatestPageTask(pageID int64, seq uint64) bool {
+	d.pageTaskMu.Lock()
+	defer d.pageTaskMu.Unlock()
+	return d.pageTaskSeq[pageID] == seq
+}
+
+func (d *Deduplicator) finishPageTask(pageID int64, seq uint64) {
+	d.pageTaskMu.Lock()
+	defer d.pageTaskMu.Unlock()
+	if d.pageTaskSeq[pageID] == seq {
+		delete(d.pageTaskSeq, pageID)
+	}
+}
+
+func (d *Deduplicator) runPageTask(pageID int64, seq uint64, label string, fn func() error) {
+	d.bgTasks.Add(1)
+	go func() {
+		defer d.bgTasks.Done()
+		defer d.finishPageTask(pageID, seq)
+		if err := fn(); err != nil {
+			if errors.Is(err, errStalePageTask) {
+				log.Printf("[%s] Skipped stale background task for page %d", label, pageID)
+				return
+			}
+			log.Printf("[%s] Background task failed for page %d: %v", label, pageID, err)
+		}
+	}()
+}
+
+func (d *Deduplicator) WaitForBackgroundTasks() {
+	d.bgTasks.Wait()
+}
+
+func (d *Deduplicator) ProcessCaptureAsync(req *models.CaptureRequest) (int64, string, error) {
+	capturedAt := time.Now()
+	contentHash := hashCaptureContent(req.HTML, req.Frames)
+
+	existingPage, err := d.db.GetPageByURLAndHash(req.URL, contentHash)
+	if err != nil {
+		return 0, "", fmt.Errorf("check existing page failed: %w", err)
+	}
+	if existingPage != nil {
+		log.Printf("Page content unchanged, updating last visited: %s (ID: %d)", req.URL, existingPage.ID)
+		if err := d.db.UpdatePageLastVisited(existingPage.ID, capturedAt); err != nil {
+			return 0, "", fmt.Errorf("update last visited failed: %w", err)
+		}
+		return existingPage.ID, models.ArchiveActionUnchanged, nil
+	}
+
+	tempHTMLPath, err := d.storage.SaveHTML(req.URL, req.HTML, capturedAt)
+	if err != nil {
+		return 0, "", fmt.Errorf("save temp html failed: %w", err)
+	}
+
+	pageID, err := d.db.CreatePage(req.URL, req.Title, tempHTMLPath, contentHash, capturedAt)
+	if err != nil {
+		if deleteErr := d.storage.DeleteHTML(tempHTMLPath); deleteErr != nil {
+			log.Printf("Failed to delete temporary HTML %s after create page error: %v", tempHTMLPath, deleteErr)
+		}
+		return 0, "", fmt.Errorf("create page failed: %w", err)
+	}
+
+	bodyText := ExtractBodyText(req.HTML)
+	if bodyText != "" {
+		if err := d.db.UpdatePageBodyText(pageID, bodyText); err != nil {
+			log.Printf("Failed to save body text for page %d: %v", pageID, err)
+		}
+	}
+
+	seq := d.nextPageTaskSeq(pageID)
+	clonedReq := cloneCaptureRequest(req)
+	d.runPageTask(pageID, seq, "Create", func() error {
+		staleCheck := func() bool { return !d.isLatestPageTask(pageID, seq) }
+		return d.finalizeCreateCapture(pageID, tempHTMLPath, capturedAt, clonedReq, staleCheck)
+	})
+
+	log.Printf("Page created (ID: %d, hash: %s): %s", pageID, contentHash[:16], req.URL)
+	return pageID, models.ArchiveActionCreated, nil
+}
+
+func (d *Deduplicator) UpdateCaptureAsync(pageID int64, req *models.CaptureRequest) (string, error) {
+	page, err := d.db.GetPageByID(fmt.Sprintf("%d", pageID))
+	if err != nil || page == nil {
+		return "", fmt.Errorf("page not found: %d", pageID)
+	}
+
+	newContentHash := hashCaptureContent(req.HTML, req.Frames)
+	if newContentHash == page.ContentHash {
+		if err := d.db.UpdatePageLastVisited(pageID, time.Now()); err != nil {
+			return "", err
+		}
+		return models.ArchiveActionUnchanged, nil
+	}
+
+	seq := d.nextPageTaskSeq(pageID)
+	clonedReq := cloneCaptureRequest(req)
+	d.runPageTask(pageID, seq, "Update", func() error {
+		staleCheck := func() bool { return !d.isLatestPageTask(pageID, seq) }
+		_, err := d.updateCapture(pageID, clonedReq, staleCheck)
+		return err
+	})
+
+	return models.ArchiveActionUpdated, nil
 }
 
 func (d *Deduplicator) startCacheCleanupLoop() {
@@ -735,17 +876,13 @@ func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers 
 // ProcessCapture 处理完整的页面捕获，返回 (pageID, action, error)
 func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string, error) {
 	capturedAt := time.Now()
-
 	contentHash := hashCaptureContent(req.HTML, req.Frames)
 
-	// 检查是否存在相同 URL 和内容哈希的页面
 	existingPage, err := d.db.GetPageByURLAndHash(req.URL, contentHash)
 	if err != nil {
 		return 0, "", fmt.Errorf("check existing page failed: %w", err)
 	}
-
 	if existingPage != nil {
-		// 内容未变化，只更新最后访问时间
 		log.Printf("Page content unchanged, updating last visited: %s (ID: %d)", req.URL, existingPage.ID)
 		if err := d.db.UpdatePageLastVisited(existingPage.ID, capturedAt); err != nil {
 			return 0, "", fmt.Errorf("update last visited failed: %w", err)
@@ -753,11 +890,6 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		return existingPage.ID, models.ArchiveActionUnchanged, nil
 	}
 
-	frameMap := buildFrameCaptureMap(req.Frames)
-	log.Printf("Total resources to process: %d (frames: %d)", len(d.htmlExtractor.ExtractResources(req.HTML, req.URL)), len(frameMap))
-
-	// 先创建页面记录以获取 pageID（用于生成正确的资源路径）
-	// 使用临时 HTML 创建页面
 	tempHTMLPath, err := d.storage.SaveHTML(req.URL, req.HTML, capturedAt)
 	if err != nil {
 		return 0, "", fmt.Errorf("save temp html failed: %w", err)
@@ -781,9 +913,7 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		}
 	}()
 
-	// 提取正文纯文本（在释放 HTML 之前）
 	bodyText := ExtractBodyText(req.HTML)
-
 	pageID, err = d.db.CreatePage(req.URL, req.Title, tempHTMLPath, contentHash, capturedAt)
 	if err != nil {
 		if deleteErr := d.storage.DeleteHTML(tempHTMLPath); deleteErr != nil {
@@ -793,54 +923,33 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 		return 0, "", fmt.Errorf("create page failed: %w", err)
 	}
 
-	// 保存正文纯文本（用于全文搜索）
 	if bodyText != "" {
 		if err := d.db.UpdatePageBodyText(pageID, bodyText); err != nil {
 			log.Printf("Failed to save body text for page %d: %v", pageID, err)
 		}
 	}
-	bodyText = "" // 释放正文文本
 
 	log.Printf("Page created (ID: %d, hash: %s): %s", pageID, contentHash[:16], req.URL)
-
-	// 生成时间戳用于资源路径
-	timestamp := capturedAt.Format("20060102150405")
-
-	var resourceIDs []int64
-	startTime := time.Now()
-	resourceIDSet := make(map[int64]struct{})
-	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
-	if err != nil {
-		return 0, "", fmt.Errorf("rewrite html failed: %w", err)
-	}
-	log.Printf("Resource processing completed: %d linked resources, took %v", len(resourceIDs), time.Since(startTime))
-
-	// 更新保存的 HTML 文件（用重写后的内容替换临时内容）
-	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
-		return 0, "", fmt.Errorf("update html failed: %w", err)
-	}
-	rewrittenHTML = "" // 释放重写后的 HTML
-
-	if d.testBeforeCreateFinalize != nil {
-		if err := d.testBeforeCreateFinalize(pageID, tempHTMLPath, resourceIDs); err != nil {
-			return 0, "", err
-		}
-	}
-
-	if err := d.db.LinkPageResources(pageID, resourceIDs); err != nil {
-		return 0, "", fmt.Errorf("link page resources failed: %w", err)
+	if err := d.finalizeCreateCapture(pageID, tempHTMLPath, capturedAt, req, nil); err != nil {
+		return 0, "", err
 	}
 
 	finalized = true
-
 	return pageID, models.ArchiveActionCreated, nil
 }
 
 // UpdateCapture 更新已存在页面的捕获内容
 // 策略：更新 page 记录的 html_path 和 content_hash，旧 HTML 文件加入删除队列（7 天后自动删除）
 func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (string, error) {
+	return d.updateCapture(pageID, req, nil)
+}
+
+func (d *Deduplicator) updateCapture(pageID int64, req *models.CaptureRequest, staleCheck func() bool) (string, error) {
 	startTime := time.Now()
 	log.Printf("[Update] Starting update for page %d", pageID)
+	if staleCheck != nil && staleCheck() {
+		return "", errStalePageTask
+	}
 
 	// 1. 获取现有页面信息（用于继承 first_visited）
 	page, err := d.db.GetPageByID(fmt.Sprintf("%d", pageID))
@@ -893,6 +1002,9 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 		return "", fmt.Errorf("rewrite html failed: %w", err)
 	}
 	log.Printf("[Update] Processed %d linked resources in %v", len(resourceIDs), time.Since(processStart))
+	if staleCheck != nil && staleCheck() {
+		return "", errStalePageTask
+	}
 
 	// 更新保存的 HTML 文件
 	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
@@ -923,6 +1035,52 @@ func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (
 	log.Printf("[Update] Page updated (ID: %d, old_hash: %s, new_hash: %s, old_html: %s, new_html: %s, %d resources, %v)",
 		pageID, page.ContentHash[:16], newContentHash[:16], oldHTMLPath, tempHTMLPath, len(resourceIDs), time.Since(startTime))
 	return models.ArchiveActionUpdated, nil
+}
+
+func (d *Deduplicator) finalizeCreateCapture(pageID int64, tempHTMLPath string, capturedAt time.Time, req *models.CaptureRequest, staleCheck func() bool) error {
+	if staleCheck != nil && staleCheck() {
+		return errStalePageTask
+	}
+
+	frameMap := buildFrameCaptureMap(req.Frames)
+	log.Printf("Total resources to process: %d (frames: %d)", len(d.htmlExtractor.ExtractResources(req.HTML, req.URL)), len(frameMap))
+
+	timestamp := capturedAt.Format("20060102150405")
+	var resourceIDs []int64
+	startTime := time.Now()
+	resourceIDSet := make(map[int64]struct{})
+	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
+	if err != nil {
+		return fmt.Errorf("rewrite html failed: %w", err)
+	}
+	log.Printf("Resource processing completed: %d linked resources, took %v", len(resourceIDs), time.Since(startTime))
+
+	if staleCheck != nil && staleCheck() {
+		return errStalePageTask
+	}
+
+	if err := d.storage.UpdateHTML(tempHTMLPath, rewrittenHTML); err != nil {
+		return fmt.Errorf("update html failed: %w", err)
+	}
+
+	if d.testBeforeCreateFinalize != nil {
+		if err := d.testBeforeCreateFinalize(pageID, tempHTMLPath, resourceIDs); err != nil {
+			return err
+		}
+	}
+
+	if staleCheck != nil && staleCheck() {
+		return errStalePageTask
+	}
+
+	if err := d.db.DeletePageResources(pageID); err != nil {
+		return fmt.Errorf("clear page resources failed: %w", err)
+	}
+	if err := d.db.LinkPageResources(pageID, resourceIDs); err != nil {
+		return fmt.Errorf("link page resources failed: %w", err)
+	}
+
+	return nil
 }
 
 // resolveURL resolves a relative URL against a base URL

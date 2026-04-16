@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"wayback/internal/config"
@@ -33,9 +34,31 @@ func setupTestHandler(t *testing.T) (*Handler, func()) {
 	handler := NewHandler(dedup, db, dataDir, nil)
 
 	cleanup := func() {
+		dedup.WaitForBackgroundTasks()
 		db.Close()
 	}
 	return handler, cleanup
+}
+
+func waitForPageTitle(t *testing.T, handler *Handler, pageID int64, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		page, err := handler.db.GetPageByID(strconv.FormatInt(pageID, 10))
+		if err == nil && page != nil && page.Title == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	page, err := handler.db.GetPageByID(strconv.FormatInt(pageID, 10))
+	if err != nil {
+		t.Fatalf("GetPageByID failed: %v", err)
+	}
+	if page == nil {
+		t.Fatalf("expected page %d to exist", pageID)
+	}
+	t.Fatalf("page title = %q, want %q", page.Title, want)
 }
 
 func setupRouter(handler *Handler) *gin.Engine {
@@ -157,13 +180,7 @@ func TestUpdatePage_UpdatesContent(t *testing.T) {
 	}
 
 	// Verify DB was updated
-	page, err := handler.db.GetPageByID(strconv.FormatInt(createResp.PageID, 10))
-	if err != nil {
-		t.Fatalf("GetPageByID failed: %v", err)
-	}
-	if page.Title != "Updated" {
-		t.Errorf("title = %q, want %q", page.Title, "Updated")
-	}
+	waitForPageTitle(t, handler, createResp.PageID, "Updated")
 }
 
 func TestUpdatePage_SameContentUnchanged(t *testing.T) {
