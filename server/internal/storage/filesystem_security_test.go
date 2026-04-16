@@ -222,8 +222,8 @@ func TestIsSameRootDomain(t *testing.T) {
 // TestDownloadResource_CookieLeakage 测试 Cookie 泄露防护
 func TestDownloadResource_CookieLeakage(t *testing.T) {
 	// httptest.Server 使用 127.0.0.1，会被 SSRF 保护拦截
-	// Cookie 泄露防护的逻辑在 isSameRootDomain 中，已通过 TestIsSameRootDomain 测试
-	t.Skip("SSRF protection blocks localhost - Cookie protection tested via TestIsSameRootDomain")
+	// Cookie 过滤逻辑通过 buildCookieHeaderAt 的单元测试覆盖。
+	t.Skip("SSRF protection blocks localhost - cookie matching tested via TestBuildCookieHeaderAt")
 }
 
 // TestDownloadResource_SSRFProtection 测试 SSRF 防护
@@ -231,7 +231,7 @@ func TestDownloadResource_SSRFProtection(t *testing.T) {
 	fs := NewFileStorage(t.TempDir())
 
 	// 尝试访问内网地址
-	_, _, _, err := fs.DownloadResource("http://127.0.0.1:8080/admin", "", nil, 2*1024*1024)
+	_, _, _, err := fs.DownloadResource("http://127.0.0.1:8080/admin", "", nil, nil, 2*1024*1024)
 	if err == nil {
 		t.Fatal("Expected SSRF protection to block localhost")
 	}
@@ -253,7 +253,7 @@ func BenchmarkDownloadResource(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, _, err := fs.DownloadResource(server.URL, "", nil, 2*1024*1024)
+		_, _, _, err := fs.DownloadResource(server.URL, "", nil, nil, 2*1024*1024)
 		if err != nil {
 			b.Fatal(err)
 		}

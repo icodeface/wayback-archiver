@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"golang.org/x/net/publicsuffix"
+	"wayback/internal/models"
 )
 
 const (
@@ -216,13 +217,13 @@ func (fs *FileStorage) SaveHTML(url, html string, timestamp time.Time) (string, 
 
 // DownloadResource 下载资源并计算哈希，支持可选的认证 headers
 // 小于 streamThreshold 的资源读入内存返回 data；大于的流式写入临时文件返回 tmpPath
-func (fs *FileStorage) DownloadResource(resourceURL string, pageURL string, headers map[string]string, streamThreshold int64) (data []byte, hash string, tmpPath string, err error) {
-	data, hash, tmpPath, _, _, err = fs.DownloadResourceWithMetadata(resourceURL, pageURL, headers, streamThreshold, "", "")
+func (fs *FileStorage) DownloadResource(resourceURL string, pageURL string, headers map[string]string, cookies []models.CaptureCookie, streamThreshold int64) (data []byte, hash string, tmpPath string, err error) {
+	data, hash, tmpPath, _, _, err = fs.DownloadResourceWithMetadata(resourceURL, pageURL, headers, cookies, streamThreshold, "", "")
 	return data, hash, tmpPath, err
 }
 
 // DownloadResourceWithMetadata downloads a resource and returns cache validators/freshness metadata.
-func (fs *FileStorage) DownloadResourceWithMetadata(resourceURL string, pageURL string, headers map[string]string, streamThreshold int64, ifNoneMatch string, ifModifiedSince string) (data []byte, hash string, tmpPath string, metadata downloadMetadata, trace downloadTrace, err error) {
+func (fs *FileStorage) DownloadResourceWithMetadata(resourceURL string, pageURL string, headers map[string]string, cookies []models.CaptureCookie, streamThreshold int64, ifNoneMatch string, ifModifiedSince string) (data []byte, hash string, tmpPath string, metadata downloadMetadata, trace downloadTrace, err error) {
 	validateStart := time.Now()
 	// 防止 SSRF 攻击：拒绝内网地址和云元数据服务
 	if err := validateResourceURL(resourceURL); err != nil {
@@ -252,8 +253,7 @@ func (fs *FileStorage) DownloadResourceWithMetadata(resourceURL string, pageURL 
 		req.Header.Set("If-Modified-Since", ifModifiedSince)
 	}
 
-	// 仅在同根域名时转发 Cookie，防止泄露给第三方
-	if cookie, ok := headers["cookie"]; ok && cookie != "" && isSameRootDomain(resourceURL, pageURL) {
+	if cookie := buildCookieHeader(resourceURL, pageURL, cookies); cookie != "" {
 		req.Header.Set("Cookie", cookie)
 	}
 

@@ -415,7 +415,7 @@ func (d *Deduplicator) cacheStoreWithMetadata(key string, resourceID int64, file
 // ProcessResource 处理单个资源：下载、去重、存储
 // 返回 (resourceID, filePath, data, error)
 // 小文件（≤ streamThreshold）保留在内存供当前调用链使用；缓存只保留元数据
-func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string, headers map[string]string) (int64, string, []byte, error) {
+func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string, headers map[string]string, cookies []models.CaptureCookie) (int64, string, []byte, error) {
 	startTime := time.Now()
 	cached := d.loadCachedResource(url)
 	if resourceID, filePath, reused, err := d.tryReuseFreshCache(url, cached); err != nil {
@@ -439,6 +439,7 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 		url,
 		pageURL,
 		headers,
+		cookies,
 		streamThreshold,
 		cachedETag(cached),
 		cachedLastModified(cached),
@@ -460,7 +461,7 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 		}
 		if resource == nil || resource.FilePath == "" {
 			d.cacheDelete(url)
-			data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(url, pageURL, headers, streamThreshold, "", "")
+			data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(url, pageURL, headers, cookies, streamThreshold, "", "")
 			if err != nil {
 				log.Printf("Download failed for %s after cache revalidation miss: %v", url, err)
 				return d.processResourceFallback(url, err)
@@ -694,7 +695,7 @@ func archiveProxyURL(pageID int64, timestamp, originalURL string) string {
 	return fmt.Sprintf("/archive/%d/%smp_/%s", pageID, timestamp, originalURL)
 }
 
-func (d *Deduplicator) rewriteIframeTagsByKey(htmlContent string, pageID int64, timestamp string, headers map[string]string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) string {
+func (d *Deduplicator) rewriteIframeTagsByKey(htmlContent string, pageID int64, timestamp string, headers map[string]string, cookies []models.CaptureCookie, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) string {
 	if len(frameMap) == 0 {
 		return htmlContent
 	}
@@ -709,7 +710,7 @@ func (d *Deduplicator) rewriteIframeTagsByKey(htmlContent string, pageID int64, 
 			return tag
 		}
 
-		resourceID, _, err := d.archiveFrameCapture(frame, headers, pageID, timestamp, frameMap, resourceIDs, seen, visiting, archived)
+		resourceID, _, err := d.archiveFrameCapture(frame, headers, cookies, pageID, timestamp, frameMap, resourceIDs, seen, visiting, archived)
 		if err != nil {
 			log.Printf("Failed to process iframe capture %s: %v", frame.URL, err)
 			return tag
@@ -767,7 +768,7 @@ func (d *Deduplicator) processInlineResource(url, resourceType string, data []by
 	return resourceID, filePath, data, nil
 }
 
-func (d *Deduplicator) processCSSWorkItems(cssWorkItems []cssWorkItem, pageURL string, headers map[string]string, rewriter *URLRewriter, resourceIDs *[]int64, seen map[int64]struct{}) {
+func (d *Deduplicator) processCSSWorkItems(cssWorkItems []cssWorkItem, pageURL string, headers map[string]string, cookies []models.CaptureCookie, rewriter *URLRewriter, resourceIDs *[]int64, seen map[int64]struct{}) {
 	type cssSubResource struct {
 		absoluteURL string
 	}
@@ -801,7 +802,7 @@ func (d *Deduplicator) processCSSWorkItems(cssWorkItems []cssWorkItem, pageURL s
 			d.globalSem <- struct{}{}
 			defer func() { <-d.globalSem }()
 
-			resID, filePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), pageURL, headers)
+			resID, filePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), pageURL, headers, cookies)
 			resultsCh <- cssSubResult{sub: sub, resID: resID, filePath: filePath, err: err}
 		}(sub)
 	}
@@ -821,7 +822,7 @@ func (d *Deduplicator) processCSSWorkItems(cssWorkItems []cssWorkItem, pageURL s
 	}
 }
 
-func (d *Deduplicator) archiveFrameCapture(frame models.FrameCapture, headers map[string]string, pageID int64, timestamp string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) (int64, string, error) {
+func (d *Deduplicator) archiveFrameCapture(frame models.FrameCapture, headers map[string]string, cookies []models.CaptureCookie, pageID int64, timestamp string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) (int64, string, error) {
 	if cached, ok := archived[frame.URL]; ok {
 		appendUniqueResourceID(resourceIDs, seen, cached.resourceID)
 		return cached.resourceID, cached.filePath, nil
@@ -832,7 +833,7 @@ func (d *Deduplicator) archiveFrameCapture(frame models.FrameCapture, headers ma
 	visiting[frame.URL] = true
 	defer delete(visiting, frame.URL)
 
-	rewrittenHTML, err := d.rewriteCapturedHTML(frame.HTML, frame.URL, headers, pageID, timestamp, frameMap, resourceIDs, seen, visiting, archived)
+	rewrittenHTML, err := d.rewriteCapturedHTML(frame.HTML, frame.URL, headers, cookies, pageID, timestamp, frameMap, resourceIDs, seen, visiting, archived)
 	if err != nil {
 		return 0, "", err
 	}
@@ -847,7 +848,7 @@ func (d *Deduplicator) archiveFrameCapture(frame models.FrameCapture, headers ma
 	return resourceID, filePath, nil
 }
 
-func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers map[string]string, pageID int64, timestamp string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) (string, error) {
+func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers map[string]string, cookies []models.CaptureCookie, pageID int64, timestamp string, frameMap map[string]models.FrameCapture, resourceIDs *[]int64, seen map[int64]struct{}, visiting map[string]bool, archived map[string]processedInlineHTML) (string, error) {
 	htmlResources := d.htmlExtractor.ExtractResources(htmlContent, baseURL)
 	frameURLs := buildFrameURLSet(frameMap)
 	rewriter := NewURLRewriter()
@@ -864,7 +865,7 @@ func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers 
 			}
 		}
 
-		resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, baseURL, headers)
+		resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, baseURL, headers, cookies)
 		if err != nil {
 			log.Printf("Failed to process resource %s: %v", res.URL, err)
 			continue
@@ -888,10 +889,10 @@ func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers 
 		}
 	}
 
-	d.processCSSWorkItems(cssWorkItems, baseURL, headers, rewriter, resourceIDs, seen)
+	d.processCSSWorkItems(cssWorkItems, baseURL, headers, cookies, rewriter, resourceIDs, seen)
 
 	normalizedHTML := ResolveRelativeURLs(NormalizeHTMLURLs(htmlContent), baseURL)
-	normalizedHTML = d.rewriteIframeTagsByKey(normalizedHTML, pageID, timestamp, headers, frameMap, resourceIDs, seen, visiting, archived)
+	normalizedHTML = d.rewriteIframeTagsByKey(normalizedHTML, pageID, timestamp, headers, cookies, frameMap, resourceIDs, seen, visiting, archived)
 	return rewriter.RewriteHTML(normalizedHTML), nil
 }
 
@@ -1019,7 +1020,7 @@ func (d *Deduplicator) updateCapture(pageID int64, req *models.CaptureRequest, s
 	var resourceIDs []int64
 	processStart := time.Now()
 	resourceIDSet := make(map[int64]struct{})
-	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
+	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, req.Cookies, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
 	if err != nil {
 		return "", fmt.Errorf("rewrite html failed: %w", err)
 	}
@@ -1071,7 +1072,7 @@ func (d *Deduplicator) finalizeCreateCapture(pageID int64, tempHTMLPath string, 
 	var resourceIDs []int64
 	startTime := time.Now()
 	resourceIDSet := make(map[int64]struct{})
-	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
+	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, req.Cookies, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
 	if err != nil {
 		return fmt.Errorf("rewrite html failed: %w", err)
 	}

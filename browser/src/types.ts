@@ -6,6 +6,21 @@ export interface CaptureData {
   html: string;
   frames?: FrameCapture[];
   headers?: Record<string, string>;
+  cookies?: CaptureCookie[];
+}
+
+export interface CaptureCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  host_only: boolean;
+  secure: boolean;
+  http_only: boolean;
+  session: boolean;
+  same_site?: string;
+  expiration_date?: number;
+  partition_top_level_site?: string;
 }
 
 export interface FrameCapture {

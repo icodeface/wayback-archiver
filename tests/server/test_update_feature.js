@@ -31,6 +31,22 @@ const SERVER = 'http://localhost:8080';
     }
   }
 
+  async function waitForPageTitle(pageId, expectedTitle, timeoutMs = 5000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const res = await fetch(`${SERVER}/api/pages/${pageId}`);
+      if (res.ok) {
+        const page = await res.json();
+        if (page && page.title === expectedTitle) {
+          return;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    throw new Error(`Timed out waiting for page ${pageId} title to become ${expectedTitle}`);
+  }
+
   // ============================================================
   // Test 1: POST /api/archive returns page_id and action
   // ============================================================
@@ -139,6 +155,8 @@ h1 { color: #363; }
   check('PUT returns status success', updateData.status === 'success', `got status: ${updateData.status}`);
   check('PUT returns same page_id', updateData.page_id === pageId, `got page_id: ${updateData.page_id}, expected: ${pageId}`);
   check('PUT returns action=updated', updateData.action === 'updated', `got action: ${updateData.action}`);
+
+  await waitForPageTitle(pageId, 'Update Test - Updated');
 
   // ============================================================
   // Test 5: PUT same content returns unchanged

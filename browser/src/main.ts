@@ -15,7 +15,7 @@
 // ==/UserScript==
 
 import { CONFIG } from './config';
-import { CaptureData } from './types';
+import { CaptureCookie, CaptureData } from './types';
 import { shouldSkipPage } from './page-filter';
 import { waitForDOMStable } from './page-freezer';
 import { sendToServer, updateOnServer } from './archiver';
@@ -72,6 +72,7 @@ function initializeArchiver(): void {
 
   async function captureSnapshot(
     headers?: Record<string, string>,
+    cookies?: CaptureCookie[],
     expectedEpoch = pageEpoch,
     pageContext?: CapturePageContext,
   ): Promise<CaptureData | null> {
@@ -94,7 +95,47 @@ function initializeArchiver(): void {
       html,
       frames: captured.frames,
       headers,
+      cookies,
     };
+  }
+
+  async function collectCaptureCookies(): Promise<CaptureCookie[] | undefined> {
+    if (typeof GM_cookie === 'undefined' || !GM_cookie.list) {
+      return undefined;
+    }
+
+    try {
+      const cookies = await new Promise<Tampermonkey.Cookie[]>((resolve, reject) => {
+        GM_cookie.list({ domain: location.hostname }, (listedCookies, error) => {
+          if (error) {
+            reject(new Error(error));
+            return;
+          }
+          resolve(listedCookies || []);
+        });
+      });
+
+      if (cookies.length === 0) {
+        return undefined;
+      }
+
+      return cookies.map((cookie) => ({
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path,
+        host_only: cookie.hostOnly,
+        secure: cookie.secure,
+        http_only: cookie.httpOnly,
+        session: cookie.session,
+        same_site: cookie.sameSite,
+        expiration_date: cookie.expirationDate,
+        partition_top_level_site: cookie.partitionKey?.topLevelSite,
+      }));
+    } catch (error) {
+      console.warn('[Wayback] GM_cookie not available:', error);
+      return undefined;
+    }
   }
 
   function shouldAcceptUpdatedHTML(newHTML: string): boolean {
@@ -122,27 +163,17 @@ function initializeArchiver(): void {
         return;
       }
 
-      // Collect cookies (including HttpOnly) via GM_cookie
+      // Collect cookies (including HttpOnly) via GM_cookie so the server can
+      // re-apply browser matching rules per resource URL.
       let headers: Record<string, string> | undefined;
-      if (typeof GM_cookie !== 'undefined' && GM_cookie.list) {
-        try {
-          const cookieStr = await new Promise<string>((resolve) => {
-            GM_cookie.list({ domain: location.hostname }, (cookies: Array<{ name: string; value: string }>) => {
-              resolve(cookies.map(c => `${c.name}=${c.value}`).join('; '));
-            });
-          });
-          if (cookieStr) {
-            headers = {
-              cookie: cookieStr,
-              'user-agent': navigator.userAgent,
-            };
-          }
-        } catch (e) {
-          console.warn('[Wayback] GM_cookie not available:', e);
-        }
+      const cookies = await collectCaptureCookies();
+      if (navigator.userAgent) {
+        headers = {
+          'user-agent': navigator.userAgent,
+        };
       }
 
-      const preparedCapture = await captureSnapshot(headers, expectedEpoch);
+      const preparedCapture = await captureSnapshot(headers, cookies, expectedEpoch);
       if (!preparedCapture) {
         return;
       }
@@ -227,7 +258,7 @@ function initializeArchiver(): void {
     let activeFlushPromise: Promise<void> | null = null;
     activeFlushPromise = (async () => {
       try {
-        const newCaptureData = await captureSnapshot(captureData?.headers, flushEpoch, pageContext);
+        const newCaptureData = await captureSnapshot(captureData?.headers, captureData?.cookies, flushEpoch, pageContext);
         if (!newCaptureData || !shouldAcceptUpdatedHTML(newCaptureData.html)) {
           return;
         }
@@ -346,7 +377,7 @@ function initializeArchiver(): void {
         try {
           console.log(`[Wayback] DOM changed (${currentMutations} mutations), triggering update...`);
 
-          const newCaptureData = await captureSnapshot(captureData?.headers, monitorEpoch);
+          const newCaptureData = await captureSnapshot(captureData?.headers, captureData?.cookies, monitorEpoch);
           if (!newCaptureData || !shouldAcceptUpdatedHTML(newCaptureData.html)) {
             return;
           }
