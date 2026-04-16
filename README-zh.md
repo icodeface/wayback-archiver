@@ -21,7 +21,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go 服务器 ──▶ PostgreSQL
 ```
 
 1. Tampermonkey 用户脚本在浏览器中运行，页面加载完成后自动捕获完整的 DOM 和资源。若后续 DOM 发生显著变化，会自动提交一次更新。
-2. Go 服务器接收快照，下载浏览器因 CORS 限制无法获取的跨域资源，基于内容哈希去重后存储到本地。
+2. Go 服务器在快照元数据落库后会立即响应归档/更新请求；资源下载、去重、URL 重写和快照最终整理会继续在后台完成。
 3. 内置 Web UI 可以浏览、搜索和还原任意归档页面 — 完全离线，不依赖外部服务。
 
 ## 功能特性
@@ -195,10 +195,11 @@ export https_proxy=http://127.0.0.1:7897
 ### POST /api/archive
 
 返回 `{ status, page_id, action }`，其中 `action` 为 `created`（新建）或 `unchanged`（内容未变，仅更新 `last_visited`）。
+当 `action=created` 时，接口会在页面记录和原始 HTML 保存后立即返回；资源下载和 HTML 重写会在后台继续执行。
 
 ### PUT /api/archive/:id
 
-请求体与 POST 相同。会重新处理资源、写入新的临时快照，然后以事务方式替换页面元数据和 `page_resources` 关联。替换成功后，旧 HTML 进入延迟删除队列。返回 `{ status, page_id, action }`，`action` 为 `updated` 或 `unchanged`。
+请求体与 POST 相同。接口会在接受更新请求后立即返回；若内容有变化，资源重新处理和最终快照替换会在后台继续执行。替换成功后，旧 HTML 进入延迟删除队列。返回 `{ status, page_id, action }`，`action` 为 `updated` 或 `unchanged`。
 
 ## 项目结构
 

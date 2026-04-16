@@ -21,7 +21,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ PostgreSQL (m
 ```
 
 1. A Tampermonkey userscript runs in your browser, automatically capturing the full DOM and resources once the page finishes loading. If significant DOM changes occur afterward, it submits one additional update.
-2. The Go server receives the snapshot, downloads any cross-origin resources the browser couldn't fetch, deduplicates everything by content hash, and stores it locally.
+2. The Go server acknowledges archive/update requests as soon as the snapshot metadata is stored. Resource downloading, deduplication, URL rewriting, and snapshot finalization continue in the background.
 3. A built-in Web UI lets you list, search, and replay any archived page — fully offline, no external dependencies.
 
 ## Features
@@ -230,10 +230,11 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 ### POST /api/archive
 
 Returns `{ status, page_id, action }` where `action` is `created` or `unchanged` (content identical, only `last_visited` updated).
+When `action` is `created`, the response is sent immediately after the page row and raw HTML are stored; resource downloads and HTML rewriting continue in the background.
 
 ### PUT /api/archive/:id
 
-Accepts the same body as POST. Re-processes resources, writes a replacement snapshot, then atomically swaps the page metadata and `page_resources` links. Old HTML is queued for delayed deletion after a successful swap. Returns `{ status, page_id, action }` where `action` is `updated` or `unchanged`.
+Accepts the same body as POST. Returns immediately once the server has accepted the update request. If the content changed, resource re-processing and the final snapshot swap continue in the background; old HTML is queued for delayed deletion after a successful swap. Returns `{ status, page_id, action }` where `action` is `updated` or `unchanged`.
 
 ## Project Structure
 
