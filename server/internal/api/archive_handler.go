@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"wayback/internal/models"
+	"wayback/internal/storage"
 )
 
 const maxCaptureRequestBodyBytes int64 = 32 << 20
@@ -75,6 +76,10 @@ func (h *Handler) UpdatePage(c *gin.Context) {
 	action, err := h.dedup.UpdateCaptureAsync(pageID, req)
 	if err != nil {
 		log.Printf("Failed to update capture: %v", err)
+		if errors.Is(err, storage.ErrCaptureURLMismatch) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

@@ -200,6 +200,7 @@ export https_proxy=http://127.0.0.1:7897
 ### PUT /api/archive/:id
 
 请求体与 POST 相同。接口会在接受更新请求后立即返回；若内容有变化，资源重新处理和最终快照替换会在后台继续执行。替换成功后，旧 HTML 进入延迟删除队列。返回 `{ status, page_id, action }`，`action` 为 `updated` 或 `unchanged`。
+请求体中的 `url` 必须与 `:id` 对应的现有页面 URL 完全一致；否则服务端会返回 HTTP `400`，避免把一个页面的快照写进另一个页面记录中。
 
 ## 项目结构
 

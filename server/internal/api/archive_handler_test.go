@@ -183,6 +183,77 @@ func TestUpdatePage_UpdatesContent(t *testing.T) {
 	waitForPageTitle(t, handler, createResp.PageID, "Updated")
 }
 
+func TestUpdatePage_RejectsMismatchedRequestURL(t *testing.T) {
+	handler, cleanup := setupTestHandler(t)
+	defer cleanup()
+	router := setupRouter(handler)
+
+	createReq := models.CaptureRequest{
+		URL:   "http://test-update-handler.example.com/page-a",
+		Title: "Original A",
+		HTML:  "<html><body>Original A</body></html>",
+	}
+	createBody, _ := json.Marshal(createReq)
+
+	w := httptest.NewRecorder()
+	httpReq, _ := http.NewRequest("POST", "/api/archive", bytes.NewReader(createBody))
+	httpReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, httpReq)
+
+	var createResp models.ArchiveResponse
+	json.Unmarshal(w.Body.Bytes(), &createResp)
+	if createResp.PageID <= 0 {
+		t.Fatalf("failed to create page: %s", w.Body.String())
+	}
+	defer handler.db.DeletePage(createResp.PageID)
+
+	beforePage, err := handler.db.GetPageByID(strconv.FormatInt(createResp.PageID, 10))
+	if err != nil {
+		t.Fatalf("GetPageByID(before) failed: %v", err)
+	}
+	if beforePage == nil {
+		t.Fatalf("expected page %d to exist", createResp.PageID)
+	}
+
+	updateReq := models.CaptureRequest{
+		URL:   "http://test-update-handler.example.com/page-b",
+		Title: "Injected B",
+		HTML:  "<html><body>Injected B</body></html>",
+	}
+	updateBody, _ := json.Marshal(updateReq)
+
+	w2 := httptest.NewRecorder()
+	httpReq2, _ := http.NewRequest("PUT", "/api/archive/"+strconv.FormatInt(createResp.PageID, 10), bytes.NewReader(updateBody))
+	httpReq2.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w2, httpReq2)
+
+	if w2.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for mismatched request URL, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	handler.dedup.WaitForBackgroundTasks()
+
+	afterPage, err := handler.db.GetPageByID(strconv.FormatInt(createResp.PageID, 10))
+	if err != nil {
+		t.Fatalf("GetPageByID(after) failed: %v", err)
+	}
+	if afterPage == nil {
+		t.Fatalf("expected page %d to still exist", createResp.PageID)
+	}
+	if afterPage.URL != beforePage.URL {
+		t.Fatalf("page URL changed after mismatched update: got %q want %q", afterPage.URL, beforePage.URL)
+	}
+	if afterPage.Title != beforePage.Title {
+		t.Fatalf("page title changed after mismatched update: got %q want %q", afterPage.Title, beforePage.Title)
+	}
+	if afterPage.ContentHash != beforePage.ContentHash {
+		t.Fatalf("page content hash changed after mismatched update")
+	}
+	if afterPage.HTMLPath != beforePage.HTMLPath {
+		t.Fatalf("page html_path changed after mismatched update: got %q want %q", afterPage.HTMLPath, beforePage.HTMLPath)
+	}
+}
+
 func TestUpdatePage_SameContentUnchanged(t *testing.T) {
 	handler, cleanup := setupTestHandler(t)
 	defer cleanup()

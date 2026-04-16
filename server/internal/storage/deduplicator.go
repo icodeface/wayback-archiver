@@ -75,6 +75,19 @@ func NewDeduplicator(db *database.DB, storage *FileStorage, cfg config.ResourceC
 
 var errStalePageTask = errors.New("stale page task")
 
+var ErrCaptureURLMismatch = errors.New("capture request URL does not match page URL")
+
+func (d *Deduplicator) getPageForUpdate(pageID int64, reqURL string) (*models.Page, error) {
+	page, err := d.db.GetPageByID(fmt.Sprintf("%d", pageID))
+	if err != nil || page == nil {
+		return nil, fmt.Errorf("page not found: %d", pageID)
+	}
+	if page.URL != reqURL {
+		return nil, fmt.Errorf("%w: page %d has %q, request has %q", ErrCaptureURLMismatch, pageID, page.URL, reqURL)
+	}
+	return page, nil
+}
+
 func cloneCaptureRequest(req *models.CaptureRequest) *models.CaptureRequest {
 	if req == nil {
 		return nil
@@ -185,9 +198,9 @@ func (d *Deduplicator) ProcessCaptureAsync(req *models.CaptureRequest) (int64, s
 }
 
 func (d *Deduplicator) UpdateCaptureAsync(pageID int64, req *models.CaptureRequest) (string, error) {
-	page, err := d.db.GetPageByID(fmt.Sprintf("%d", pageID))
-	if err != nil || page == nil {
-		return "", fmt.Errorf("page not found: %d", pageID)
+	page, err := d.getPageForUpdate(pageID, req.URL)
+	if err != nil {
+		return "", err
 	}
 
 	newContentHash := hashCaptureContent(req.HTML, req.Frames)
@@ -983,9 +996,9 @@ func (d *Deduplicator) updateCapture(pageID int64, req *models.CaptureRequest, s
 	}
 
 	// 1. 获取现有页面信息（用于继承 first_visited）
-	page, err := d.db.GetPageByID(fmt.Sprintf("%d", pageID))
-	if err != nil || page == nil {
-		return "", fmt.Errorf("page not found: %d", pageID)
+	page, err := d.getPageForUpdate(pageID, req.URL)
+	if err != nil {
+		return "", err
 	}
 
 	newContentHash := hashCaptureContent(req.HTML, req.Frames)

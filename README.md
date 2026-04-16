@@ -236,6 +236,7 @@ When `action` is `created`, the response is sent immediately after the page row 
 ### PUT /api/archive/:id
 
 Accepts the same body as POST. Returns immediately once the server has accepted the update request. If the content changed, resource re-processing and the final snapshot swap continue in the background; old HTML is queued for delayed deletion after a successful swap. Returns `{ status, page_id, action }` where `action` is `updated` or `unchanged`.
+The request body `url` must exactly match the existing page URL for `:id`; otherwise the server rejects the update with HTTP `400` to prevent cross-page snapshot corruption.
 
 ## Project Structure
 
