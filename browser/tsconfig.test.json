@@ -5,6 +5,6 @@
     "outDir": "./dist-test",
     "rootDir": "./src"
   },
-  "include": ["src/spa-coordinator.ts"],
+  "include": ["src/spa-coordinator.ts", "src/page-freezer.ts", "src/main.ts"],
   "exclude": ["node_modules", "dist", "dist-test"]
 }

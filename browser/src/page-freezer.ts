@@ -133,14 +133,13 @@ export function waitForDOMStable(
     let resolved = false;
 
     const cleanup = () => {
-      if (timer) nativeClearTimeout(timer);
-      if (timeoutId) nativeClearTimeout(timeoutId);
+      if (timer !== null) nativeClearTimeout(timer);
+      if (timeoutId !== null) nativeClearTimeout(timeoutId);
       observer.disconnect();
     };
 
-    const observer = new MutationObserver(() => {
-      lastMutation = Date.now();
-      if (timer) nativeClearTimeout(timer);
+    const scheduleStabilityCheck = () => {
+      if (timer !== null) nativeClearTimeout(timer);
 
       timer = nativeSetTimeout(() => {
         const elapsed = Date.now() - lastMutation;
@@ -151,6 +150,11 @@ export function waitForDOMStable(
           resolve();
         }
       }, stableTime) as unknown as number;
+    };
+
+    const observer = new MutationObserver(() => {
+      lastMutation = Date.now();
+      scheduleStabilityCheck();
     });
 
     observer.observe(document.body, {
@@ -159,6 +163,9 @@ export function waitForDOMStable(
       attributes: true,
       characterData: true
     });
+
+    // Quiet pages also need an initial no-mutations window.
+    scheduleStabilityCheck();
 
     // Timeout protection
     timeoutId = nativeSetTimeout(() => {
