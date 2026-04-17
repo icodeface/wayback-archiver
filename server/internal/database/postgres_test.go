@@ -393,3 +393,146 @@ func TestGetSnapshotNeighbors(t *testing.T) {
 		t.Errorf("newest snapshot should have no next, got ID %d", next.ID)
 	}
 }
+
+func TestFinalizePageCreate_UpdatesResourceLastSeen(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	pageID, err := db.CreatePage(
+		"https://finalize-last-seen.example.com/page-"+suffix,
+		"Pending Page",
+		"html/test/finalize-last-seen.html",
+		strings.Repeat("a", 64),
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer db.DeletePage(pageID)
+
+	resourceID, err := db.CreateResource(
+		"https://finalize-last-seen.example.com/style.css?"+suffix,
+		strings.Repeat("b", 64),
+		"css",
+		"resources/test/finalize-last-seen.css",
+		123,
+	)
+	if err != nil {
+		t.Fatalf("CreateResource failed: %v", err)
+	}
+	defer db.conn.Exec("DELETE FROM resources WHERE id = $1", resourceID)
+
+	before := time.Now().Add(-2 * time.Hour)
+	if _, err := db.conn.Exec("UPDATE resources SET last_seen = $1 WHERE id = $2", before, resourceID); err != nil {
+		t.Fatalf("seed last_seen failed: %v", err)
+	}
+
+	if err := db.FinalizePageCreate(pageID, []int64{resourceID}); err != nil {
+		t.Fatalf("FinalizePageCreate failed: %v", err)
+	}
+
+	resource, err := db.GetResourceByID(resourceID)
+	if err != nil {
+		t.Fatalf("GetResourceByID failed: %v", err)
+	}
+	if resource == nil {
+		t.Fatal("resource should exist after finalize")
+	}
+	if !resource.LastSeen.After(before) {
+		t.Fatalf("resource last_seen = %v, want after %v", resource.LastSeen, before)
+	}
+
+	var count int
+	if err := db.conn.QueryRow("SELECT COUNT(*) FROM page_resources WHERE page_id = $1 AND resource_id = $2", pageID, resourceID).Scan(&count); err != nil {
+		t.Fatalf("page_resources count failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 page-resource link, got %d", count)
+	}
+}
+
+func TestReplacePageSnapshot_UpdatesResourceLastSeen(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	pageID, err := db.CreatePage(
+		"https://replace-last-seen.example.com/page-"+suffix,
+		"Before Replace",
+		"html/test/replace-last-seen-before.html",
+		strings.Repeat("a", 64),
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer db.DeletePage(pageID)
+
+	oldResourceID, err := db.CreateResource(
+		"https://replace-last-seen.example.com/old.css?"+suffix,
+		strings.Repeat("b", 64),
+		"css",
+		"resources/test/replace-last-seen-old.css",
+		111,
+	)
+	if err != nil {
+		t.Fatalf("CreateResource(old) failed: %v", err)
+	}
+	defer db.conn.Exec("DELETE FROM resources WHERE id = $1", oldResourceID)
+
+	newResourceID, err := db.CreateResource(
+		"https://replace-last-seen.example.com/new.css?"+suffix,
+		strings.Repeat("c", 64),
+		"css",
+		"resources/test/replace-last-seen-new.css",
+		222,
+	)
+	if err != nil {
+		t.Fatalf("CreateResource(new) failed: %v", err)
+	}
+	defer db.conn.Exec("DELETE FROM resources WHERE id = $1", newResourceID)
+
+	if err := db.LinkPageResource(pageID, oldResourceID); err != nil {
+		t.Fatalf("LinkPageResource failed: %v", err)
+	}
+
+	before := time.Now().Add(-2 * time.Hour)
+	if _, err := db.conn.Exec("UPDATE resources SET last_seen = $1 WHERE id = $2", before, newResourceID); err != nil {
+		t.Fatalf("seed new resource last_seen failed: %v", err)
+	}
+
+	bodyText := "updated body text"
+	if err := db.ReplacePageSnapshot(
+		pageID,
+		"html/test/replace-last-seen-after.html",
+		strings.Repeat("d", 64),
+		"After Replace",
+		&bodyText,
+		[]int64{newResourceID},
+	); err != nil {
+		t.Fatalf("ReplacePageSnapshot failed: %v", err)
+	}
+
+	resource, err := db.GetResourceByID(newResourceID)
+	if err != nil {
+		t.Fatalf("GetResourceByID failed: %v", err)
+	}
+	if resource == nil {
+		t.Fatal("new resource should exist after replace")
+	}
+	if !resource.LastSeen.After(before) {
+		t.Fatalf("new resource last_seen = %v, want after %v", resource.LastSeen, before)
+	}
+
+	linked, err := db.GetResourcesByPageID(pageID)
+	if err != nil {
+		t.Fatalf("GetResourcesByPageID failed: %v", err)
+	}
+	if len(linked) != 1 {
+		t.Fatalf("expected 1 linked resource after replace, got %d", len(linked))
+	}
+	if linked[0].ID != newResourceID {
+		t.Fatalf("linked resource ID = %d, want %d", linked[0].ID, newResourceID)
+	}
+}

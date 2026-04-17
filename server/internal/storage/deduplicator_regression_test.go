@@ -407,6 +407,176 @@ func TestProcessResource_ExpiredFreshCacheTriggersRedownload(t *testing.T) {
 	}
 }
 
+func TestProcessCapture_FreshCacheReuseUpdatesLastSeenOnFinalize(t *testing.T) {
+	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
+	defer db.Close()
+
+	cssToken := fmt.Sprintf("%d", time.Now().UnixNano())
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "text/css")
+		w.Header().Set("Cache-Control", "public, max-age=60")
+		_, _ = w.Write([]byte("body { color: red; } /* " + cssToken + " */"))
+	}))
+	defer server.Close()
+
+	baseURL := routeStorageHTTPClientToServer(t, fs, server)
+	cssURL := fmt.Sprintf("%s/style.css?nonce=%d", baseURL, time.Now().UnixNano())
+
+	firstReq := &models.CaptureRequest{
+		URL:   fmt.Sprintf("%s/page-a-%d", baseURL, time.Now().UnixNano()),
+		Title: "first fresh cache page",
+		HTML:  `<html><head><link rel="stylesheet" href="` + cssURL + `"></head><body>first</body></html>`,
+	}
+
+	pageID1, action, err := dedup.ProcessCapture(firstReq)
+	if err != nil {
+		t.Fatalf("first ProcessCapture failed: %v", err)
+	}
+	if action != models.ArchiveActionCreated {
+		t.Fatalf("first action = %q, want %q", action, models.ArchiveActionCreated)
+	}
+	defer db.DeletePage(pageID1)
+
+	resource, err := db.GetResourceByURL(cssURL)
+	if err != nil {
+		t.Fatalf("GetResourceByURL after first capture failed: %v", err)
+	}
+	if resource == nil {
+		t.Fatalf("expected resource record for %s", cssURL)
+	}
+	beforeLastSeen := resource.LastSeen
+
+	time.Sleep(20 * time.Millisecond)
+
+	secondReq := &models.CaptureRequest{
+		URL:   fmt.Sprintf("%s/page-b-%d", baseURL, time.Now().UnixNano()),
+		Title: "second fresh cache page",
+		HTML:  `<html><head><link rel="stylesheet" href="` + cssURL + `"></head><body>second</body></html>`,
+	}
+
+	pageID2, action, err := dedup.ProcessCapture(secondReq)
+	if err != nil {
+		t.Fatalf("second ProcessCapture failed: %v", err)
+	}
+	if action != models.ArchiveActionCreated {
+		t.Fatalf("second action = %q, want %q", action, models.ArchiveActionCreated)
+	}
+	defer db.DeletePage(pageID2)
+
+	if hits.Load() != 1 {
+		t.Fatalf("fresh cache reuse should avoid a second upstream request, got %d", hits.Load())
+	}
+
+	resource, err = db.GetResourceByURL(cssURL)
+	if err != nil {
+		t.Fatalf("GetResourceByURL after second capture failed: %v", err)
+	}
+	if resource == nil {
+		t.Fatalf("expected resource record after second capture")
+	}
+	if !resource.LastSeen.After(beforeLastSeen) {
+		t.Fatalf("resource last_seen = %v, want after %v", resource.LastSeen, beforeLastSeen)
+	}
+
+	linked, err := db.GetResourcesByPageID(pageID2)
+	if err != nil {
+		t.Fatalf("GetResourcesByPageID(second page) failed: %v", err)
+	}
+	if len(linked) != 1 {
+		t.Fatalf("expected 1 linked resource on second page, got %d", len(linked))
+	}
+	if linked[0].ID != resource.ID {
+		t.Fatalf("second page linked resource ID = %d, want %d", linked[0].ID, resource.ID)
+	}
+}
+
+func TestUpdateCapture_FreshCacheReuseUpdatesLastSeenOnCommit(t *testing.T) {
+	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
+	defer db.Close()
+
+	cssToken := fmt.Sprintf("%d", time.Now().UnixNano())
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "text/css")
+		w.Header().Set("Cache-Control", "public, max-age=60")
+		_, _ = w.Write([]byte("body { color: blue; } /* " + cssToken + " */"))
+	}))
+	defer server.Close()
+
+	baseURL := routeStorageHTTPClientToServer(t, fs, server)
+	cssURL := fmt.Sprintf("%s/style.css?nonce=%d", baseURL, time.Now().UnixNano())
+	pageURL := fmt.Sprintf("%s/update-page-%d", baseURL, time.Now().UnixNano())
+
+	createReq := &models.CaptureRequest{
+		URL:   pageURL,
+		Title: "before cached update",
+		HTML:  `<html><head><link rel="stylesheet" href="` + cssURL + `"></head><body>before</body></html>`,
+	}
+
+	pageID, action, err := dedup.ProcessCapture(createReq)
+	if err != nil {
+		t.Fatalf("ProcessCapture failed: %v", err)
+	}
+	if action != models.ArchiveActionCreated {
+		t.Fatalf("create action = %q, want %q", action, models.ArchiveActionCreated)
+	}
+	defer db.DeletePage(pageID)
+
+	resource, err := db.GetResourceByURL(cssURL)
+	if err != nil {
+		t.Fatalf("GetResourceByURL before update failed: %v", err)
+	}
+	if resource == nil {
+		t.Fatalf("expected resource record before update")
+	}
+	beforeLastSeen := resource.LastSeen
+
+	time.Sleep(20 * time.Millisecond)
+
+	updateReq := &models.CaptureRequest{
+		URL:   pageURL,
+		Title: "after cached update",
+		HTML:  `<html><head><link rel="stylesheet" href="` + cssURL + `"></head><body>after</body></html>`,
+	}
+
+	action, err = dedup.UpdateCapture(pageID, updateReq)
+	if err != nil {
+		t.Fatalf("UpdateCapture failed: %v", err)
+	}
+	if action != models.ArchiveActionUpdated {
+		t.Fatalf("update action = %q, want %q", action, models.ArchiveActionUpdated)
+	}
+
+	if hits.Load() != 1 {
+		t.Fatalf("fresh cache reuse during update should avoid a second upstream request, got %d", hits.Load())
+	}
+
+	resource, err = db.GetResourceByURL(cssURL)
+	if err != nil {
+		t.Fatalf("GetResourceByURL after update failed: %v", err)
+	}
+	if resource == nil {
+		t.Fatalf("expected resource record after update")
+	}
+	if !resource.LastSeen.After(beforeLastSeen) {
+		t.Fatalf("resource last_seen = %v, want after %v", resource.LastSeen, beforeLastSeen)
+	}
+
+	linked, err := db.GetResourcesByPageID(pageID)
+	if err != nil {
+		t.Fatalf("GetResourcesByPageID after update failed: %v", err)
+	}
+	if len(linked) != 1 {
+		t.Fatalf("expected 1 linked resource after update, got %d", len(linked))
+	}
+	if linked[0].ID != resource.ID {
+		t.Fatalf("updated page linked resource ID = %d, want %d", linked[0].ID, resource.ID)
+	}
+}
+
 func TestProcessCapture_RollsBackPageOnFinalizeFailure(t *testing.T) {
 	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
 	defer db.Close()
