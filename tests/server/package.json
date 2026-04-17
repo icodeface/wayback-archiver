@@ -6,6 +6,7 @@
     "test": "node test-refresh.js"
   },
   "dependencies": {
+    "proxy-agent": "file:../../vendor/proxy-agent",
     "puppeteer": "^22.0.0"
   }
 }
