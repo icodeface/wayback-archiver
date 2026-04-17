@@ -405,31 +405,22 @@ func (d *Deduplicator) loadCachedResource(url string) *resourceCacheEntry {
 	return cached
 }
 
-func (d *Deduplicator) tryReuseFreshCache(url string, cached *resourceCacheEntry) (int64, string, bool, error) {
+func (d *Deduplicator) tryReuseFreshCache(url string, cached *resourceCacheEntry) (int64, string, bool) {
 	if cached == nil || cached.freshUntil.IsZero() || !time.Now().Before(cached.freshUntil) {
-		return 0, "", false, nil
+		return 0, "", false
 	}
-
-	resource, err := d.db.GetResourceByID(cached.resourceID)
-	if err != nil {
-		return 0, "", false, fmt.Errorf("db query hot cached resource failed: %w", err)
-	}
-	if resource == nil || resource.FilePath == "" {
+	if cached.filePath == "" {
 		d.cacheDelete(url)
-		return 0, "", false, nil
+		return 0, "", false
 	}
 
-	if err := d.db.UpdateResourceLastSeen(resource.ID); err != nil {
-		return 0, "", false, err
-	}
-
-	d.cacheStoreWithMetadata(url, resource.ID, resource.FilePath, downloadMetadata{
+	d.cacheStoreWithMetadata(url, cached.resourceID, cached.filePath, downloadMetadata{
 		etag:       cached.etag,
 		lastMod:    cached.lastMod,
 		freshUntil: cached.freshUntil,
 	}, nil)
 	log.Printf("[cache] fresh reuse: %s", shortURLForLog(url))
-	return resource.ID, resource.FilePath, true, nil
+	return cached.resourceID, cached.filePath, true
 }
 
 func shortURLForLog(raw string) string {
@@ -565,9 +556,7 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 
 	startTime := time.Now()
 	cached := d.loadCachedResource(url)
-	if resourceID, filePath, reused, err := d.tryReuseFreshCache(url, cached); err != nil {
-		return 0, "", nil, err
-	} else if reused {
+	if resourceID, filePath, reused := d.tryReuseFreshCache(url, cached); reused {
 		return resourceID, filePath, nil, nil
 	}
 
@@ -599,14 +588,7 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 		if cached == nil {
 			return 0, "", nil, fmt.Errorf("received 304 without cache entry for %s", url)
 		}
-
-		dbStart := time.Now()
-		resource, err := d.db.GetResourceByID(cached.resourceID)
-		dbDuration += time.Since(dbStart)
-		if err != nil {
-			return 0, "", nil, fmt.Errorf("db query revalidated resource failed: %w", err)
-		}
-		if resource == nil || resource.FilePath == "" {
+		if cached.filePath == "" {
 			d.cacheDelete(url)
 			data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(url, pageURL, headers, cookies, streamThreshold, "", "")
 			if err != nil {
@@ -614,12 +596,6 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 				return d.processResourceFallback(url, err)
 			}
 		} else {
-			dbStart = time.Now()
-			if err := d.db.UpdateResourceLastSeen(resource.ID); err != nil {
-				dbDuration += time.Since(dbStart)
-				return 0, "", nil, err
-			}
-			dbDuration += time.Since(dbStart)
 			if !metadata.hasFreshness {
 				metadata.freshUntil = cached.freshUntil
 			}
@@ -629,9 +605,9 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 			if metadata.lastMod == "" {
 				metadata.lastMod = cached.lastMod
 			}
-			d.cacheStoreWithMetadata(url, resource.ID, resource.FilePath, metadata, nil)
+			d.cacheStoreWithMetadata(url, cached.resourceID, cached.filePath, metadata, nil)
 			log.Printf("[cache] revalidated 304: %s (%v)", shortURLForLog(url), time.Since(startTime))
-			return resource.ID, resource.FilePath, nil, nil
+			return cached.resourceID, cached.filePath, nil, nil
 		}
 	}
 	if data != nil {

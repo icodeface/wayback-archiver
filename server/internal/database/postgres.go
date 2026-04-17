@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	"wayback/internal/models"
 )
 
@@ -215,6 +215,14 @@ func (db *DB) CreateResource(url, hash, resourceType, filePath string, fileSize 
 // UpdateResourceLastSeen 更新资源最后见到时间
 func (db *DB) UpdateResourceLastSeen(id int64) error {
 	_, err := db.conn.Exec("UPDATE resources SET last_seen = NOW() WHERE id = $1", id)
+	return err
+}
+
+func touchResourcesLastSeen(tx *sql.Tx, resourceIDs []int64) error {
+	if len(resourceIDs) == 0 {
+		return nil
+	}
+	_, err := tx.Exec("UPDATE resources SET last_seen = NOW() WHERE id = ANY($1)", pq.Array(resourceIDs))
 	return err
 }
 
@@ -617,6 +625,9 @@ func (db *DB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title string,
 	if _, err := tx.Exec("DELETE FROM page_resources WHERE page_id = $1", id); err != nil {
 		return err
 	}
+	if err := touchResourcesLastSeen(tx, resourceIDs); err != nil {
+		return err
+	}
 
 	for _, resourceID := range resourceIDs {
 		if _, err := tx.Exec(
@@ -664,6 +675,9 @@ func (db *DB) FinalizePageCreate(id int64, resourceIDs []int64) error {
 		return err
 	}
 	if _, err := tx.Exec("DELETE FROM page_resources WHERE page_id = $1", id); err != nil {
+		return err
+	}
+	if err := touchResourcesLastSeen(tx, resourceIDs); err != nil {
 		return err
 	}
 	for _, resourceID := range resourceIDs {
