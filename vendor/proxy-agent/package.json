@@ -1,0 +1,12 @@
+{
+  "name": "proxy-agent",
+  "version": "6.5.0",
+  "main": "./index.js",
+  "license": "MIT",
+  "dependencies": {
+    "http-proxy-agent": "^7.0.2",
+    "https-proxy-agent": "^7.0.6",
+    "proxy-from-env": "^1.1.0",
+    "socks-proxy-agent": "^8.0.5"
+  }
+}
