@@ -227,3 +227,56 @@ func TestExtractResources_IframeCGIWithoutHTMLExtension(t *testing.T) {
 
 	t.Fatal("should extract iframe CGI resource as html")
 }
+
+func TestExtractResources_SkipsFragmentOnlyCSSURLs(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	html := `<html><body><svg><rect style="fill:url(#paint0_linear_0_3)"></rect></svg></body></html>`
+	resources := extractor.ExtractResources(html, "https://example.com/page")
+
+	for _, r := range resources {
+		if r.URL == "https://example.com/page#paint0_linear_0_3" {
+			t.Fatalf("should not extract same-document fragment URL, got %q", r.URL)
+		}
+		if r.URL == "#paint0_linear_0_3" {
+			t.Fatalf("should not extract raw fragment URL, got %q", r.URL)
+		}
+	}
+}
+
+func TestExtractResources_SkipsFragmentOnlyQuotedCSSURLs(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	html := `<html><body><div style="filter:url(&quot;#paint0_linear_0_3&quot;)"></div></body></html>`
+	resources := extractor.ExtractResources(html, "https://example.com/page")
+
+	for _, r := range resources {
+		if r.URL == "https://example.com/page#paint0_linear_0_3" {
+			t.Fatalf("should not extract same-document quoted fragment URL, got %q", r.URL)
+		}
+		if r.URL == "#paint0_linear_0_3" {
+			t.Fatalf("should not extract raw quoted fragment URL, got %q", r.URL)
+		}
+	}
+}
+
+func TestExtractResources_PreservesAssetURLsWithFragments(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	html := `<html><body><div style="mask:url(icons.svg#sprite)"></div></body></html>`
+	resources := extractor.ExtractResources(html, "https://example.com/assets/page")
+
+	found := false
+	for _, r := range resources {
+		if r.URL == "https://example.com/assets/icons.svg#sprite" {
+			found = true
+			if r.Type != "image" {
+				t.Fatalf("asset URL with fragment type = %q, want image", r.Type)
+			}
+		}
+	}
+
+	if !found {
+		t.Fatal("should preserve asset URL with fragment suffix")
+	}
+}

@@ -31,7 +31,7 @@ func (p *CSSParser) ExtractResources(cssContent string) []string {
 	for _, match := range importMatches {
 		if len(match) > 1 {
 			url := strings.TrimSpace(match[1])
-			if url != "" && !seen[url] && !isDataURL(url) {
+			if url != "" && !seen[url] && !isDataURL(url) && !isFragmentOnlyURL(url) {
 				seen[url] = true
 				resources = append(resources, url)
 			}
@@ -43,7 +43,7 @@ func (p *CSSParser) ExtractResources(cssContent string) []string {
 	for _, match := range urlMatches {
 		if len(match) > 1 {
 			url := strings.TrimSpace(match[1])
-			if url != "" && !seen[url] && !isDataURL(url) {
+			if url != "" && !seen[url] && !isDataURL(url) && !isFragmentOnlyURL(url) {
 				seen[url] = true
 				resources = append(resources, url)
 			}
@@ -99,4 +99,8 @@ func (p *CSSParser) RewriteCSS(cssContent string, urlMapping map[string]string) 
 // isDataURL checks if a URL is a data URL (data:...)
 func isDataURL(url string) bool {
 	return strings.HasPrefix(url, "data:")
+}
+
+func isFragmentOnlyURL(url string) bool {
+	return strings.HasPrefix(url, "#")
 }
