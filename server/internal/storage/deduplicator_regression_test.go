@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -574,6 +576,101 @@ func TestUpdateCapture_FreshCacheReuseUpdatesLastSeenOnCommit(t *testing.T) {
 	}
 	if linked[0].ID != resource.ID {
 		t.Fatalf("updated page linked resource ID = %d, want %d", linked[0].ID, resource.ID)
+	}
+}
+
+func TestProcessCapture_SkipsFragmentOnlyURLsDuringFinalize(t *testing.T) {
+	dedup, db, fs := newFrameCaptureTestDeduplicator(t)
+	defer db.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/style.css":
+			w.Header().Set("Content-Type", "text/css")
+			_, _ = w.Write([]byte(`.mask{filter:url(#goo)} .icon{background-image:url("icons.svg#sprite")}`))
+		case "/icons.svg":
+			w.Header().Set("Content-Type", "image/svg+xml")
+			_, _ = w.Write([]byte(`<svg xmlns="http://www.w3.org/2000/svg"><symbol id="sprite"></symbol></svg>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	baseURL := routeStorageHTTPClientToServer(t, fs, server)
+	cssURL := fmt.Sprintf("%s/style.css?nonce=%d", baseURL, time.Now().UnixNano())
+	expectedSpriteURL := baseURL + "/icons.svg#sprite"
+
+	var requestedMu sync.Mutex
+	requested := make([]string, 0, 2)
+	dedup.testBeforeResourceCreate = func(url string) {
+		requestedMu.Lock()
+		requested = append(requested, url)
+		requestedMu.Unlock()
+	}
+
+	req := &models.CaptureRequest{
+		URL:   fmt.Sprintf("%s/page-%d", baseURL, time.Now().UnixNano()),
+		Title: "fragment-only resources are skipped",
+		HTML:  `<html><head><link rel="stylesheet" href="` + cssURL + `"></head><body><svg><rect style="fill:url(#paint0_linear_0_3)"></rect></svg></body></html>`,
+	}
+
+	pageID, action, err := dedup.ProcessCapture(req)
+	if err != nil {
+		t.Fatalf("ProcessCapture failed: %v", err)
+	}
+	if action != models.ArchiveActionCreated {
+		t.Fatalf("action = %q, want %q", action, models.ArchiveActionCreated)
+	}
+	defer db.DeletePage(pageID)
+
+	requestedMu.Lock()
+	requestedCopy := append([]string(nil), requested...)
+	requestedMu.Unlock()
+
+	foundCSS := false
+	foundSprite := false
+	for _, resourceURL := range requestedCopy {
+		if strings.Contains(resourceURL, "#paint0_linear_0_3") || strings.Contains(resourceURL, "#goo") {
+			t.Fatalf("fragment-only URL should not be processed as a resource: %q", resourceURL)
+		}
+		if resourceURL == cssURL {
+			foundCSS = true
+		}
+		if resourceURL == expectedSpriteURL {
+			foundSprite = true
+		}
+	}
+	if !foundCSS {
+		t.Fatalf("expected stylesheet URL to be processed, got %#v", requestedCopy)
+	}
+	if !foundSprite {
+		t.Fatalf("expected asset URL with fragment to be preserved, got %#v", requestedCopy)
+	}
+
+	linked, err := db.GetResourcesByPageID(pageID)
+	if err != nil {
+		t.Fatalf("GetResourcesByPageID failed: %v", err)
+	}
+	if len(linked) != 2 {
+		t.Fatalf("expected 2 linked resources after skipping fragment-only URLs, got %d", len(linked))
+	}
+
+	linkedCSS := false
+	linkedSprite := false
+	for _, resource := range linked {
+		if resource.URL == cssURL {
+			linkedCSS = true
+		}
+		if resource.URL == expectedSpriteURL {
+			linkedSprite = true
+		}
+		if strings.Contains(resource.URL, "#paint0_linear_0_3") || strings.HasSuffix(resource.URL, "#goo") {
+			t.Fatalf("fragment-only URL should not be linked to the page: %q", resource.URL)
+		}
+	}
+	if !linkedCSS || !linkedSprite {
+		t.Fatalf("expected linked resources to contain stylesheet and sprite asset, got %#v", linked)
 	}
 }
 

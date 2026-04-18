@@ -251,6 +251,11 @@ func (e *HTMLResourceExtractor) resolveURL(rawURL, baseURL string) string {
 		return rawURL
 	}
 
+	// 跳过同文档 fragment 引用（例如 SVG 的 url(#gradient)）
+	if strings.HasPrefix(rawURL, "#") {
+		return rawURL
+	}
+
 	// 如果已经是完整URL，解析并规范化路径
 	if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") {
 		parsed, err := url.Parse(rawURL)
