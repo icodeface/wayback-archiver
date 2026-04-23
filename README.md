@@ -46,27 +46,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ SQLite/Postgr
 
 ## Quick Start
 
-### Option A: Docker (Recommended)
-
-The fastest way to get started. Docker Compose will set up both the server and PostgreSQL automatically.
-
-```bash
-# Clone the repository
-git clone https://github.com/icodeface/wayback-archiver.git
-cd wayback-archiver
-
-# Start all services
-docker compose up -d
-
-# View logs
-docker compose logs -f wayback
-```
-
-The server will be available at `http://localhost:8080`. Skip to [step 4 (Install the Userscript)](#4-install-the-userscript).
-
-For detailed Docker configuration and deployment options, see [docs/DOCKER.md](docs/DOCKER.md).
-
-### Option B: Pre-built Binaries
+### Pre-built Binaries
 
 ### 1. Download Pre-built Binaries
 
