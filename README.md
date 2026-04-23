@@ -79,17 +79,12 @@ No setup required! The database file will be created automatically at `./data/wa
 **Option 2: PostgreSQL**
 
 ```bash
-# PostgreSQL uses your current system username as the default database user
-# If your system username is alice, this is equivalent to: createdb -U alice wayback
-createdb wayback
-
-# Run the schema (init_db.sql is included in the release archive)
-psql wayback < init_db.sql
-
 # Configure database connection in .env
 echo "DB_TYPE=postgres" >> .env
 echo "DB_NAME=wayback" >> .env
 ```
+
+The server will create the configured PostgreSQL database and tables automatically on startup. If the database does not exist yet, the configured user must have permission to create databases.
 
 > **Upgrade note for existing installs:** Any installation upgrading from **`< 1.1.0`** to `1.1.0` or later needs the `pages.snapshot_state` column. Current server builds automatically apply this change during startup; if your database user does not have `ALTER TABLE` permission, run the following idempotent SQL manually first:
 >
