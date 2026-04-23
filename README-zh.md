@@ -139,17 +139,24 @@ export https_proxy=http://127.0.0.1:7897
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
+| `DB_TYPE` | `sqlite` | 数据库类型：`sqlite` 适合本地单文件部署，`postgres` 适合 PostgreSQL |
+| `DB_PATH` | `./data/wayback.db` | SQLite 数据库文件路径（当 `DB_TYPE=sqlite` 时使用） |
 | `DB_HOST` | `localhost` | PostgreSQL 主机 |
 | `DB_PORT` | `5432` | PostgreSQL 端口 |
-| `DB_USER` | `postgres` | 数据库用户 |
+| `DB_USER` | 当前系统用户名 | PostgreSQL 数据库用户。未设置时服务端会优先使用当前系统用户名，不可用时回退到 `postgres` |
 | `DB_PASSWORD` | *（空）* | 数据库密码 |
 | `DB_NAME` | `wayback` | 数据库名称 |
 | `DB_SSLMODE` | `disable` | 服务端连接 PostgreSQL 时使用的 SSL 模式 |
+| `SERVER_HOST` | `127.0.0.1` | 服务绑定地址（`0.0.0.0` 表示监听所有网卡，`127.0.0.1` 表示仅本机访问） |
 | `SERVER_PORT` | `8080` | HTTP 服务端口 |
+| `ALLOWED_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | CORS 允许的来源列表（逗号分隔）。远程部署时应加入你的域名 |
 | `DATA_DIR` | `./data` | HTML 和资源的存储目录 |
 | `LOG_DIR` | `./data/logs` | 日志文件目录 |
 | `AUTH_PASSWORD` | *（空）* | HTTP Basic Auth 密码（为空时关闭认证，用户名固定为 `wayback`） |
+| `RESOURCE_WORKERS` | CPU 核心数 × 4（最少 2） | 全局资源下载并发 worker 数量，跨所有页面共享 |
 | `RESOURCE_METADATA_CACHE_MB` | 总内存的 10% | 资源 URL 元数据缓存预算（MB），同时用于基于 freshness/validator 的 HTTP 复用与重校验。旧变量 `RESOURCE_CACHE_MB` 仍作为兼容别名生效。 |
+| `RESOURCE_DOWNLOAD_TIMEOUT` | `30` | 单个资源下载超时（秒） |
+| `RESOURCE_STREAM_THRESHOLD_KB` | `2048` | 大文件转为流式落盘的阈值（KB） |
 | `ENABLE_DEBUG_API` | `false` | 是否启用 `/api/debug/*` 调试接口（`memstats`、`gc`、`pprof`）。仅在排查问题时临时开启。 |
 | `COMPRESSION_LEVEL` | `-1` | 压缩级别：1（最快）到 9（最佳），-1（默认/平衡）。响应压缩始终启用，根据 Accept-Encoding 自动协商 |
 

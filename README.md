@@ -143,9 +143,11 @@ The server automatically loads `.env` from the working directory if it exists. Y
 
 | Variable | Default | Description |
 |---|---|---|
+| `DB_TYPE` | `sqlite` | Database type: `sqlite` for local single-file storage, `postgres` for PostgreSQL |
+| `DB_PATH` | `./data/wayback.db` | SQLite database path (used when `DB_TYPE=sqlite`) |
 | `DB_HOST` | `localhost` | PostgreSQL host |
 | `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_USER` | `postgres` | Database user. PostgreSQL defaults to the current system username, so leaving this unset is usually recommended. |
+| `DB_USER` | current system username | PostgreSQL user. If unset, the server uses your current system username and falls back to `postgres` when unavailable |
 | `DB_PASSWORD` | *(empty)* | Database password |
 | `DB_NAME` | `wayback` | Database name |
 | `DB_SSLMODE` | `disable` | PostgreSQL SSL mode used by the server connection |
@@ -155,7 +157,10 @@ The server automatically loads `.env` from the working directory if it exists. Y
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
 | `LOG_DIR` | `./data/logs` | Log file directory |
 | `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`). **REQUIRED for remote deployment** |
+| `RESOURCE_WORKERS` | CPU cores × 4 (min 2) | Global concurrent resource download workers across all pages |
 | `RESOURCE_METADATA_CACHE_MB` | 10% of system memory | Metadata cache budget for resource URL lookups plus HTTP freshness/validator reuse and revalidation. `RESOURCE_CACHE_MB` is still accepted as a legacy alias. |
+| `RESOURCE_DOWNLOAD_TIMEOUT` | `30` | Per-resource download timeout in seconds |
+| `RESOURCE_STREAM_THRESHOLD_KB` | `2048` | Stream-to-disk threshold in KB for large resources |
 | `ENABLE_DEBUG_API` | `false` | Enable `/api/debug/*` endpoints (`memstats`, `gc`, `pprof`). Keep disabled unless you are actively debugging. |
 | `COMPRESSION_LEVEL` | `-1` | Compression level: 1 (fastest) to 9 (best), -1 (default/balanced). Response compression always enabled, auto-negotiated via Accept-Encoding |
 

@@ -238,7 +238,8 @@ DB_PATH=./data/wayback.db  # SQLite database file path (when DB_TYPE=sqlite)
 # PostgreSQL configuration (when DB_TYPE=postgres)
 DB_HOST=localhost
 DB_PORT=5432
-DB_USER=postgres  # 可选，PostgreSQL 默认使用系统用户名
+# DB_USER defaults to your current system username; falls back to postgres if unavailable
+# DB_USER=
 DB_PASSWORD=
 DB_NAME=wayback
 DB_SSLMODE=disable
