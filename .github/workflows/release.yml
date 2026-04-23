@@ -27,6 +27,11 @@ jobs:
           cache: 'npm'
           cache-dependency-path: browser/package-lock.json
 
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib gcc-aarch64-linux-gnu gcc-mingw-w64 libsqlite3-dev
+
       - name: Install browser dependencies
         run: cd browser && npm ci
 

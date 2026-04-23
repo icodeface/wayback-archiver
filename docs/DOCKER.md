@@ -4,6 +4,8 @@
 
 ### 1. Using Docker Compose (Recommended)
 
+The default configuration uses PostgreSQL (recommended for Docker deployment). For SQLite, see the configuration section below.
+
 ```bash
 # Start all services (server + PostgreSQL)
 docker compose up -d
@@ -15,7 +17,7 @@ docker compose logs -f wayback
 docker compose down
 
 # Stop and remove all data
-docker compose down -v  # This only removes postgres_data volume; ./data/ directory remains on host
+docker compose down -v  # This removes postgres_data volume; ./data/ directory remains on host
 ```
 
 The server will be available at http://localhost:8080
@@ -70,6 +72,27 @@ AUTH_PASSWORD=your-secure-password
 # Optional: keep debug APIs disabled unless troubleshooting
 ENABLE_DEBUG_API=false
 ```
+
+### Using SQLite Instead of PostgreSQL
+
+To use SQLite instead of PostgreSQL in Docker:
+
+1. Edit `docker-compose.yml`:
+   - Comment out the `postgres` service
+   - In the `wayback` service environment, comment out PostgreSQL variables and uncomment SQLite variables:
+     ```yaml
+     # DB_TYPE: postgres
+     # DB_HOST: postgres
+     # ...
+     DB_TYPE: sqlite
+     DB_PATH: /app/data/wayback.db
+     ```
+   - Remove `depends_on` section
+
+2. Start the service:
+   ```bash
+   docker compose up -d
+   ```
 
 ### Remote Deployment
 

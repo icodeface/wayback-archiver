@@ -119,8 +119,12 @@ func main() {
 
 	// 打印启动配置摘要（不包含密码等敏感信息）
 	log.Printf("Version: %s (built: %s)", Version, BuildTime)
-	log.Printf("Database: %s@%s:%d/%s (sslmode=%s)",
-		cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName, cfg.Database.SSLMode)
+	if cfg.Database.Type == "sqlite" {
+		log.Printf("Database: sqlite (%s)", cfg.Database.Path)
+	} else {
+		log.Printf("Database: %s@%s:%d/%s (sslmode=%s)",
+			cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName, cfg.Database.SSLMode)
+	}
 	log.Printf("Storage: data=%s, logs=%s", cfg.Storage.DataDir, cfg.Storage.LogDir)
 	log.Printf("Server: %s:%d, compression_level=%d, debug_api=%v", cfg.Server.Host, cfg.Server.Port, cfg.Server.CompressionLevel, cfg.Server.EnableDebugAPI)
 	log.Printf("Auth: %v", cfg.Auth.Enabled())
@@ -128,14 +132,7 @@ func main() {
 		cfg.Resource.Workers, cfg.Resource.MetadataCacheMB, cfg.Resource.DownloadTimeout, cfg.Resource.StreamThresholdKB)
 
 	// 连接数据库
-	db, err := database.New(
-		cfg.Database.Host,
-		fmt.Sprintf("%d", cfg.Database.Port),
-		cfg.Database.User,
-		cfg.Database.Password,
-		cfg.Database.DBName,
-		cfg.Database.SSLMode,
-	)
+	db, err := database.Open(&cfg.Database)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}

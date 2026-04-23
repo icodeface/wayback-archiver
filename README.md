@@ -13,7 +13,7 @@ A self-hosted personal web archiving system that automatically captures and pres
 ## How It Works
 
 ```
-Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ PostgreSQL (metadata)
+Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ SQLite/PostgreSQL (metadata)
   (auto-capture on                    │               + File System (assets)
    page load)                         │
                                       ▼
@@ -41,8 +41,8 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ PostgreSQL (m
 
 ## Prerequisites
 
-- **PostgreSQL** 14+
 - **Chrome** or **Firefox** + [Tampermonkey](https://www.tampermonkey.net/) extension (v5.3+)
+- **Database** (optional): SQLite (default, zero-config) or PostgreSQL 14+ (for remote deployment)
 
 ## Quick Start
 
@@ -88,7 +88,15 @@ tar -xzf wayback-server-*.tar.gz
 
 > **Building from source?** See [docs/BUILD.md](docs/BUILD.md) for manual compilation instructions.
 
-### 2. Database Setup
+### 2. Database Setup (Optional)
+
+By default, Wayback Archiver uses SQLite (zero-config, single-file database). For remote deployment with multiple users, PostgreSQL is recommended.
+
+**Option 1: SQLite (Default)**
+
+No setup required! The database file will be created automatically at `./data/wayback.db` on first run.
+
+**Option 2: PostgreSQL**
 
 ```bash
 # PostgreSQL uses your current system username as the default database user
@@ -97,6 +105,10 @@ createdb wayback
 
 # Run the schema (init_db.sql is included in the release archive)
 psql wayback < init_db.sql
+
+# Configure database connection in .env
+echo "DB_TYPE=postgres" >> .env
+echo "DB_NAME=wayback" >> .env
 ```
 
 > **Upgrade note for existing installs:** Any installation upgrading from **`< 1.1.0`** to `1.1.0` or later needs the `pages.snapshot_state` column. Current server builds automatically apply this change during startup; if your database user does not have `ALTER TABLE` permission, run the following idempotent SQL manually first:

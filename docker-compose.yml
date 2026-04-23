@@ -27,11 +27,20 @@ services:
         BUILD_TIME: ${BUILD_TIME:-unknown}
     container_name: wayback-server
     environment:
+      # Database configuration (PostgreSQL by default for Docker deployment)
+      # To use SQLite instead:
+      # 1. Comment out DB_TYPE/DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME below
+      # 2. Uncomment the DB_TYPE: sqlite and DB_PATH lines
+      # 3. Comment out the depends_on section
+      # 4. Optionally comment out the postgres service above
+      DB_TYPE: postgres
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: wayback
       DB_PASSWORD: wayback
       DB_NAME: wayback
+      # DB_TYPE: sqlite
+      # DB_PATH: /app/data/wayback.db
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: 8080
       DATA_DIR: /app/data

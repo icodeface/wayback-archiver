@@ -34,7 +34,12 @@ func skipIfNoDB(t *testing.T) *DB {
 	if err != nil {
 		t.Skipf("Skipping DB test (cannot connect): %v", err)
 	}
-	return db
+	// 类型断言：Database 接口 -> *DB (PostgresDB)
+	pgDB, ok := db.(*DB)
+	if !ok {
+		t.Fatalf("Expected *DB, got %T", db)
+	}
+	return pgDB
 }
 
 func idStr(id int64) string {

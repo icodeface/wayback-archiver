@@ -77,7 +77,7 @@ func (m *keyedMutex) lock(key string) func() {
 }
 
 type Deduplicator struct {
-	db            *database.DB
+	db            database.Database
 	storage       *FileStorage
 	cssParser     *CSSParser
 	htmlExtractor *HTMLResourceExtractor
@@ -100,7 +100,7 @@ type Deduplicator struct {
 	testBeforeResourceCreate func(url string)
 }
 
-func NewDeduplicator(db *database.DB, storage *FileStorage, cfg config.ResourceConfig) *Deduplicator {
+func NewDeduplicator(db database.Database, storage *FileStorage, cfg config.ResourceConfig) *Deduplicator {
 	d := &Deduplicator{
 		db:            db,
 		storage:       storage,

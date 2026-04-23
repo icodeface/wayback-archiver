@@ -8,13 +8,13 @@ import (
 
 type Handler struct {
 	dedup   *storage.Deduplicator
-	db      *database.DB
+	db      database.Database
 	css     *storage.CSSParser
 	dataDir string
 	logger  *logging.Logger
 }
 
-func NewHandler(dedup *storage.Deduplicator, db *database.DB, dataDir string, logger *logging.Logger) *Handler {
+func NewHandler(dedup *storage.Deduplicator, db database.Database, dataDir string, logger *logging.Logger) *Handler {
 	return &Handler{
 		dedup:   dedup,
 		db:      db,

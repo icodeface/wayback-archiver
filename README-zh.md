@@ -13,7 +13,7 @@
 ## 工作原理
 
 ```
-Chrome + Tampermonkey ──HTTP POST──▶ Go 服务器 ──▶ PostgreSQL (元数据)
+Chrome + Tampermonkey ──HTTP POST──▶ Go 服务器 ──▶ SQLite/PostgreSQL (元数据)
   (页面加载完成后                       │              + 文件系统 (静态资源)
    自动捕获)                            │
                                         ▼
@@ -41,8 +41,8 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go 服务器 ──▶ PostgreSQL
 
 ## 环境要求
 
-- **PostgreSQL** 14+
 - **Chrome** 或 **Firefox** + [Tampermonkey](https://www.tampermonkey.net/) 扩展（v5.3+）
+- **数据库**（可选）：SQLite（默认，零配置）或 PostgreSQL 14+（远程部署推荐）
 
 ## 快速开始
 
@@ -88,13 +88,25 @@ tar -xzf wayback-server-*.tar.gz
 
 > **想从源码构建？** 参见 [docs/BUILD.md](docs/BUILD.md)。
 
-### 2. 数据库配置
+### 2. 数据库配置（可选）
+
+默认情况下，Wayback Archiver 使用 SQLite（零配置，单文件数据库）。如需远程部署支持多用户访问，推荐使用 PostgreSQL。
+
+**方式一：SQLite（默认）**
+
+无需配置！首次运行时会自动在 `./data/wayback.db` 创建数据库文件。
+
+**方式二：PostgreSQL**
 
 ```bash
 createdb -U postgres wayback
 
 # 执行建表脚本（init_db.sql 已包含在 release 压缩包中）
 psql -U postgres wayback < init_db.sql
+
+# 在 .env 中配置数据库连接
+echo "DB_TYPE=postgres" >> .env
+echo "DB_NAME=wayback" >> .env
 ```
 
 > **旧版本升级说明：** 从 **`< 1.1.0`** 升级到 `1.1.0` 或更新版本时，需要补齐 `pages.snapshot_state` 列。当前版本服务启动时会自动补齐这组变更；如果数据库账号没有 `ALTER TABLE` 权限，也可以手动执行下面这组幂等 SQL：

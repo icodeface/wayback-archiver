@@ -3,7 +3,6 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -11,17 +10,23 @@ import (
 	"wayback/internal/models"
 )
 
-type DB struct {
+// PostgresDB PostgreSQL 数据库实现
+type PostgresDB struct {
 	conn *sql.DB
+	qb   *QueryBuilder
 }
 
-const pageSelectColumns = "id, url, title, captured_at, html_path, content_hash, snapshot_state, first_visited, last_visited"
+// 保持向后兼容的类型别名
+type DB = PostgresDB
 
-type pageScanner interface {
-	Scan(dest ...any) error
+// New 创建 PostgreSQL 数据库连接（向后兼容函数）
+// 推荐使用 NewPostgres 或 Open 函数
+func New(host, port, user, password, dbname string, sslmode ...string) (Database, error) {
+	return NewPostgres(host, port, user, password, dbname, sslmode...)
 }
 
-func New(host, port, user, password, dbname string, sslmode ...string) (*DB, error) {
+// NewPostgres 创建 PostgreSQL 数据库连接
+func NewPostgres(host, port, user, password, dbname string, sslmode ...string) (Database, error) {
 	mode := "disable"
 	if len(sslmode) > 0 && sslmode[0] != "" {
 		mode = sslmode[0]
@@ -43,7 +48,10 @@ func New(host, port, user, password, dbname string, sslmode ...string) (*DB, err
 		return nil, err
 	}
 
-	db := &DB{conn: conn}
+	db := &PostgresDB{
+		conn: conn,
+		qb:   NewQueryBuilder(DBTypePostgreSQL),
+	}
 	if err := db.ensureResourcesContentHashNotUnique(); err != nil {
 		return nil, fmt.Errorf("failed to ensure resources content_hash is not unique: %w", err)
 	}
@@ -81,22 +89,13 @@ func quoteConnValue(value string) string {
 	return "'" + escaped + "'"
 }
 
-func escapeLikePattern(value string) string {
-	replacer := strings.NewReplacer(
-		`\`, `\\`,
-		`%`, `\%`,
-		`_`, `\_`,
-	)
-	return replacer.Replace(value)
-}
-
-func (db *DB) ensureResourcesContentHashNotUnique() error {
+func (db *PostgresDB) ensureResourcesContentHashNotUnique() error {
 	_, err := db.conn.Exec(`ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_content_hash_key`)
 	return err
 }
 
 // ensureDomainColumn adds the domain column, index, and backfills existing rows if needed.
-func (db *DB) ensureDomainColumn() error {
+func (db *PostgresDB) ensureDomainColumn() error {
 	// Add column if not exists
 	_, err := db.conn.Exec(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS domain TEXT DEFAULT ''`)
 	if err != nil {
@@ -108,11 +107,13 @@ func (db *DB) ensureDomainColumn() error {
 		return err
 	}
 	// Backfill: extract domain from url for rows where domain is empty
-	_, err = db.conn.Exec(`UPDATE pages SET domain = substring(url from '://([^/]+)') WHERE domain = '' AND url != ''`)
+	domainSQL := db.qb.ExtractDomain("url")
+	query := fmt.Sprintf("UPDATE pages SET domain = %s WHERE domain = '' AND url != ''", domainSQL)
+	_, err = db.conn.Exec(query)
 	return err
 }
 
-func (db *DB) ensureSnapshotStateColumn() error {
+func (db *PostgresDB) ensureSnapshotStateColumn() error {
 	if _, err := db.conn.Exec(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS snapshot_state VARCHAR(16)`); err != nil {
 		return err
 	}
@@ -128,25 +129,12 @@ func (db *DB) ensureSnapshotStateColumn() error {
 	return nil
 }
 
-func scanPage(scanner pageScanner, page *models.Page) error {
-	return scanner.Scan(&page.ID, &page.URL, &page.Title, &page.CapturedAt, &page.HTMLPath, &page.ContentHash, &page.SnapshotState, &page.FirstVisited, &page.LastVisited)
-}
-
-// extractDomain extracts the hostname from a URL string.
-func extractDomain(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	return u.Hostname()
-}
-
-func (db *DB) Close() error {
+func (db *PostgresDB) Close() error {
 	return db.conn.Close()
 }
 
 // CreatePage 创建页面记录
-func (db *DB) CreatePage(url, title, htmlPath, contentHash string, capturedAt time.Time) (int64, error) {
+func (db *PostgresDB) CreatePage(url, title, htmlPath, contentHash string, capturedAt time.Time) (int64, error) {
 	var id int64
 	err := db.conn.QueryRow(
 		"INSERT INTO pages (url, title, html_path, content_hash, snapshot_state, captured_at, first_visited, last_visited, domain) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
@@ -156,13 +144,13 @@ func (db *DB) CreatePage(url, title, htmlPath, contentHash string, capturedAt ti
 }
 
 // UpdatePageBodyText 更新页面正文文本（用于全文搜索）
-func (db *DB) UpdatePageBodyText(id int64, bodyText string) error {
+func (db *PostgresDB) UpdatePageBodyText(id int64, bodyText string) error {
 	_, err := db.conn.Exec("UPDATE pages SET body_text = $1 WHERE id = $2", bodyText, id)
 	return err
 }
 
 // GetPageByURLAndHash 根据 URL 和内容哈希查找页面
-func (db *DB) GetPageByURLAndHash(url, contentHash string) (*models.Page, error) {
+func (db *PostgresDB) GetPageByURLAndHash(url, contentHash string) (*models.Page, error) {
 	var p models.Page
 	row := db.conn.QueryRow(
 		"SELECT "+pageSelectColumns+" FROM pages WHERE url = $1 AND content_hash = $2 ORDER BY CASE snapshot_state WHEN 'ready' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, first_visited ASC LIMIT 1",
@@ -180,13 +168,13 @@ func (db *DB) GetPageByURLAndHash(url, contentHash string) (*models.Page, error)
 }
 
 // UpdatePageLastVisited 更新页面最后访问时间
-func (db *DB) UpdatePageLastVisited(id int64, lastVisited time.Time) error {
+func (db *PostgresDB) UpdatePageLastVisited(id int64, lastVisited time.Time) error {
 	_, err := db.conn.Exec("UPDATE pages SET last_visited = $1 WHERE id = $2", lastVisited, id)
 	return err
 }
 
 // GetResourceByHash 根据哈希查找资源
-func (db *DB) GetResourceByHash(hash string) (*models.Resource, error) {
+func (db *PostgresDB) GetResourceByHash(hash string) (*models.Resource, error) {
 	var r models.Resource
 	err := db.conn.QueryRow(
 		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE content_hash = $1",
@@ -203,7 +191,7 @@ func (db *DB) GetResourceByHash(hash string) (*models.Resource, error) {
 }
 
 // CreateResource 创建资源记录
-func (db *DB) CreateResource(url, hash, resourceType, filePath string, fileSize int64) (int64, error) {
+func (db *PostgresDB) CreateResource(url, hash, resourceType, filePath string, fileSize int64) (int64, error) {
 	var id int64
 	err := db.conn.QueryRow(
 		"INSERT INTO resources (url, content_hash, resource_type, file_path, file_size) VALUES ($1, $2, $3, $4, $5) RETURNING id",
@@ -213,21 +201,23 @@ func (db *DB) CreateResource(url, hash, resourceType, filePath string, fileSize 
 }
 
 // UpdateResourceLastSeen 更新资源最后见到时间
-func (db *DB) UpdateResourceLastSeen(id int64) error {
-	_, err := db.conn.Exec("UPDATE resources SET last_seen = NOW() WHERE id = $1", id)
+func (db *PostgresDB) UpdateResourceLastSeen(id int64) error {
+	query := fmt.Sprintf("UPDATE resources SET last_seen = %s WHERE id = $1", db.qb.CurrentTimestamp())
+	_, err := db.conn.Exec(query, id)
 	return err
 }
 
-func touchResourcesLastSeen(tx *sql.Tx, resourceIDs []int64) error {
+func (db *PostgresDB) touchResourcesLastSeen(tx *sql.Tx, resourceIDs []int64) error {
 	if len(resourceIDs) == 0 {
 		return nil
 	}
-	_, err := tx.Exec("UPDATE resources SET last_seen = NOW() WHERE id = ANY($1)", pq.Array(resourceIDs))
+	query := fmt.Sprintf("UPDATE resources SET last_seen = %s WHERE id = ANY($1)", db.qb.CurrentTimestamp())
+	_, err := tx.Exec(query, pq.Array(resourceIDs))
 	return err
 }
 
 // LinkPageResource 关联页面和资源
-func (db *DB) LinkPageResource(pageID, resourceID int64) error {
+func (db *PostgresDB) LinkPageResource(pageID, resourceID int64) error {
 	_, err := db.conn.Exec(
 		"INSERT INTO page_resources (page_id, resource_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
 		pageID, resourceID,
@@ -236,7 +226,7 @@ func (db *DB) LinkPageResource(pageID, resourceID int64) error {
 }
 
 // LinkPageResources links a page to all provided resources in a single transaction.
-func (db *DB) LinkPageResources(pageID int64, resourceIDs []int64) error {
+func (db *PostgresDB) LinkPageResources(pageID int64, resourceIDs []int64) error {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return err
@@ -256,7 +246,7 @@ func (db *DB) LinkPageResources(pageID int64, resourceIDs []int64) error {
 }
 
 // CheckRecentCapture 检查最近是否已捕获相同 URL（5分钟内）
-func (db *DB) CheckRecentCapture(url string, within time.Duration) (bool, error) {
+func (db *PostgresDB) CheckRecentCapture(url string, within time.Duration) (bool, error) {
 	var count int
 	err := db.conn.QueryRow(
 		"SELECT COUNT(*) FROM pages WHERE url = $1 AND captured_at > $2",
@@ -266,7 +256,7 @@ func (db *DB) CheckRecentCapture(url string, within time.Duration) (bool, error)
 }
 
 // GetResourceByID 根据 ID 获取资源
-func (db *DB) GetResourceByID(id int64) (*models.Resource, error) {
+func (db *PostgresDB) GetResourceByID(id int64) (*models.Resource, error) {
 	var r models.Resource
 	err := db.conn.QueryRow(
 		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE id = $1",
@@ -283,7 +273,7 @@ func (db *DB) GetResourceByID(id int64) (*models.Resource, error) {
 }
 
 // GetResourceByURL 根据 URL 获取资源（返回最新的）
-func (db *DB) GetResourceByURL(url string) (*models.Resource, error) {
+func (db *PostgresDB) GetResourceByURL(url string) (*models.Resource, error) {
 	var r models.Resource
 	err := db.conn.QueryRow(
 		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE url = $1 ORDER BY last_seen DESC LIMIT 1",
@@ -300,7 +290,7 @@ func (db *DB) GetResourceByURL(url string) (*models.Resource, error) {
 }
 
 // GetResourceByURLLike 根据 URL 模糊匹配查找资源（如忽略查询参数差异）
-func (db *DB) GetResourceByURLLike(pattern string) (*models.Resource, error) {
+func (db *PostgresDB) GetResourceByURLLike(pattern string) (*models.Resource, error) {
 	var r models.Resource
 	err := db.conn.QueryRow(
 		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE url LIKE $1 ORDER BY last_seen DESC LIMIT 1",
@@ -317,7 +307,7 @@ func (db *DB) GetResourceByURLLike(pattern string) (*models.Resource, error) {
 }
 
 // ListPages 列出页面（分页，支持时间和域名过滤）
-func (db *DB) ListPages(limit, offset int, from, to *time.Time, domain string) ([]models.Page, error) {
+func (db *PostgresDB) ListPages(limit, offset int, from, to *time.Time, domain string) ([]models.Page, error) {
 	query := "SELECT " + pageSelectColumns + " FROM pages"
 	args := []interface{}{}
 	argIndex := 1
@@ -370,7 +360,7 @@ func (db *DB) ListPages(limit, offset int, from, to *time.Time, domain string) (
 }
 
 // GetTotalPagesCount 获取页面总数（支持时间和域名过滤）
-func (db *DB) GetTotalPagesCount(from, to *time.Time, domain string) (int, error) {
+func (db *PostgresDB) GetTotalPagesCount(from, to *time.Time, domain string) (int, error) {
 	query := "SELECT COUNT(*) FROM pages"
 	args := []interface{}{}
 	argIndex := 1
@@ -408,7 +398,7 @@ func (db *DB) GetTotalPagesCount(from, to *time.Time, domain string) (int, error
 }
 
 // GetPageByID 根据 ID 获取页面
-func (db *DB) GetPageByID(id string) (*models.Page, error) {
+func (db *PostgresDB) GetPageByID(id string) (*models.Page, error) {
 	var p models.Page
 	row := db.conn.QueryRow(
 		"SELECT "+pageSelectColumns+" FROM pages WHERE id = $1",
@@ -426,8 +416,9 @@ func (db *DB) GetPageByID(id string) (*models.Page, error) {
 }
 
 // SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
-func (db *DB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
-	query := "SELECT " + pageSelectColumns + " FROM pages WHERE (url ILIKE $1 OR title ILIKE $1 OR body_text ILIKE $1)"
+func (db *PostgresDB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
+	likeOp := db.qb.CaseInsensitiveLike()
+	query := fmt.Sprintf("SELECT %s FROM pages WHERE (url %s $1 OR title %s $1 OR body_text %s $1)", pageSelectColumns, likeOp, likeOp, likeOp)
 	args := []interface{}{"%" + keyword + "%"}
 	argIndex := 2
 
@@ -470,7 +461,7 @@ func (db *DB) SearchPages(keyword string, from, to *time.Time, domain string) ([
 }
 
 // GetPagesWithoutBodyText 获取所有没有 body_text 的页面（用于回填）
-func (db *DB) GetPagesWithoutBodyText() ([]models.Page, error) {
+func (db *PostgresDB) GetPagesWithoutBodyText() ([]models.Page, error) {
 	rows, err := db.conn.Query(
 		"SELECT " + pageSelectColumns + " FROM pages WHERE body_text IS NULL ORDER BY id",
 	)
@@ -491,7 +482,7 @@ func (db *DB) GetPagesWithoutBodyText() ([]models.Page, error) {
 }
 
 // GetResourcesByPageID 获取页面关联的所有资源
-func (db *DB) GetResourcesByPageID(pageID int64) ([]models.Resource, error) {
+func (db *PostgresDB) GetResourcesByPageID(pageID int64) ([]models.Resource, error) {
 	rows, err := db.conn.Query(`
 		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
 		FROM resources r
@@ -515,7 +506,7 @@ func (db *DB) GetResourcesByPageID(pageID int64) ([]models.Resource, error) {
 }
 
 // GetResourceByURLAndPageID 根据URL和页面ID查找资源
-func (db *DB) GetResourceByURLAndPageID(url string, pageID int64) (*models.Resource, error) {
+func (db *PostgresDB) GetResourceByURLAndPageID(url string, pageID int64) (*models.Resource, error) {
 	r, err := db.GetLinkedResourceByURLAndPageID(url, pageID)
 	if err != nil || r != nil {
 		return r, err
@@ -526,7 +517,7 @@ func (db *DB) GetResourceByURLAndPageID(url string, pageID int64) (*models.Resou
 }
 
 // GetLinkedResourceByURLAndPageID 根据URL和页面ID查找资源，只查询 page_resources 关联，不做全局兜底
-func (db *DB) GetLinkedResourceByURLAndPageID(url string, pageID int64) (*models.Resource, error) {
+func (db *PostgresDB) GetLinkedResourceByURLAndPageID(url string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
 	err := db.conn.QueryRow(`
 		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
@@ -546,7 +537,7 @@ func (db *DB) GetLinkedResourceByURLAndPageID(url string, pageID int64) (*models
 }
 
 // GetResourceByURLPrefix 根据 URL 前缀匹配资源（处理 DB 中 URL 带 #fragment 的情况）
-func (db *DB) GetResourceByURLPrefix(urlPrefix string, pageID int64) (*models.Resource, error) {
+func (db *PostgresDB) GetResourceByURLPrefix(urlPrefix string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
 	escapedPrefix := escapeLikePattern(urlPrefix)
 	err := db.conn.QueryRow(`
@@ -568,7 +559,7 @@ func (db *DB) GetResourceByURLPrefix(urlPrefix string, pageID int64) (*models.Re
 }
 
 // GetResourceByURLPath 根据 URL 路径匹配资源（忽略查询参数，用于同一图片不同 token 的情况）
-func (db *DB) GetResourceByURLPath(urlPath string, pageID int64) (*models.Resource, error) {
+func (db *PostgresDB) GetResourceByURLPath(urlPath string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
 	escapedPath := escapeLikePattern(urlPath)
 	err := db.conn.QueryRow(`
@@ -590,34 +581,29 @@ func (db *DB) GetResourceByURLPath(urlPath string, pageID int64) (*models.Resour
 }
 
 // UpdatePageContent 更新页面内容（HTML路径、哈希、标题、最后访问时间）
-func (db *DB) UpdatePageContent(id int64, htmlPath, contentHash, title string) error {
-	_, err := db.conn.Exec(
-		"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = NOW() WHERE id = $5",
-		htmlPath, contentHash, title, models.SnapshotStateReady, id,
-	)
+func (db *PostgresDB) UpdatePageContent(id int64, htmlPath, contentHash, title string) error {
+	query := fmt.Sprintf("UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = %s WHERE id = $5", db.qb.CurrentTimestamp())
+	_, err := db.conn.Exec(query, htmlPath, contentHash, title, models.SnapshotStateReady, id)
 	return err
 }
 
 // ReplacePageSnapshot atomically swaps the page HTML metadata and resource links.
-func (db *DB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title string, bodyText *string, resourceIDs []int64) error {
+func (db *PostgresDB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title string, bodyText *string, resourceIDs []int64) error {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
+	nowSQL := db.qb.CurrentTimestamp()
 	if bodyText != nil {
-		if _, err := tx.Exec(
-			"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, body_text = $4, snapshot_state = $5, last_visited = NOW() WHERE id = $6",
-			htmlPath, contentHash, title, *bodyText, models.SnapshotStateReady, id,
-		); err != nil {
+		query := fmt.Sprintf("UPDATE pages SET html_path = $1, content_hash = $2, title = $3, body_text = $4, snapshot_state = $5, last_visited = %s WHERE id = $6", nowSQL)
+		if _, err := tx.Exec(query, htmlPath, contentHash, title, *bodyText, models.SnapshotStateReady, id); err != nil {
 			return err
 		}
 	} else {
-		if _, err := tx.Exec(
-			"UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = NOW() WHERE id = $5",
-			htmlPath, contentHash, title, models.SnapshotStateReady, id,
-		); err != nil {
+		query := fmt.Sprintf("UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = %s WHERE id = $5", nowSQL)
+		if _, err := tx.Exec(query, htmlPath, contentHash, title, models.SnapshotStateReady, id); err != nil {
 			return err
 		}
 	}
@@ -625,7 +611,7 @@ func (db *DB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title string,
 	if _, err := tx.Exec("DELETE FROM page_resources WHERE page_id = $1", id); err != nil {
 		return err
 	}
-	if err := touchResourcesLastSeen(tx, resourceIDs); err != nil {
+	if err := db.touchResourcesLastSeen(tx, resourceIDs); err != nil {
 		return err
 	}
 
@@ -641,7 +627,7 @@ func (db *DB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title string,
 	return tx.Commit()
 }
 
-func (db *DB) ResetPageForCreateRetry(id int64, title, htmlPath string, capturedAt time.Time) (string, error) {
+func (db *PostgresDB) ResetPageForCreateRetry(id int64, title, htmlPath string, capturedAt time.Time) (string, error) {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return "", err
@@ -664,7 +650,7 @@ func (db *DB) ResetPageForCreateRetry(id int64, title, htmlPath string, captured
 	return oldHTMLPath, nil
 }
 
-func (db *DB) FinalizePageCreate(id int64, resourceIDs []int64) error {
+func (db *PostgresDB) FinalizePageCreate(id int64, resourceIDs []int64) error {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return err
@@ -677,7 +663,7 @@ func (db *DB) FinalizePageCreate(id int64, resourceIDs []int64) error {
 	if _, err := tx.Exec("DELETE FROM page_resources WHERE page_id = $1", id); err != nil {
 		return err
 	}
-	if err := touchResourcesLastSeen(tx, resourceIDs); err != nil {
+	if err := db.touchResourcesLastSeen(tx, resourceIDs); err != nil {
 		return err
 	}
 	for _, resourceID := range resourceIDs {
@@ -692,13 +678,13 @@ func (db *DB) FinalizePageCreate(id int64, resourceIDs []int64) error {
 	return tx.Commit()
 }
 
-func (db *DB) MarkPageCreateFailed(id int64) error {
+func (db *PostgresDB) MarkPageCreateFailed(id int64) error {
 	_, err := db.conn.Exec("UPDATE pages SET snapshot_state = $1 WHERE id = $2", models.SnapshotStateFailed, id)
 	return err
 }
 
 // GetPagesByURL 获取同一 URL 的所有快照（按时间倒序）
-func (db *DB) GetPagesByURL(pageURL string) ([]models.Page, error) {
+func (db *PostgresDB) GetPagesByURL(pageURL string) ([]models.Page, error) {
 	rows, err := db.conn.Query(
 		"SELECT "+pageSelectColumns+" FROM pages WHERE url = $1 ORDER BY first_visited DESC",
 		pageURL,
@@ -720,7 +706,7 @@ func (db *DB) GetPagesByURL(pageURL string) ([]models.Page, error) {
 }
 
 // GetSnapshotNeighbors 获取某个快照的前后快照（用于导航）
-func (db *DB) GetSnapshotNeighbors(pageURL string, currentID int64) (prev *models.Page, next *models.Page, total int, err error) {
+func (db *PostgresDB) GetSnapshotNeighbors(pageURL string, currentID int64) (prev *models.Page, next *models.Page, total int, err error) {
 	// 获取总数
 	err = db.conn.QueryRow("SELECT COUNT(*) FROM pages WHERE url = $1", pageURL).Scan(&total)
 	if err != nil {
@@ -758,13 +744,13 @@ func (db *DB) GetSnapshotNeighbors(pageURL string, currentID int64) (prev *model
 }
 
 // DeletePageResources 删除页面资源关联（不删除资源本身）
-func (db *DB) DeletePageResources(pageID int64) error {
+func (db *PostgresDB) DeletePageResources(pageID int64) error {
 	_, err := db.conn.Exec("DELETE FROM page_resources WHERE page_id = $1", pageID)
 	return err
 }
 
 // DeletePage 删除页面记录（包括关联关系）
-func (db *DB) DeletePage(id int64) error {
+func (db *PostgresDB) DeletePage(id int64) error {
 	// 开启事务
 	tx, err := db.conn.Begin()
 	if err != nil {

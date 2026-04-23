@@ -12,6 +12,9 @@ RUN cd browser && VERSION=${VERSION} npm run build --silent
 # Stage 2: Build Go server
 FROM golang:1.24-alpine AS server-builder
 
+# Install build dependencies for CGO (required by go-sqlite3)
+RUN apk add --no-cache gcc musl-dev sqlite-dev
+
 WORKDIR /build
 COPY server/go.mod server/go.sum ./server/
 RUN cd server && go mod download
@@ -20,7 +23,8 @@ COPY server/ ./server/
 ARG VERSION=docker
 ARG BUILD_TIME
 RUN cd server && \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=1 GOOS=linux go build \
+    -tags fts5 \
     -ldflags "-X 'main.Version=${VERSION}' -X 'main.BuildTime=${BUILD_TIME}'" \
     -o wayback-server ./cmd/server
 

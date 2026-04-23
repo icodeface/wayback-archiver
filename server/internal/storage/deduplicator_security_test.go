@@ -44,12 +44,18 @@ func TestProcessResource_FallbackOnDownloadFailure(t *testing.T) {
 
 // TestProcessCapture_ContentDeduplication 测试页面内容去重
 func TestProcessCapture_ContentDeduplication(t *testing.T) {
-	db, err := database.New("localhost", "5432", "apple", "", "wayback")
+	dbInterface, err := database.New("localhost", "5432", "apple", "", "wayback")
 	if err != nil {
 		t.Skip("PostgreSQL not available:", err)
 		return
 	}
-	defer db.Close()
+	defer dbInterface.Close()
+
+	// 类型断言
+	db, ok := dbInterface.(*database.DB)
+	if !ok {
+		t.Fatalf("Expected *database.DB, got %T", dbInterface)
+	}
 	skipIfNoDB(t, db)
 
 	fs := NewFileStorage(t.TempDir())
