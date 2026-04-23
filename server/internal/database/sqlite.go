@@ -105,6 +105,41 @@ func (db *SQLiteDB) ensureMigrations() error {
 		return err
 	}
 
+	if err := db.ensureFTSConsistency(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *SQLiteDB) ensureFTSConsistency() error {
+	const recreateFTSTriggers = `
+DROP TRIGGER IF EXISTS pages_fts_insert;
+DROP TRIGGER IF EXISTS pages_fts_update;
+DROP TRIGGER IF EXISTS pages_fts_delete;
+
+CREATE TRIGGER pages_fts_insert AFTER INSERT ON pages BEGIN
+	INSERT INTO pages_fts(rowid, body_text, title) VALUES (new.id, new.body_text, new.title);
+END;
+
+CREATE TRIGGER pages_fts_update AFTER UPDATE ON pages BEGIN
+	INSERT INTO pages_fts(pages_fts, rowid, body_text, title) VALUES ('delete', old.id, old.body_text, old.title);
+	INSERT INTO pages_fts(rowid, body_text, title) VALUES (new.id, new.body_text, new.title);
+END;
+
+CREATE TRIGGER pages_fts_delete AFTER DELETE ON pages BEGIN
+	INSERT INTO pages_fts(pages_fts, rowid, body_text, title) VALUES ('delete', old.id, old.body_text, old.title);
+END;
+`
+
+	if _, err := db.conn.Exec(recreateFTSTriggers); err != nil {
+		return fmt.Errorf("failed to recreate SQLite FTS triggers: %w", err)
+	}
+
+	if _, err := db.conn.Exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild')"); err != nil {
+		return fmt.Errorf("failed to rebuild SQLite FTS index: %w", err)
+	}
+
 	return nil
 }
 
@@ -460,11 +495,13 @@ func (db *SQLiteDB) GetPageByID(id string) (*models.Page, error) {
 
 // SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
 func (db *SQLiteDB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
-	// SQLite 使用 FTS5 全文搜索
-	query := `SELECT ` + pageSelectColumns + ` FROM pages WHERE id IN (
-		SELECT rowid FROM pages_fts WHERE pages_fts MATCH ?
-	)`
-	args := []interface{}{keyword + "*"} // FTS5 前缀匹配
+	query := `SELECT ` + pageSelectColumns + ` FROM pages WHERE (` +
+		`LOWER(COALESCE(url, '')) LIKE LOWER(?) OR ` +
+		`LOWER(COALESCE(title, '')) LIKE LOWER(?) OR ` +
+		`LOWER(COALESCE(body_text, '')) LIKE LOWER(?)` +
+		`)`
+	pattern := "%" + keyword + "%"
+	args := []interface{}{pattern, pattern, pattern}
 
 	// 追加时间过滤条件
 	if from != nil {
