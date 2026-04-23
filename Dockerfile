@@ -41,10 +41,6 @@ COPY --from=server-builder /build/server/wayback-server /app/
 RUN mkdir -p /app/bin
 COPY --from=script-builder /build/browser/dist/wayback-userscript.js /app/bin/
 
-# Copy database initialization files
-COPY server/init_db.sql /app/
-COPY server/migrations/ /app/migrations/
-
 # Create data directory
 RUN mkdir -p /app/data/logs
 

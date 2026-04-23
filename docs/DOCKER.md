@@ -35,7 +35,6 @@ docker run -d \
   -e POSTGRES_PASSWORD=wayback \
   -e POSTGRES_DB=wayback \
   -v wayback_postgres:/var/lib/postgresql/data \
-  -v $(pwd)/server/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro \
   postgres:16-alpine
 
 # Run server

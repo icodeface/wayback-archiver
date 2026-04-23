@@ -79,15 +79,12 @@ tar -xzf wayback-server-*.tar.gz
 **方式二：PostgreSQL**
 
 ```bash
-createdb -U postgres wayback
-
-# 执行建表脚本（init_db.sql 已包含在 release 压缩包中）
-psql -U postgres wayback < init_db.sql
-
 # 在 .env 中配置数据库连接
 echo "DB_TYPE=postgres" >> .env
 echo "DB_NAME=wayback" >> .env
 ```
+
+服务启动时会自动创建配置的 PostgreSQL 数据库和表。如果目标数据库还不存在，当前配置的数据库用户需要具备建库权限。
 
 > **旧版本升级说明：** 从 **`< 1.1.0`** 升级到 `1.1.0` 或更新版本时，需要补齐 `pages.snapshot_state` 列。当前版本服务启动时会自动补齐这组变更；如果数据库账号没有 `ALTER TABLE` 权限，也可以手动执行下面这组幂等 SQL：
 >

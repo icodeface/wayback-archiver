@@ -2,6 +2,8 @@ package database
 
 import (
 	"database/sql"
+	_ "embed"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +11,9 @@ import (
 	"github.com/lib/pq"
 	"wayback/internal/models"
 )
+
+//go:embed schema/init_postgres.sql
+var postgresSchema string
 
 // PostgresDB PostgreSQL 数据库实现
 type PostgresDB struct {
@@ -32,7 +37,48 @@ func NewPostgres(host, port, user, password, dbname string, sslmode ...string) (
 		mode = sslmode[0]
 	}
 
-	connStr := buildConnectionString(host, port, user, password, dbname, mode)
+	conn, err := openPostgresConnection(host, port, user, password, dbname, mode)
+	if err != nil {
+		if !isMissingDatabaseError(err) {
+			return nil, err
+		}
+
+		if err := ensurePostgresDatabase(host, port, user, password, dbname, mode); err != nil {
+			return nil, err
+		}
+
+		conn, err = openPostgresConnection(host, port, user, password, dbname, mode)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	db := &PostgresDB{
+		conn: conn,
+		qb:   NewQueryBuilder(DBTypePostgreSQL),
+	}
+	if err := db.ensureSchema(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to initialize PostgreSQL schema: %w", err)
+	}
+	if err := db.ensureResourcesContentHashNotUnique(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to ensure resources content_hash is not unique: %w", err)
+	}
+	if err := db.ensureDomainColumn(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to ensure domain column: %w", err)
+	}
+	if err := db.ensureSnapshotStateColumn(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to ensure snapshot_state column: %w", err)
+	}
+
+	return db, nil
+}
+
+func openPostgresConnection(host, port, user, password, dbname, sslmode string) (*sql.DB, error) {
+	connStr := buildConnectionString(host, port, user, password, dbname, sslmode)
 
 	conn, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -45,24 +91,11 @@ func NewPostgres(host, port, user, password, dbname string, sslmode ...string) (
 	conn.SetConnMaxLifetime(5 * time.Minute) // 连接最大生命周期
 
 	if err := conn.Ping(); err != nil {
+		conn.Close()
 		return nil, err
 	}
 
-	db := &PostgresDB{
-		conn: conn,
-		qb:   NewQueryBuilder(DBTypePostgreSQL),
-	}
-	if err := db.ensureResourcesContentHashNotUnique(); err != nil {
-		return nil, fmt.Errorf("failed to ensure resources content_hash is not unique: %w", err)
-	}
-	if err := db.ensureDomainColumn(); err != nil {
-		return nil, fmt.Errorf("failed to ensure domain column: %w", err)
-	}
-	if err := db.ensureSnapshotStateColumn(); err != nil {
-		return nil, fmt.Errorf("failed to ensure snapshot_state column: %w", err)
-	}
-
-	return db, nil
+	return conn, nil
 }
 
 func buildConnectionString(host, port, user, password, dbname, sslmode string) string {
@@ -87,6 +120,105 @@ func quoteConnValue(value string) string {
 	escaped := strings.ReplaceAll(value, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
 	return "'" + escaped + "'"
+}
+
+func ensurePostgresDatabase(host, port, user, password, dbname, sslmode string) error {
+	for _, maintenanceDB := range maintenanceDatabaseNames(dbname) {
+		conn, err := openPostgresConnection(host, port, user, password, maintenanceDB, sslmode)
+		if err != nil {
+			if isMissingDatabaseError(err) {
+				continue
+			}
+			return fmt.Errorf("failed to connect to PostgreSQL maintenance database %q: %w", maintenanceDB, err)
+		}
+
+		err = createDatabaseIfMissing(conn, dbname)
+		conn.Close()
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+
+	return fmt.Errorf("failed to create PostgreSQL database %q: no available maintenance database", dbname)
+}
+
+func maintenanceDatabaseNames(targetDB string) []string {
+	names := []string{"postgres", "template1"}
+	if targetDB == "" {
+		return names
+	}
+
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != targetDB {
+			filtered = append(filtered, name)
+		}
+	}
+	if len(filtered) == 0 {
+		return names
+	}
+	return filtered
+}
+
+func createDatabaseIfMissing(conn *sql.DB, dbname string) error {
+	var exists int
+	err := conn.QueryRow("SELECT 1 FROM pg_database WHERE datname = $1", dbname).Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to check PostgreSQL database %q: %w", dbname, err)
+	}
+
+	_, err = conn.Exec("CREATE DATABASE " + pq.QuoteIdentifier(dbname))
+	if err != nil && !isDuplicateDatabaseError(err) {
+		return fmt.Errorf("failed to create PostgreSQL database %q: %w", dbname, err)
+	}
+
+	return nil
+}
+
+func isMissingDatabaseError(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "3D000"
+}
+
+func isDuplicateDatabaseError(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "42P04"
+}
+
+func isOptionalTrigramExtensionError(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+
+	switch pqErr.Code {
+	case "42501", "58P01":
+		return true
+	default:
+		return false
+	}
+}
+
+func (db *PostgresDB) ensureSchema() error {
+	if err := db.ensureTrigramExtension(); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(postgresSchema); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (db *PostgresDB) ensureTrigramExtension() error {
+	_, err := db.conn.Exec(`CREATE EXTENSION IF NOT EXISTS pg_trgm`)
+	if err == nil || isOptionalTrigramExtensionError(err) {
+		return nil
+	}
+	return err
 }
 
 func (db *PostgresDB) ensureResourcesContentHashNotUnique() error {

@@ -13,7 +13,7 @@ import (
 	"wayback/internal/models"
 )
 
-//go:embed migrations/sqlite/init_db.sql
+//go:embed schema/init_sqlite.sql
 var sqliteSchema string
 
 // SQLiteDB SQLite 数据库实现

@@ -57,16 +57,12 @@ No setup required! The database file will be created automatically at `./data/wa
 **Option 2: PostgreSQL**
 
 ```bash
-# Create database (PostgreSQL 默认使用当前系统用户名)
-createdb wayback
-
-# Run schema (init_db.sql is included in the release archive)
-psql wayback < init_db.sql
-
 # Configure database connection in .env
 echo "DB_TYPE=postgres" >> .env
 echo "DB_NAME=wayback" >> .env
 ```
+
+Server startup automatically creates the configured PostgreSQL database and tables. If the database does not exist yet, the configured user must have permission to create databases.
 
 > **Upgrade note for existing installs:** Any installation upgrading from **`< 1.1.0`** to `1.1.0` or later needs the `pages.snapshot_state` column. The server applies this automatically during startup when the database user has sufficient privileges. Otherwise, run the following idempotent SQL manually first:
 >

@@ -145,7 +145,6 @@ jobs:
             cp artifacts/browser-assets/wayback-userscript.js "$staging/"
             cp artifacts/browser-assets/wayback-puppeteer.js "$staging/"
             cp .env.example "$staging/"
-            cp server/init_db.sql "$staging/"
             if [[ "$base" == *.exe ]]; then
               (cd "$staging" && zip -r "../../${name}.zip" .)
             else

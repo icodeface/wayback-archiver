@@ -1,7 +1,9 @@
 package database
 
 import (
+	"errors"
 	"fmt"
+	"github.com/lib/pq"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +26,52 @@ func TestBuildConnectionString_CustomSSLMode(t *testing.T) {
 		if !strings.Contains(connStr, want) {
 			t.Fatalf("connection string %q missing %q", connStr, want)
 		}
+	}
+}
+
+func TestMaintenanceDatabaseNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		want   []string
+	}{
+		{name: "default", target: "", want: []string{"postgres", "template1"}},
+		{name: "exclude postgres", target: "postgres", want: []string{"template1"}},
+		{name: "exclude template1", target: "template1", want: []string{"postgres"}},
+		{name: "exclude custom", target: "wayback", want: []string{"postgres", "template1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := maintenanceDatabaseNames(tt.target)
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("maintenanceDatabaseNames(%q) = %v, want %v", tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPostgresErrorHelpers(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		check func(error) bool
+		want  bool
+	}{
+		{name: "missing database", err: &pq.Error{Code: "3D000"}, check: isMissingDatabaseError, want: true},
+		{name: "duplicate database", err: &pq.Error{Code: "42P04"}, check: isDuplicateDatabaseError, want: true},
+		{name: "optional extension insufficient privilege", err: &pq.Error{Code: "42501"}, check: isOptionalTrigramExtensionError, want: true},
+		{name: "optional extension missing control file", err: &pq.Error{Code: "58P01"}, check: isOptionalTrigramExtensionError, want: true},
+		{name: "wrapped missing database", err: fmt.Errorf("wrapped: %w", &pq.Error{Code: "3D000"}), check: isMissingDatabaseError, want: true},
+		{name: "unrelated error", err: errors.New("boom"), check: isMissingDatabaseError, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.check(tt.err); got != tt.want {
+				t.Fatalf("check(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
 
