@@ -9,28 +9,18 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build-script:
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache-dependency-path: server/go.sum
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: browser/package-lock.json
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-multilib gcc-aarch64-linux-gnu gcc-mingw-w64 libsqlite3-dev
 
       - name: Install browser dependencies
         run: cd browser && npm ci
@@ -40,22 +30,127 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
 
-      - name: Cross-compile all platforms
-        run: make all
+      - name: Upload browser assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-assets
+          path: |
+            bin/wayback-userscript.js
+            bin/wayback-puppeteer.js
+
+  build-server:
+    name: Build ${{ matrix.binary }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - binary: wayback-server-linux-amd64
+            runs-on: ubuntu-22.04
+            goos: linux
+            goarch: amd64
+            install: sudo apt-get update && sudo apt-get install -y gcc
+            cc: ""
+          - binary: wayback-server-linux-arm64
+            runs-on: ubuntu-22.04-arm
+            goos: linux
+            goarch: arm64
+            install: sudo apt-get update && sudo apt-get install -y gcc
+            cc: ""
+          - binary: wayback-server-darwin-amd64
+            runs-on: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            install: ""
+            cc: ""
+          - binary: wayback-server-darwin-arm64
+            runs-on: macos-14
+            goos: darwin
+            goarch: arm64
+            install: ""
+            cc: ""
+          - binary: wayback-server-windows-amd64
+            runs-on: ubuntu-22.04
+            goos: windows
+            goarch: amd64
+            install: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64
+            cc: x86_64-w64-mingw32-gcc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: server/go.sum
+
+      - name: Install toolchain
+        if: matrix.install != ''
+        run: ${{ matrix.install }}
+
+      - name: Build server binary
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euxo pipefail
+          mkdir -p bin
+          ext=""
+          if [ "$GOOS" = "windows" ]; then
+            ext=".exe"
+            export CC="${{ matrix.cc }}"
+          fi
+          build_time="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          cd server
+          CGO_ENABLED=1 go build \
+            -tags fts5 \
+            -ldflags "-X 'main.Version=${VERSION}' -X 'main.BuildTime=${build_time}'" \
+            -o "../bin/${{ matrix.binary }}${ext}" \
+            ./cmd/server
+
+      - name: Upload server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/${{ matrix.binary }}*
+
+  release:
+    needs:
+      - build-script
+      - build-server
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
 
       - name: Package release artifacts
+        shell: bash
         run: |
-          cp .env.example bin/
-          cp server/init_db.sql bin/
-          cd bin
-          for f in wayback-server-*; do
-            name="${f%.*}"
-            ext="${f##*.}"
-            if [ "$ext" = "exe" ]; then
-              zip "${name}.zip" "$f" wayback-userscript.js wayback-puppeteer.js .env.example init_db.sql
+          set -euxo pipefail
+          mkdir -p dist dist/staging
+          for f in artifacts/server-*/*; do
+            base="$(basename "$f")"
+            name="${base%.exe}"
+            staging="dist/staging/${name}"
+            rm -rf "$staging"
+            mkdir -p "$staging"
+            cp "$f" "$staging/$base"
+            cp artifacts/browser-assets/wayback-userscript.js "$staging/"
+            cp artifacts/browser-assets/wayback-puppeteer.js "$staging/"
+            cp .env.example "$staging/"
+            cp server/init_db.sql "$staging/"
+            if [[ "$base" == *.exe ]]; then
+              (cd "$staging" && zip -r "../../${name}.zip" .)
             else
-              chmod +x "$f"
-              tar czf "${name}.tar.gz" "$f" wayback-userscript.js wayback-puppeteer.js .env.example init_db.sql
+              chmod +x "$staging/$base"
+              (cd "$staging" && tar czf "../../${name}.tar.gz" .)
             fi
           done
 
@@ -64,7 +159,7 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            bin/*.tar.gz
-            bin/*.zip
-            bin/wayback-userscript.js
-            bin/wayback-puppeteer.js
+            dist/*.tar.gz
+            dist/*.zip
+            artifacts/browser-assets/wayback-userscript.js
+            artifacts/browser-assets/wayback-puppeteer.js
