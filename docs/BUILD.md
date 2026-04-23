@@ -48,10 +48,14 @@ make script
 make all
 ```
 
-Outputs binaries for:
+This target only sets `GOOS`/`GOARCH`. Because the server uses the CGO-based SQLite driver, some targets also require a matching native or cross C toolchain.
+
+The official GitHub Release workflow avoids this problem by building each release artifact on a matching runner instead of relying on a single Linux cross-compile job.
+
+Current release artifacts are built for:
 - Linux (amd64, arm64)
 - macOS (amd64, arm64)
-- Windows (amd64, arm64)
+- Windows (amd64)
 
 All binaries are placed in `bin/wayback-server-<os>-<arch>`.
 
