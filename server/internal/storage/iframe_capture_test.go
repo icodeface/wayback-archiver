@@ -22,9 +22,14 @@ func newFrameCaptureTestDeduplicator(t *testing.T) (*Deduplicator, *database.DB,
 		user = "apple"
 	}
 
-	db, err := database.New("localhost", "5432", user, "", "wayback")
+	dbInterface, err := database.New("localhost", "5432", user, "", "wayback")
 	if err != nil {
 		t.Skip("PostgreSQL not available:", err)
+	}
+
+	db, ok := dbInterface.(*database.DB)
+	if !ok {
+		t.Fatalf("Expected *database.DB, got %T", dbInterface)
 	}
 	skipIfNoDB(t, db)
 

@@ -70,9 +70,14 @@ func testDBUser() string {
 func newIntegrationTestDeduplicator(t *testing.T) (*storage.Deduplicator, *database.DB, string) {
 	t.Helper()
 
-	db, err := database.New("localhost", "5432", testDBUser(), "", "wayback")
+	dbInterface, err := database.New("localhost", "5432", testDBUser(), "", "wayback")
 	if err != nil {
 		t.Skipf("Skipping integration test (cannot connect to DB): %v", err)
+	}
+
+	db, ok := dbInterface.(*database.DB)
+	if !ok {
+		t.Fatalf("Expected *database.DB, got %T", dbInterface)
 	}
 
 	dataDir := t.TempDir()

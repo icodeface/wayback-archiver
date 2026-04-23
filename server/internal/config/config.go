@@ -19,6 +19,8 @@ type Config struct {
 
 // DatabaseConfig holds database connection settings
 type DatabaseConfig struct {
+	Type     string // "sqlite" 或 "postgres"
+	Path     string // SQLite 数据库文件路径
 	Host     string
 	Port     int
 	User     string
@@ -92,14 +94,20 @@ func (a *AuthConfig) Enabled() bool {
 
 // LoadFromEnv loads configuration from environment variables with sensible defaults
 func LoadFromEnv() (*Config, error) {
+	dbType := getEnv("DB_TYPE", "sqlite")
+
 	// 默认使用当前系统用户名作为数据库用户（PostgreSQL 默认行为）
 	defaultUser := os.Getenv("USER")
 	if defaultUser == "" {
 		defaultUser = "postgres" // fallback for systems without USER env var
 	}
 
+	dataDir := getEnv("DATA_DIR", "./data")
+
 	cfg := &Config{
 		Database: DatabaseConfig{
+			Type:     dbType,
+			Path:     getEnv("DB_PATH", dataDir+"/wayback.db"),
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnvInt("DB_PORT", 5432),
 			User:     getEnv("DB_USER", defaultUser),
@@ -115,8 +123,8 @@ func LoadFromEnv() (*Config, error) {
 			CompressionLevel: getEnvInt("COMPRESSION_LEVEL", -1), // -1 = DefaultCompression
 		},
 		Storage: StorageConfig{
-			DataDir: getEnv("DATA_DIR", "./data"),
-			LogDir:  getEnv("LOG_DIR", "./data/logs"),
+			DataDir: dataDir,
+			LogDir:  getEnv("LOG_DIR", dataDir+"/logs"),
 		},
 		Auth: AuthConfig{
 			Password: getEnv("AUTH_PASSWORD", ""),
@@ -124,12 +132,20 @@ func LoadFromEnv() (*Config, error) {
 		Resource: detectResourceConfig(),
 	}
 
-	// Validate required fields
-	if cfg.Database.User == "" {
-		return nil, fmt.Errorf("DB_USER is required")
-	}
-	if cfg.Database.DBName == "" {
-		return nil, fmt.Errorf("DB_NAME is required")
+	// Validate required fields based on database type
+	if cfg.Database.Type == "postgres" || cfg.Database.Type == "postgresql" {
+		if cfg.Database.User == "" {
+			return nil, fmt.Errorf("DB_USER is required for PostgreSQL")
+		}
+		if cfg.Database.DBName == "" {
+			return nil, fmt.Errorf("DB_NAME is required for PostgreSQL")
+		}
+	} else if cfg.Database.Type == "sqlite" {
+		if cfg.Database.Path == "" {
+			return nil, fmt.Errorf("DB_PATH is required for SQLite")
+		}
+	} else {
+		return nil, fmt.Errorf("unsupported DB_TYPE: %q (use \"sqlite\" or \"postgres\")", cfg.Database.Type)
 	}
 
 	return cfg, nil

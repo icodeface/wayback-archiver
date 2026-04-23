@@ -5,10 +5,12 @@ Quick guide to deploy Wayback Archiver on a remote server.
 ## Prerequisites
 
 - Linux server with public IP or domain
-- PostgreSQL 12+
-- Go 1.21+
+- Go 1.21+ and GCC (for building from source)
+- **PostgreSQL 12+** (recommended for remote deployment with multiple users)
 
-## 1. Install PostgreSQL
+## 1. Database Setup
+
+### PostgreSQL (Recommended)
 
 ```bash
 # Ubuntu/Debian
@@ -33,17 +35,44 @@ GRANT ALL PRIVILEGES ON DATABASE wayback TO wayback;
 \q
 ```
 
+### SQLite (Alternative for single-user)
+
+If you prefer SQLite for a single-user remote deployment, no database setup is required. The database file will be created automatically. Skip to step 2 and use the SQLite configuration.
+
 ## 2. Configure Server
 
 Create `.env` file in project root:
 
+**PostgreSQL configuration (recommended):**
+
 ```bash
 # Database
+DB_TYPE=postgres
 DB_HOST=localhost
 DB_PORT=5432
 DB_USER=wayback
 DB_PASSWORD=your_secure_password
 DB_NAME=wayback
+
+# Server
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8080
+
+# Security (REQUIRED)
+AUTH_PASSWORD=your_auth_password
+ENABLE_DEBUG_API=false
+ALLOWED_ORIGINS=http://your-server-ip:8080
+
+# Storage
+DATA_DIR=/var/wayback/data
+```
+
+**SQLite configuration (alternative for single-user):**
+
+```bash
+# Database
+DB_TYPE=sqlite
+DB_PATH=/var/wayback/data/wayback.db
 
 # Server
 SERVER_HOST=0.0.0.0
@@ -78,7 +107,7 @@ For production, use systemd:
 # /etc/systemd/system/wayback.service
 [Unit]
 Description=Wayback Archiver
-After=network.target postgresql.service
+After=network.target
 
 [Service]
 Type=simple
@@ -149,13 +178,23 @@ Test browser extension:
 
 ## Backup
 
-Database backup:
+**SQLite backup:**
+
+```bash
+# Database file
+cp /var/wayback/data/wayback.db wayback_$(date +%Y%m%d).db
+
+# Or compressed
+gzip -c /var/wayback/data/wayback.db > wayback_$(date +%Y%m%d).db.gz
+```
+
+**PostgreSQL backup:**
 
 ```bash
 pg_dump -U wayback wayback | gzip > wayback_$(date +%Y%m%d).sql.gz
 ```
 
-Files backup:
+**Files backup:**
 
 ```bash
 tar -czf wayback_data_$(date +%Y%m%d).tar.gz /var/wayback/data
@@ -169,7 +208,7 @@ tar -czf wayback_data_$(date +%Y%m%d).tar.gz /var/wayback/data
 
 **Connection refused**: Check firewall and server is running on `0.0.0.0`
 
-**Database error**: Verify PostgreSQL is running and credentials are correct
+**Database error**: Verify database configuration; for PostgreSQL check it's running and credentials are correct
 
 ---
 

@@ -5,6 +5,7 @@ This guide covers manual compilation of Wayback Archiver. For most users, downlo
 ## Prerequisites
 
 - **Go** 1.21+
+- **GCC** (required by SQLite driver, CGO)
 - **Node.js** 16+ (for building the userscript)
 - **Make** (optional, for using Makefile targets)
 
@@ -24,8 +25,10 @@ make build
 ```
 
 This compiles:
-- Go server binary → `bin/wayback-server`
+- Go server binary with SQLite support → `bin/wayback-server`
 - Tampermonkey userscript → `bin/wayback-userscript.js`
+
+**Note**: The build automatically includes the `fts5` tag for SQLite full-text search support.
 
 ### 3. Build Server Only
 
@@ -58,10 +61,12 @@ All binaries are placed in `bin/wayback-server-<os>-<arch>`.
 
 ```bash
 cd server
-go build -o ../bin/wayback-server \
+go build -tags fts5 -o ../bin/wayback-server \
   -ldflags "-X main.Version=$(git describe --tags --always) -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   ./cmd/server
 ```
+
+**Important**: The `-tags fts5` flag is required for SQLite full-text search support.
 
 ### Userscript
 

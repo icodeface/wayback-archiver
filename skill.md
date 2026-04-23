@@ -23,8 +23,8 @@ Use this skill when the user wants to:
 
 Before using this skill, ensure the Wayback Archiver server is running:
 
-- **PostgreSQL** 14+
 - **Chrome** or **Firefox** with [Tampermonkey](https://www.tampermonkey.net/) extension (v5.3+)
+- **Database** (optional): SQLite (default, zero-config) or PostgreSQL 14+ (for remote deployment)
 
 ## Quick Start
 
@@ -48,12 +48,24 @@ tar -xzf wayback-server-*.tar.gz
 
 ### 2. Setup Database
 
+By default, Wayback Archiver uses SQLite (zero-config, single-file database). For remote deployment with multiple users, PostgreSQL is recommended.
+
+**Option 1: SQLite (Default)**
+
+No setup required! The database file will be created automatically at `./data/wayback.db` on first run.
+
+**Option 2: PostgreSQL**
+
 ```bash
 # Create database (PostgreSQL 默认使用当前系统用户名)
 createdb wayback
 
 # Run schema (init_db.sql is included in the release archive)
 psql wayback < init_db.sql
+
+# Configure database connection in .env
+echo "DB_TYPE=postgres" >> .env
+echo "DB_NAME=wayback" >> .env
 ```
 
 > **Upgrade note for existing installs:** Any installation upgrading from **`< 1.1.0`** to `1.1.0` or later needs the `pages.snapshot_state` column. The server applies this automatically during startup when the database user has sufficient privileges. Otherwise, run the following idempotent SQL manually first:
@@ -207,7 +219,7 @@ See [docs/BUILD.md](https://github.com/icodeface/wayback-archiver/blob/main/docs
 
 | Issue | Solution |
 |-------|----------|
-| Server won't start | Check PostgreSQL is running and database exists |
+| Server won't start | Check database configuration; for PostgreSQL ensure it's running and database exists |
 | Pages not archiving | Verify Tampermonkey script is enabled and server is reachable |
 | Missing resources | Check proxy settings if behind corporate firewall |
 | Authentication errors | Verify `AUTH_PASSWORD` env var matches your curl credentials |
@@ -220,6 +232,10 @@ The server automatically loads `.env` from the working directory if it exists.
 
 ```bash
 # Database
+DB_TYPE=sqlite  # "sqlite" (default) or "postgres"
+DB_PATH=./data/wayback.db  # SQLite database file path (when DB_TYPE=sqlite)
+
+# PostgreSQL configuration (when DB_TYPE=postgres)
 DB_HOST=localhost
 DB_PORT=5432
 DB_USER=postgres  # 可选，PostgreSQL 默认使用系统用户名

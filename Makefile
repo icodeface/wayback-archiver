@@ -1,5 +1,8 @@
 .PHONY: build all server script test test-go test-e2e clean docker-build docker-up docker-down docker-logs
 
+# Build tags:
+# - fts5: Enable SQLite FTS5 full-text search support (required for SQLite database)
+
 BINARY    := wayback-server
 SERVER_PKG := ./cmd/server
 BIN_DIR   := bin
@@ -16,7 +19,7 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 build: server script
 
 server:
-	cd server && go build -ldflags "$(LDFLAGS)" -o ../$(BIN_DIR)/$(BINARY) $(SERVER_PKG)
+	cd server && go build -tags fts5 -ldflags "$(LDFLAGS)" -o ../$(BIN_DIR)/$(BINARY) $(SERVER_PKG)
 
 script:
 	cd browser && VERSION=$(VERSION) npm run build --silent
@@ -33,7 +36,7 @@ all: script
 		if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
 		output="$(BIN_DIR)/$(BINARY)-$${os}-$${arch}$${ext}"; \
 		echo "Building $$output ..."; \
-		cd server && GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" -o ../$$output $(SERVER_PKG) && cd ..; \
+		cd server && GOOS=$$os GOARCH=$$arch go build -tags fts5 -ldflags "$(LDFLAGS)" -o ../$$output $(SERVER_PKG) && cd ..; \
 	done
 
 clean:
@@ -41,7 +44,7 @@ clean:
 
 # Run Go unit tests
 test:
-	cd server && go test ./... -v
+	cd server && go test -tags fts5 ./... -v
 
 # Run Puppeteer E2E tests (requires server running on localhost:8080)
 test-e2e:
