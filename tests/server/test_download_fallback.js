@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 /**
  * 测试下载失败兜底逻辑：
@@ -13,8 +14,45 @@ const WAYBACK = process.env.WAYBACK || 'http://localhost:8080';
 const FAKE_URL = 'https://fallback-test-unreachable.invalid/fallback-style.css';
 const CSS_CONTENT = 'body { background-color: #ff6600 !important; color: white; }';
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
-const DATA_DIR = process.env.WAYBACK_DATA_DIR || path.join(ROOT_DIR, 'data');
-const DB_USER = process.env.DB_USER || process.env.USER || 'postgres';
+
+function loadEnvFile(envPath) {
+  if (!fs.existsSync(envPath)) {
+    return {};
+  }
+
+  const parsed = {};
+  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    parsed[key] = value;
+  }
+
+  return parsed;
+}
+
+const fileEnv = loadEnvFile(path.join(ROOT_DIR, '.env'));
+const readConfig = (key, fallback = '') => process.env[key] || fileEnv[key] || fallback;
+const DATA_DIR = process.env.WAYBACK_DATA_DIR || readConfig('DATA_DIR', path.join(ROOT_DIR, 'data'));
+const DB_TYPE = readConfig('DB_TYPE', 'sqlite').toLowerCase();
+const DB_PATH = readConfig('DB_PATH', path.join(DATA_DIR, 'wayback.db'));
+const DB_USER = readConfig('DB_USER', process.env.USER || 'postgres');
+const DB_NAME = readConfig('DB_NAME', 'wayback');
+const DB_HOST = readConfig('DB_HOST', 'localhost');
+const DB_PORT = readConfig('DB_PORT', '5432');
+const DB_PASSWORD = readConfig('DB_PASSWORD', '');
 
 let passed = 0, failed = 0;
 const failures = [];
@@ -24,11 +62,34 @@ function assert(name, cond, msg) {
   else { failed++; failures.push(`${name}: ${msg}`); console.log(`  [FAIL] ${name}: ${msg}`); }
 }
 
+function sqlQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function insertResourceRecord({ url, hash, relPath, fileSize }) {
+  const insertSQL = `INSERT INTO resources (url, content_hash, resource_type, file_path, file_size, first_seen, last_seen)
+    VALUES (${sqlQuote(url)}, ${sqlQuote(hash)}, 'css', ${sqlQuote(relPath)}, ${fileSize}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+
+  if (DB_TYPE === 'sqlite') {
+    execFileSync('sqlite3', [DB_PATH, insertSQL], { stdio: 'inherit' });
+    return;
+  }
+
+  if (DB_TYPE === 'postgres' || DB_TYPE === 'postgresql') {
+    execFileSync('psql', ['-U', DB_USER, '-d', DB_NAME, '-h', DB_HOST, '-p', DB_PORT, '-c', insertSQL], {
+      stdio: 'inherit',
+      env: { ...process.env, PGPASSWORD: DB_PASSWORD }
+    });
+    return;
+  }
+
+  throw new Error(`Unsupported DB_TYPE for test_download_fallback.js: ${DB_TYPE}`);
+}
+
 async function test() {
   console.log('=== Download Fallback Test ===\n');
 
   const crypto = require('crypto');
-  const fs = require('fs');
 
   // 计算 CSS 内容哈希
   const hash = crypto.createHash('sha256').update(CSS_CONTENT).digest('hex');
@@ -42,10 +103,12 @@ async function test() {
   console.log(`Step 1: Wrote resource file to disk: ${relPath}`);
 
   // 直接插入 DB 记录
-  const insertSQL = `INSERT INTO resources (url, content_hash, resource_type, file_path, file_size, first_seen, last_seen)
-    VALUES ('${FAKE_URL}', '${hash}', 'css', '${relPath}', ${CSS_CONTENT.length}, NOW(), NOW())
-    ON CONFLICT DO NOTHING`;
-  execSync(`psql -U ${DB_USER} -d wayback -c "${insertSQL}"`);
+  insertResourceRecord({
+    url: FAKE_URL,
+    hash,
+    relPath,
+    fileSize: CSS_CONTENT.length
+  });
   console.log('  Inserted resource record into DB');
 
   // Step 2: 归档页面，引用该不可达 URL

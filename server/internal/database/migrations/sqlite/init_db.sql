@@ -36,11 +36,12 @@ CREATE TRIGGER IF NOT EXISTS pages_fts_insert AFTER INSERT ON pages BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS pages_fts_update AFTER UPDATE ON pages BEGIN
-    UPDATE pages_fts SET body_text = new.body_text, title = new.title WHERE rowid = new.id;
+    INSERT INTO pages_fts(pages_fts, rowid, body_text, title) VALUES ('delete', old.id, old.body_text, old.title);
+    INSERT INTO pages_fts(rowid, body_text, title) VALUES (new.id, new.body_text, new.title);
 END;
 
 CREATE TRIGGER IF NOT EXISTS pages_fts_delete AFTER DELETE ON pages BEGIN
-    DELETE FROM pages_fts WHERE rowid = old.id;
+    INSERT INTO pages_fts(pages_fts, rowid, body_text, title) VALUES ('delete', old.id, old.body_text, old.title);
 END;
 
 -- 资源表（去重）

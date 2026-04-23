@@ -4,30 +4,28 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"time"
 
 	"wayback/internal/models"
 )
 
 // injectArchiveHeader 在页面顶部注入归档信息栏
 func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next *models.Page, snapshotTotal int, nonce string) string {
-	// 格式化时间
-	capturedTime := page.CapturedAt.Format("2006-01-02 15:04:05")
-
 	// 构建快照导航 HTML
 	var navHTML string
 	if snapshotTotal > 1 {
 		prevLink := ""
 		if prev != nil {
-			prevLink = fmt.Sprintf(`<a href="/view/%d" style="color:white;text-decoration:none;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:3px;font-size:12px;background:rgba(255,255,255,0.1);" title="%s">◀ %s</a>`,
-				prev.ID, prev.FirstVisited.Format("2006-01-02 15:04:05"), prev.FirstVisited.Format("01-02 15:04"))
+			prevLink = fmt.Sprintf(`<a href="/view/%d" style="color:white;text-decoration:none;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:3px;font-size:12px;background:rgba(255,255,255,0.1);" data-time-title="true" title="%s">◀ %s</a>`,
+				prev.ID, archiveTimeFallback(prev.FirstVisited, "full"), archiveTimeElement(prev.FirstVisited, "nav"))
 		} else {
 			prevLink = `<span style="padding:4px 10px;font-size:12px;opacity:0.3;">◀</span>`
 		}
 
 		nextLink := ""
 		if next != nil {
-			nextLink = fmt.Sprintf(`<a href="/view/%d" style="color:white;text-decoration:none;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:3px;font-size:12px;background:rgba(255,255,255,0.1);" title="%s">%s ▶</a>`,
-				next.ID, next.FirstVisited.Format("2006-01-02 15:04:05"), next.FirstVisited.Format("01-02 15:04"))
+			nextLink = fmt.Sprintf(`<a href="/view/%d" style="color:white;text-decoration:none;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:3px;font-size:12px;background:rgba(255,255,255,0.1);" data-time-title="true" title="%s">%s ▶</a>`,
+				next.ID, archiveTimeFallback(next.FirstVisited, "full"), archiveTimeElement(next.FirstVisited, "nav"))
 		} else {
 			nextLink = `<span style="padding:4px 10px;font-size:12px;opacity:0.3;">▶</span>`
 		}
@@ -141,6 +139,44 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 <script nonce="%s">
 (function() {
 	'use strict';
+	function formatArchiveTime(date, format) {
+		if (format === 'nav') {
+			return date.toLocaleString('zh-CN', {
+				month: '2-digit',
+				day: '2-digit',
+				hour: '2-digit',
+				minute: '2-digit'
+			});
+		}
+
+		return date.toLocaleString('zh-CN', {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+			second: '2-digit'
+		});
+	}
+
+	function localizeArchiveTimes() {
+		document.querySelectorAll('.wayback-local-time').forEach(function(el) {
+			const isoTime = el.getAttribute('datetime');
+			if (!isoTime) return;
+
+			const date = new Date(isoTime);
+			if (Number.isNaN(date.getTime())) return;
+
+			const format = el.getAttribute('data-format') || 'full';
+			el.textContent = formatArchiveTime(date, format);
+
+			const titleTarget = el.closest('[data-time-title="true"]');
+			if (titleTarget) {
+				titleTarget.title = formatArchiveTime(date, 'full');
+			}
+		});
+	}
+
 	// 修复所有 fixed/sticky 定位的顶部元素，避免被归档 header 遮挡
 	function fixPositionedElements() {
 		const HEADER_HEIGHT = 48;
@@ -203,23 +239,28 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 	// 页面加载完成后执行
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', function() {
+			localizeArchiveTimes();
 			fixPositionedElements();
 			forceEnableInteraction();
 		});
 	} else {
+		localizeArchiveTimes();
 		fixPositionedElements();
 		forceEnableInteraction();
 	}
 
 	// 延迟执行，确保动态加载的元素也被处理
+	setTimeout(localizeArchiveTimes, 0);
 	setTimeout(fixPositionedElements, 100);
 	setTimeout(forceEnableInteraction, 100);
+	setTimeout(localizeArchiveTimes, 100);
 	setTimeout(fixPositionedElements, 500);
 	setTimeout(forceEnableInteraction, 500);
+	setTimeout(localizeArchiveTimes, 500);
 
 })();
 </script>
-`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), capturedTime, navHTML, nonce)
+`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), archiveTimeElement(page.CapturedAt, "full"), navHTML, nonce)
 
 	// 在 <body> 标签后注入
 	if bodyTagRe.MatchString(html) {
@@ -230,6 +271,22 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 	}
 
 	return html
+}
+
+func archiveTimeElement(ts time.Time, format string) string {
+	return fmt.Sprintf(`<time class="wayback-local-time" data-format="%s" datetime="%s">%s</time>`,
+		escapeHTML(format),
+		escapeHTML(ts.UTC().Format(time.RFC3339)),
+		archiveTimeFallback(ts, format),
+	)
+}
+
+func archiveTimeFallback(ts time.Time, format string) string {
+	if format == "nav" {
+		return escapeHTML(ts.UTC().Format("01-02 15:04 UTC"))
+	}
+
+	return escapeHTML(ts.UTC().Format("2006-01-02 15:04:05 UTC"))
 }
 
 // removeExternalResources 移除HTML中的外部资源引用
