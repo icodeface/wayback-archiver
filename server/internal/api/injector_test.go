@@ -50,3 +50,24 @@ func TestInjectArchiveHeader_LocalizesSnapshotTimesInBrowser(t *testing.T) {
 		}
 	}
 }
+
+func TestInjectArchiveHeader_DoesNotIncludeCollapsedFixedLayoutRepair(t *testing.T) {
+	page := &models.Page{
+		ID:         1,
+		URL:        "https://example.com/page",
+		CapturedAt: time.Date(2026, 4, 15, 12, 34, 56, 0, time.UTC),
+	}
+
+	got := injectArchiveHeader(`<html><body><main>hello</main></body></html>`, page, nil, nil, 1, "nonce")
+
+	for _, unwanted := range []string{
+		`function fixCollapsedFixedElements()`,
+		`const widthCollapsed = rect.width+1 < childRect.width`,
+		`el.style.setProperty('position', 'sticky', 'important')`,
+		`setTimeout(fixCollapsedFixedElements, 100);`,
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("unexpected collapsed fixed repair marker %q in %s", unwanted, got)
+		}
+	}
+}

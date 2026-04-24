@@ -60,6 +60,7 @@ const userscriptModules = [
   'bridge-auth.js',
   'spa-coordinator.js',
   'frame-capture.js',
+  'viewport-meta.js',
   'archiver.js',
   'main.js',
 ];
@@ -74,6 +75,7 @@ const puppeteerModules = [
   'html-url-normalizer.js',
   'bridge-auth.js',
   'frame-capture.js',
+  'viewport-meta.js',
   'puppeteer.js',
 ];
 

@@ -43,6 +43,8 @@ const SVG_GRAPHIC_TAGS = new Set([
 const GSAP_ANIM_RE = /translate:\s*none|rotate:\s*none|scale:\s*none/;
 const ANIM_STYLE_CLEANUP_RE = /\b(?:opacity:\s*0|transform:\s*[^;]+|translate:\s*[^;]+|rotate:\s*[^;]+|scale:\s*[^;]+|stroke-dashoffset:\s*[^;]+)\s*;?/g;
 const MULTI_SEMI_RE = /;\s*;+/g;
+const TRANSFORM_IDENTITY_EPSILON = 0.001;
+const TRANSLATE_ZERO_EPSILON = 0.5;
 
 function neutralizeClonedMedia(cloneRoot: ParentNode): void {
   for (const node of Array.from(cloneRoot.querySelectorAll('video, audio'))) {
@@ -147,6 +149,198 @@ const TABLE_DISPLAY_TAGS: Record<string, string> = {
 };
 const LIST_ITEM_TAG = 'LI';
 
+export interface FixedLayoutMetrics {
+  position: string;
+  elementLeft: number;
+  elementWidth: number;
+  parentLeft: number;
+  parentWidth: number;
+  childWidth: number;
+}
+
+export function shouldNormalizeDetachedFixedLayout(metrics: FixedLayoutMetrics): boolean {
+  if (metrics.position !== 'fixed') {
+    return false;
+  }
+
+  if (metrics.childWidth < 200 || metrics.parentWidth <= 1 || metrics.parentWidth + 1 < metrics.childWidth) {
+    return false;
+  }
+
+  const widthCollapsed = metrics.elementWidth + 1 < metrics.childWidth;
+  const detachedFromParent = Math.abs(metrics.elementLeft - metrics.parentLeft) > 1 || Math.abs(metrics.elementWidth - metrics.parentWidth) > 1;
+  return widthCollapsed || detachedFromParent;
+}
+
+function approximatelyEqual(value: number, expected: number, epsilon: number): boolean {
+  return Math.abs(value - expected) <= epsilon;
+}
+
+function parseTransformNumbers(transform: string, prefix: 'matrix' | 'matrix3d', expectedLength: number): number[] | null {
+  const match = transform.match(new RegExp(`^${prefix}\\(([^)]+)\\)$`, 'i'));
+  if (!match) {
+    return null;
+  }
+
+  const values = match[1].split(',').map((part) => Number.parseFloat(part.trim()));
+  if (values.length !== expectedLength || values.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+
+  return values;
+}
+
+function parseSingleTransformValue(transform: string, fnName: string): number | null {
+  const match = transform.match(new RegExp(`^${fnName}\\(\\s*([^)]+?)\\s*\\)$`, 'i'));
+  if (!match) {
+    return null;
+  }
+
+  const value = Number.parseFloat(match[1].trim());
+  return Number.isFinite(value) ? value : null;
+}
+
+function parseTranslateValues(transform: string): [number, number] | null {
+  const match = transform.match(/^translate\(\s*([^,)]+?)\s*(?:,\s*([^)]+?)\s*)?\)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const x = Number.parseFloat(match[1].trim());
+  if (!Number.isFinite(x)) {
+    return null;
+  }
+
+  if (!match[2]) {
+    return [x, 0];
+  }
+
+  const y = Number.parseFloat(match[2].trim());
+  if (!Number.isFinite(y)) {
+    return null;
+  }
+
+  return [x, y];
+}
+
+function parseTranslate3dValues(transform: string): [number, number, number] | null {
+  const match = transform.match(/^translate3d\(\s*([^,)]+?)\s*,\s*([^,)]+?)\s*,\s*([^)]+?)\s*\)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const values = match.slice(1).map((part) => Number.parseFloat(part.trim()));
+  if (values.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+
+  return [values[0], values[1], values[2]];
+}
+
+export function shouldResetDetachedFixedTransform(transform: string): boolean {
+  const normalized = transform.trim();
+  if (!normalized || normalized === 'none') {
+    return false;
+  }
+
+  const matrix = parseTransformNumbers(normalized, 'matrix', 6);
+  if (matrix) {
+    const [a, b, c, d, tx, ty] = matrix;
+    return approximatelyEqual(a, 1, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(b, 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(c, 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(d, 1, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(ty, 0, TRANSLATE_ZERO_EPSILON) &&
+      Math.abs(tx) > TRANSLATE_ZERO_EPSILON;
+  }
+
+  const matrix3d = parseTransformNumbers(normalized, 'matrix3d', 16);
+  if (matrix3d) {
+    return approximatelyEqual(matrix3d[0], 1, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[1], 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[2], 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[3], 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[4], 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[5], 1, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[6], 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[7], 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[8], 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[9], 0, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[10], 1, TRANSFORM_IDENTITY_EPSILON) &&
+      approximatelyEqual(matrix3d[11], 0, TRANSFORM_IDENTITY_EPSILON) &&
+      Math.abs(matrix3d[12]) > TRANSLATE_ZERO_EPSILON &&
+      approximatelyEqual(matrix3d[13], 0, TRANSLATE_ZERO_EPSILON) &&
+      approximatelyEqual(matrix3d[14], 0, TRANSLATE_ZERO_EPSILON) &&
+      approximatelyEqual(matrix3d[15], 1, TRANSFORM_IDENTITY_EPSILON);
+  }
+
+  const translateX = parseSingleTransformValue(normalized, 'translateX');
+  if (translateX !== null) {
+    return Math.abs(translateX) > TRANSLATE_ZERO_EPSILON;
+  }
+
+  const translate = parseTranslateValues(normalized);
+  if (translate) {
+    return Math.abs(translate[0]) > TRANSLATE_ZERO_EPSILON && approximatelyEqual(translate[1], 0, TRANSLATE_ZERO_EPSILON);
+  }
+
+  const translate3d = parseTranslate3dValues(normalized);
+  if (translate3d) {
+    return Math.abs(translate3d[0]) > TRANSLATE_ZERO_EPSILON &&
+      approximatelyEqual(translate3d[1], 0, TRANSLATE_ZERO_EPSILON) &&
+      approximatelyEqual(translate3d[2], 0, TRANSLATE_ZERO_EPSILON);
+  }
+
+  return false;
+}
+
+function appendInlineStyle(el: Element, cssText: string): void {
+  const existing = el.getAttribute('style') || '';
+  el.setAttribute('style', existing ? `${existing};${cssText}` : cssText);
+}
+
+function normalizeDetachedFixedLayouts(pairs: Array<{ origEl: Element; cloneEl: Element }>): number {
+  let normalizedCount = 0;
+
+  // Capture-time normalization is the single source of truth.
+  // Replay should not run a second drifting copy of this fix.
+  for (const { origEl, cloneEl } of pairs) {
+    const origParent = origEl.parentElement;
+    const cloneParent = cloneEl.parentElement;
+    const firstChild = origEl.firstElementChild;
+    if (!origParent || !cloneParent || !firstChild) continue;
+
+    const computed = window.getComputedStyle(origEl);
+    const rect = origEl.getBoundingClientRect();
+    const parentRect = origParent.getBoundingClientRect();
+    const childRect = firstChild.getBoundingClientRect();
+
+    if (!shouldNormalizeDetachedFixedLayout({
+      position: computed.position,
+      elementLeft: rect.left,
+      elementWidth: rect.width,
+      parentLeft: parentRect.left,
+      parentWidth: parentRect.width,
+      childWidth: childRect.width,
+    })) {
+      continue;
+    }
+
+    if (window.getComputedStyle(origParent).position === 'static') {
+      appendInlineStyle(cloneParent, 'position:relative');
+    }
+
+    const transformReset = shouldResetDetachedFixedTransform(computed.transform) ? ';transform:none' : '';
+    appendInlineStyle(
+      cloneEl,
+      `position:sticky;top:0px;left:auto;right:auto;bottom:auto;width:100%;height:auto;pointer-events:auto${transformReset}`
+    );
+    normalizedCount++;
+  }
+
+  return normalizedCount;
+}
+
 /**
  * 在克隆的 DOM 上内联布局样式，返回带内联样式的 outerHTML。
  * 不修改原始 DOM，避免影响页面显示。
@@ -157,6 +351,7 @@ const LIST_ITEM_TAG = 'LI';
 export function inlineLayoutStyles(): string {
   const startTime = performance.now();
   let count = 0;
+  const elementPairs: Array<{ origEl: Element; cloneEl: Element }> = [];
 
   // 视口尺寸 — 用于跳过 width/height 接近视口的值（来自 100%/100vh）
   const vw = window.innerWidth;
@@ -182,6 +377,7 @@ export function inlineLayoutStyles(): string {
     const origEl = origNode as Element;
     const cloneEl = cloneNode as Element;
     if (SKIP_TAGS.has(origEl.tagName)) continue;
+    elementPairs.push({ origEl, cloneEl });
 
     // 从原始 DOM 读取 computed style（克隆节点不在文档中，无法 getComputedStyle）
     const computed = window.getComputedStyle(origEl);
@@ -306,8 +502,13 @@ export function inlineLayoutStyles(): string {
     count++;
   }
 
+  const normalizedFixedCount = normalizeDetachedFixedLayouts(elementPairs);
+
   const elapsed = (performance.now() - startTime).toFixed(0);
   console.log(`[Wayback] Inlined layout styles for ${count} elements in ${elapsed}ms`);
+  if (normalizedFixedCount > 0) {
+    console.log(`[Wayback] Normalized ${normalizedFixedCount} detached fixed layout containers`);
+  }
 
   return clone.outerHTML;
 }

@@ -73,7 +73,6 @@ func NewPostgres(host, port, user, password, dbname string, sslmode ...string) (
 		conn.Close()
 		return nil, fmt.Errorf("failed to ensure snapshot_state column: %w", err)
 	}
-
 	return db, nil
 }
 
@@ -270,7 +269,7 @@ func (db *PostgresDB) CreatePage(url, title, htmlPath, contentHash string, captu
 	var id int64
 	err := db.conn.QueryRow(
 		"INSERT INTO pages (url, title, html_path, content_hash, snapshot_state, captured_at, first_visited, last_visited, domain) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
-		url, title, htmlPath, contentHash, models.SnapshotStatePending, capturedAt, capturedAt, capturedAt, extractDomain(url),
+		url, title, htmlPath, contentHash, models.SnapshotStatePending, capturedAt.UTC(), capturedAt.UTC(), capturedAt.UTC(), extractDomain(url),
 	).Scan(&id)
 	return id, err
 }
@@ -301,7 +300,7 @@ func (db *PostgresDB) GetPageByURLAndHash(url, contentHash string) (*models.Page
 
 // UpdatePageLastVisited 更新页面最后访问时间
 func (db *PostgresDB) UpdatePageLastVisited(id int64, lastVisited time.Time) error {
-	_, err := db.conn.Exec("UPDATE pages SET last_visited = $1 WHERE id = $2", lastVisited, id)
+	_, err := db.conn.Exec("UPDATE pages SET last_visited = $1 WHERE id = $2", lastVisited.UTC(), id)
 	return err
 }
 
@@ -325,17 +324,18 @@ func (db *PostgresDB) GetResourceByHash(hash string) (*models.Resource, error) {
 // CreateResource 创建资源记录
 func (db *PostgresDB) CreateResource(url, hash, resourceType, filePath string, fileSize int64) (int64, error) {
 	var id int64
+	now := time.Now().UTC()
 	err := db.conn.QueryRow(
-		"INSERT INTO resources (url, content_hash, resource_type, file_path, file_size) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-		url, hash, resourceType, filePath, fileSize,
+		"INSERT INTO resources (url, content_hash, resource_type, file_path, file_size, first_seen, last_seen) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+		url, hash, resourceType, filePath, fileSize, now, now,
 	).Scan(&id)
 	return id, err
 }
 
 // UpdateResourceLastSeen 更新资源最后见到时间
 func (db *PostgresDB) UpdateResourceLastSeen(id int64) error {
-	query := fmt.Sprintf("UPDATE resources SET last_seen = %s WHERE id = $1", db.qb.CurrentTimestamp())
-	_, err := db.conn.Exec(query, id)
+	now := time.Now().UTC()
+	_, err := db.conn.Exec("UPDATE resources SET last_seen = $1 WHERE id = $2", now, id)
 	return err
 }
 
@@ -343,8 +343,8 @@ func (db *PostgresDB) touchResourcesLastSeen(tx *sql.Tx, resourceIDs []int64) er
 	if len(resourceIDs) == 0 {
 		return nil
 	}
-	query := fmt.Sprintf("UPDATE resources SET last_seen = %s WHERE id = ANY($1)", db.qb.CurrentTimestamp())
-	_, err := tx.Exec(query, pq.Array(resourceIDs))
+	now := time.Now().UTC()
+	_, err := tx.Exec("UPDATE resources SET last_seen = $1 WHERE id = ANY($2)", now, pq.Array(resourceIDs))
 	return err
 }
 
@@ -714,8 +714,8 @@ func (db *PostgresDB) GetResourceByURLPath(urlPath string, pageID int64) (*model
 
 // UpdatePageContent 更新页面内容（HTML路径、哈希、标题、最后访问时间）
 func (db *PostgresDB) UpdatePageContent(id int64, htmlPath, contentHash, title string) error {
-	query := fmt.Sprintf("UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = %s WHERE id = $5", db.qb.CurrentTimestamp())
-	_, err := db.conn.Exec(query, htmlPath, contentHash, title, models.SnapshotStateReady, id)
+	now := time.Now().UTC()
+	_, err := db.conn.Exec("UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = $5 WHERE id = $6", htmlPath, contentHash, title, models.SnapshotStateReady, now, id)
 	return err
 }
 
@@ -727,15 +727,13 @@ func (db *PostgresDB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title
 	}
 	defer tx.Rollback()
 
-	nowSQL := db.qb.CurrentTimestamp()
+	now := time.Now().UTC()
 	if bodyText != nil {
-		query := fmt.Sprintf("UPDATE pages SET html_path = $1, content_hash = $2, title = $3, body_text = $4, snapshot_state = $5, last_visited = %s WHERE id = $6", nowSQL)
-		if _, err := tx.Exec(query, htmlPath, contentHash, title, *bodyText, models.SnapshotStateReady, id); err != nil {
+		if _, err := tx.Exec("UPDATE pages SET html_path = $1, content_hash = $2, title = $3, body_text = $4, snapshot_state = $5, last_visited = $6 WHERE id = $7", htmlPath, contentHash, title, *bodyText, models.SnapshotStateReady, now, id); err != nil {
 			return err
 		}
 	} else {
-		query := fmt.Sprintf("UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = %s WHERE id = $5", nowSQL)
-		if _, err := tx.Exec(query, htmlPath, contentHash, title, models.SnapshotStateReady, id); err != nil {
+		if _, err := tx.Exec("UPDATE pages SET html_path = $1, content_hash = $2, title = $3, snapshot_state = $4, last_visited = $5 WHERE id = $6", htmlPath, contentHash, title, models.SnapshotStateReady, now, id); err != nil {
 			return err
 		}
 	}
@@ -772,7 +770,7 @@ func (db *PostgresDB) ResetPageForCreateRetry(id int64, title, htmlPath string, 
 	}
 	if _, err := tx.Exec(
 		"UPDATE pages SET title = $1, html_path = $2, snapshot_state = $3, last_visited = $4 WHERE id = $5",
-		title, htmlPath, models.SnapshotStatePending, capturedAt, id,
+		title, htmlPath, models.SnapshotStatePending, capturedAt.UTC(), id,
 	); err != nil {
 		return "", err
 	}

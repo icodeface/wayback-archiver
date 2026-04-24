@@ -124,6 +124,37 @@ test('main starts the initial capture on a quiet page after stableTime instead o
   }
 });
 
+test('main injects captured viewport metadata before upload without overriding layout', async () => {
+  const environment = createFakeBrowserEnvironment();
+  environment.window.innerWidth = 1733;
+  environment.window.innerHeight = 977;
+  environment.window.devicePixelRatio = 1.25;
+  const sendCalls = [];
+  const { restore } = loadMainWithEnvironment(environment, async (captureData) => {
+    sendCalls.push(captureData);
+    return { action: 'created', page_id: 1, status: 'success' };
+  }, {
+    captureDocumentHTMLWithFrames: async () => ({
+      frames: [],
+      html: '<html><head><title>Viewport test</title></head><body>quiet page</body></html>',
+    }),
+  });
+
+  try {
+    environment.advanceTime(5);
+    await flushMicrotasks();
+    environment.advanceTime(25);
+    await flushMicrotasks();
+
+    assert.equal(sendCalls.length, 1);
+    assert.match(sendCalls[0].html, /name="wayback-viewport" content="width=1733,height=977,dpr=1.25"/);
+    assert.doesNotMatch(sendCalls[0].html, /id="wayback-captured-viewport-style"/);
+    assert.doesNotMatch(sendCalls[0].html, /max-width:1733px !important/);
+  } finally {
+    restore();
+  }
+});
+
 test('main archives a short quiet-page visit once before pagehide', async () => {
   const environment = createFakeBrowserEnvironment();
   const sendCalls = [];

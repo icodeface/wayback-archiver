@@ -22,6 +22,25 @@ type SQLiteDB struct {
 	qb   *QueryBuilder
 }
 
+const (
+	// SQLite 将时间保存为固定宽度 UTC 文本，保证字符串比较/排序与真实时间顺序一致。
+	sqliteTimestampFormat = "2006-01-02T15:04:05.000000000Z"
+
+	sqliteMigrationVersionDomain                 = 1
+	sqliteMigrationVersionSnapshotState          = 2
+	sqliteMigrationVersionTimestampNormalization = 3
+	sqliteMigrationVersionTimestampFixedWidth    = 4
+	sqliteMigrationVersionCurrent                = sqliteMigrationVersionTimestampFixedWidth
+)
+
+func formatSQLiteTimestamp(t time.Time) string {
+	return t.UTC().Format(sqliteTimestampFormat)
+}
+
+func currentSQLiteTimestamp() string {
+	return formatSQLiteTimestamp(time.Now())
+}
+
 // NewSQLite 创建 SQLite 数据库连接
 func NewSQLite(dbPath string) (Database, error) {
 	// 确保数据库目录存在
@@ -87,6 +106,11 @@ func (db *SQLiteDB) ensureSchema() error {
 		if _, err := db.conn.Exec(sqliteSchema); err != nil {
 			return fmt.Errorf("failed to initialize schema: %w", err)
 		}
+
+		// 新库直接标记为当前迁移版本，避免进入历史兼容迁移路径。
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionCurrent); err != nil {
+			return err
+		}
 	}
 
 	// 执行增量迁移
@@ -95,21 +119,151 @@ func (db *SQLiteDB) ensureSchema() error {
 
 // ensureMigrations 执行增量迁移
 func (db *SQLiteDB) ensureMigrations() error {
-	// 检查 domain 列
-	if err := db.ensureDomainColumn(); err != nil {
+	version, err := db.getSQLiteUserVersion()
+	if err != nil {
 		return err
 	}
 
-	// 检查 snapshot_state 列
-	if err := db.ensureSnapshotStateColumn(); err != nil {
-		return err
+	if version < sqliteMigrationVersionDomain {
+		if err := db.ensureDomainColumn(); err != nil {
+			return err
+		}
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionDomain); err != nil {
+			return err
+		}
+		version = sqliteMigrationVersionDomain
 	}
 
-	if err := db.ensureFTSConsistency(); err != nil {
-		return err
+	if version < sqliteMigrationVersionSnapshotState {
+		if err := db.ensureSnapshotStateColumn(); err != nil {
+			return err
+		}
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionSnapshotState); err != nil {
+			return err
+		}
+		version = sqliteMigrationVersionSnapshotState
+	}
+
+	if version < sqliteMigrationVersionTimestampNormalization {
+		if err := db.ensureNormalizedTimestamps(); err != nil {
+			return err
+		}
+
+		if err := db.ensureFTSConsistency(); err != nil {
+			return err
+		}
+
+		// ensureNormalizedTimestamps 现在直接产出最终的固定宽度 UTC 文本，
+		// 旧库首次升级时可直接推进到当前版本，避免同一轮启动里再做一次全表重写。
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionCurrent); err != nil {
+			return err
+		}
+		version = sqliteMigrationVersionCurrent
+	}
+
+	if version < sqliteMigrationVersionTimestampFixedWidth {
+		if err := db.ensureNormalizedTimestamps(); err != nil {
+			return err
+		}
+
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionTimestampFixedWidth); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func (db *SQLiteDB) getSQLiteUserVersion() (int, error) {
+	var version int
+	if err := db.conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return 0, fmt.Errorf("failed to read SQLite user_version: %w", err)
+	}
+	return version, nil
+}
+
+func (db *SQLiteDB) setSQLiteUserVersion(version int) error {
+	if _, err := db.conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+		return fmt.Errorf("failed to set SQLite user_version to %d: %w", version, err)
+	}
+	return nil
+}
+
+func (db *SQLiteDB) ensureNormalizedTimestamps() error {
+	// 历史兼容迁移：将旧 DATETIME 文本统一改写为固定宽度 UTC，
+	// 让 SQLite 直接使用字符串比较/排序时也保持正确的时间顺序。
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	pageRows, err := tx.Query("SELECT id, captured_at, first_visited, last_visited FROM pages")
+	if err != nil {
+		return err
+	}
+	for pageRows.Next() {
+		var id int64
+		var capturedAt time.Time
+		var firstVisited sql.NullTime
+		var lastVisited sql.NullTime
+		if err := pageRows.Scan(&id, &capturedAt, &firstVisited, &lastVisited); err != nil {
+			pageRows.Close()
+			return err
+		}
+
+		var firstVisitedValue any
+		if firstVisited.Valid {
+			firstVisitedValue = formatSQLiteTimestamp(firstVisited.Time)
+		}
+		var lastVisitedValue any
+		if lastVisited.Valid {
+			lastVisitedValue = formatSQLiteTimestamp(lastVisited.Time)
+		}
+
+		if _, err := tx.Exec(
+			"UPDATE pages SET captured_at = ?, first_visited = ?, last_visited = ? WHERE id = ?",
+			formatSQLiteTimestamp(capturedAt),
+			firstVisitedValue,
+			lastVisitedValue,
+			id,
+		); err != nil {
+			pageRows.Close()
+			return err
+		}
+	}
+	if err := pageRows.Close(); err != nil {
+		return err
+	}
+
+	resourceRows, err := tx.Query("SELECT id, first_seen, last_seen FROM resources")
+	if err != nil {
+		return err
+	}
+	for resourceRows.Next() {
+		var id int64
+		var firstSeen time.Time
+		var lastSeen time.Time
+		if err := resourceRows.Scan(&id, &firstSeen, &lastSeen); err != nil {
+			resourceRows.Close()
+			return err
+		}
+
+		if _, err := tx.Exec(
+			"UPDATE resources SET first_seen = ?, last_seen = ? WHERE id = ?",
+			formatSQLiteTimestamp(firstSeen),
+			formatSQLiteTimestamp(lastSeen),
+			id,
+		); err != nil {
+			resourceRows.Close()
+			return err
+		}
+	}
+	if err := resourceRows.Close(); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (db *SQLiteDB) ensureFTSConsistency() error {
@@ -213,9 +367,10 @@ func (db *SQLiteDB) Close() error {
 
 // CreatePage 创建页面记录
 func (db *SQLiteDB) CreatePage(url, title, htmlPath, contentHash string, capturedAt time.Time) (int64, error) {
+	timestamp := formatSQLiteTimestamp(capturedAt)
 	result, err := db.conn.Exec(
 		"INSERT INTO pages (url, title, html_path, content_hash, snapshot_state, captured_at, first_visited, last_visited, domain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		url, title, htmlPath, contentHash, models.SnapshotStatePending, capturedAt, capturedAt, capturedAt, extractDomain(url),
+		url, title, htmlPath, contentHash, models.SnapshotStatePending, timestamp, timestamp, timestamp, extractDomain(url),
 	)
 	if err != nil {
 		return 0, err
@@ -249,7 +404,7 @@ func (db *SQLiteDB) GetPageByURLAndHash(url, contentHash string) (*models.Page, 
 
 // UpdatePageLastVisited 更新页面最后访问时间
 func (db *SQLiteDB) UpdatePageLastVisited(id int64, lastVisited time.Time) error {
-	_, err := db.conn.Exec("UPDATE pages SET last_visited = ? WHERE id = ?", lastVisited, id)
+	_, err := db.conn.Exec("UPDATE pages SET last_visited = ? WHERE id = ?", formatSQLiteTimestamp(lastVisited), id)
 	return err
 }
 
@@ -272,9 +427,10 @@ func (db *SQLiteDB) GetResourceByHash(hash string) (*models.Resource, error) {
 
 // CreateResource 创建资源记录
 func (db *SQLiteDB) CreateResource(url, hash, resourceType, filePath string, fileSize int64) (int64, error) {
+	now := currentSQLiteTimestamp()
 	result, err := db.conn.Exec(
-		"INSERT INTO resources (url, content_hash, resource_type, file_path, file_size) VALUES (?, ?, ?, ?, ?)",
-		url, hash, resourceType, filePath, fileSize,
+		"INSERT INTO resources (url, content_hash, resource_type, file_path, file_size, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		url, hash, resourceType, filePath, fileSize, now, now,
 	)
 	if err != nil {
 		return 0, err
@@ -284,8 +440,8 @@ func (db *SQLiteDB) CreateResource(url, hash, resourceType, filePath string, fil
 
 // UpdateResourceLastSeen 更新资源最后见到时间
 func (db *SQLiteDB) UpdateResourceLastSeen(id int64) error {
-	query := fmt.Sprintf("UPDATE resources SET last_seen = %s WHERE id = ?", db.qb.CurrentTimestamp())
-	_, err := db.conn.Exec(query, id)
+	now := time.Now()
+	_, err := db.conn.Exec("UPDATE resources SET last_seen = ? WHERE id = ?", formatSQLiteTimestamp(now), id)
 	return err
 }
 
@@ -302,9 +458,10 @@ func (db *SQLiteDB) touchResourcesLastSeen(tx *sql.Tx, resourceIDs []int64) erro
 		args[i] = id
 	}
 
-	query := fmt.Sprintf("UPDATE resources SET last_seen = %s WHERE id IN (%s)",
-		db.qb.CurrentTimestamp(), strings.Join(placeholders, ", "))
-	_, err := tx.Exec(query, args...)
+	now := time.Now()
+	query := fmt.Sprintf("UPDATE resources SET last_seen = ? WHERE id IN (%s)", strings.Join(placeholders, ", "))
+	argsWithTime := append([]interface{}{formatSQLiteTimestamp(now)}, args...)
+	_, err := tx.Exec(query, argsWithTime...)
 	return err
 }
 
@@ -342,7 +499,7 @@ func (db *SQLiteDB) CheckRecentCapture(url string, within time.Duration) (bool, 
 	var count int
 	err := db.conn.QueryRow(
 		"SELECT COUNT(*) FROM pages WHERE url = ? AND captured_at > ?",
-		url, time.Now().Add(-within),
+		url, formatSQLiteTimestamp(time.Now().Add(-within)),
 	).Scan(&count)
 	return count > 0, err
 }
@@ -407,13 +564,13 @@ func (db *SQLiteDB) ListPages(limit, offset int, from, to *time.Time, domain str
 	var conditions []string
 	if from != nil {
 		conditions = append(conditions, "captured_at >= ?")
-		args = append(args, *from)
+		args = append(args, formatSQLiteTimestamp(*from))
 	}
 	if to != nil {
 		// to 使用 < nextDay 确保包含当天全部记录
 		nextDay := to.AddDate(0, 0, 1)
 		conditions = append(conditions, "captured_at < ?")
-		args = append(args, nextDay)
+		args = append(args, formatSQLiteTimestamp(nextDay))
 	}
 	if domain != "" {
 		conditions = append(conditions, "(domain = ? OR domain LIKE ?)")
@@ -424,7 +581,7 @@ func (db *SQLiteDB) ListPages(limit, offset int, from, to *time.Time, domain str
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	query += " ORDER BY last_visited DESC LIMIT ? OFFSET ?"
+	query += " ORDER BY COALESCE(julianday(last_visited), julianday(captured_at)) DESC, id DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
 	rows, err := db.conn.Query(query, args...)
@@ -453,13 +610,13 @@ func (db *SQLiteDB) GetTotalPagesCount(from, to *time.Time, domain string) (int,
 	var conditions []string
 	if from != nil {
 		conditions = append(conditions, "captured_at >= ?")
-		args = append(args, *from)
+		args = append(args, formatSQLiteTimestamp(*from))
 	}
 	if to != nil {
 		// to 使用 < nextDay 确保包含当天全部记录
 		nextDay := to.AddDate(0, 0, 1)
 		conditions = append(conditions, "captured_at < ?")
-		args = append(args, nextDay)
+		args = append(args, formatSQLiteTimestamp(nextDay))
 	}
 	if domain != "" {
 		conditions = append(conditions, "(domain = ? OR domain LIKE ?)")
@@ -506,20 +663,20 @@ func (db *SQLiteDB) SearchPages(keyword string, from, to *time.Time, domain stri
 	// 追加时间过滤条件
 	if from != nil {
 		query += " AND captured_at >= ?"
-		args = append(args, *from)
+		args = append(args, formatSQLiteTimestamp(*from))
 	}
 	if to != nil {
 		// to 使用 < nextDay 确保包含当天全部记录
 		nextDay := to.AddDate(0, 0, 1)
 		query += " AND captured_at < ?"
-		args = append(args, nextDay)
+		args = append(args, formatSQLiteTimestamp(nextDay))
 	}
 	if domain != "" {
 		query += " AND (domain = ? OR domain LIKE ?)"
 		args = append(args, domain, "%."+domain)
 	}
 
-	query += " ORDER BY last_visited DESC LIMIT 100"
+	query += " ORDER BY COALESCE(julianday(last_visited), julianday(captured_at)) DESC, id DESC LIMIT 100"
 
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
@@ -660,8 +817,8 @@ func (db *SQLiteDB) GetResourceByURLPath(urlPath string, pageID int64) (*models.
 
 // UpdatePageContent 更新页面内容（HTML路径、哈希、标题、最后访问时间）
 func (db *SQLiteDB) UpdatePageContent(id int64, htmlPath, contentHash, title string) error {
-	query := fmt.Sprintf("UPDATE pages SET html_path = ?, content_hash = ?, title = ?, snapshot_state = ?, last_visited = %s WHERE id = ?", db.qb.CurrentTimestamp())
-	_, err := db.conn.Exec(query, htmlPath, contentHash, title, models.SnapshotStateReady, id)
+	now := time.Now()
+	_, err := db.conn.Exec("UPDATE pages SET html_path = ?, content_hash = ?, title = ?, snapshot_state = ?, last_visited = ? WHERE id = ?", htmlPath, contentHash, title, models.SnapshotStateReady, formatSQLiteTimestamp(now), id)
 	return err
 }
 
@@ -673,15 +830,14 @@ func (db *SQLiteDB) ReplacePageSnapshot(id int64, htmlPath, contentHash, title s
 	}
 	defer tx.Rollback()
 
-	nowSQL := db.qb.CurrentTimestamp()
+	now := time.Now()
+	nowText := formatSQLiteTimestamp(now)
 	if bodyText != nil {
-		query := fmt.Sprintf("UPDATE pages SET html_path = ?, content_hash = ?, title = ?, body_text = ?, snapshot_state = ?, last_visited = %s WHERE id = ?", nowSQL)
-		if _, err := tx.Exec(query, htmlPath, contentHash, title, *bodyText, models.SnapshotStateReady, id); err != nil {
+		if _, err := tx.Exec("UPDATE pages SET html_path = ?, content_hash = ?, title = ?, body_text = ?, snapshot_state = ?, last_visited = ? WHERE id = ?", htmlPath, contentHash, title, *bodyText, models.SnapshotStateReady, nowText, id); err != nil {
 			return err
 		}
 	} else {
-		query := fmt.Sprintf("UPDATE pages SET html_path = ?, content_hash = ?, title = ?, snapshot_state = ?, last_visited = %s WHERE id = ?", nowSQL)
-		if _, err := tx.Exec(query, htmlPath, contentHash, title, models.SnapshotStateReady, id); err != nil {
+		if _, err := tx.Exec("UPDATE pages SET html_path = ?, content_hash = ?, title = ?, snapshot_state = ?, last_visited = ? WHERE id = ?", htmlPath, contentHash, title, models.SnapshotStateReady, nowText, id); err != nil {
 			return err
 		}
 	}
@@ -718,7 +874,7 @@ func (db *SQLiteDB) ResetPageForCreateRetry(id int64, title, htmlPath string, ca
 	}
 	if _, err := tx.Exec(
 		"UPDATE pages SET title = ?, html_path = ?, snapshot_state = ?, last_visited = ? WHERE id = ?",
-		title, htmlPath, models.SnapshotStatePending, capturedAt, id,
+		title, htmlPath, models.SnapshotStatePending, formatSQLiteTimestamp(capturedAt), id,
 	); err != nil {
 		return "", err
 	}

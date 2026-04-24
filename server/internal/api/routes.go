@@ -37,6 +37,36 @@ func serveEmbeddedFile(webFS fs.FS, name string) gin.HandlerFunc {
 	}
 }
 
+type headResponseWriter struct {
+	gin.ResponseWriter
+}
+
+func (w *headResponseWriter) Write(data []byte) (int, error) {
+	if !w.ResponseWriter.Written() {
+		w.ResponseWriter.WriteHeaderNow()
+	}
+	return len(data), nil
+}
+
+func (w *headResponseWriter) WriteString(s string) (int, error) {
+	if !w.ResponseWriter.Written() {
+		w.ResponseWriter.WriteHeaderNow()
+	}
+	return len(s), nil
+}
+
+func suppressHeadBody() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer = &headResponseWriter{ResponseWriter: c.Writer}
+		c.Next()
+	}
+}
+
+func registerGETAndHEAD(routes gin.IRoutes, relativePath string, handlers ...gin.HandlerFunc) {
+	routes.GET(relativePath, handlers...)
+	routes.HEAD(relativePath, append([]gin.HandlerFunc{suppressHeadBody()}, handlers...)...)
+}
+
 // SetupRoutes 设置路由
 func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, serverCfg *config.ServerConfig, version, buildTime string) {
 	origins := serverCfg.AllowedOrigins
@@ -65,7 +95,7 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 				c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 			}
 		}
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, PUT, GET, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, PUT, GET, HEAD, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
@@ -76,7 +106,7 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 
 	// robots.txt（在认证之前，确保爬虫和工具可以访问）
 	webFS, _ := fs.Sub(web.StaticFiles, ".")
-	r.GET("/robots.txt", serveEmbeddedFile(webFS, "robots.txt"))
+	registerGETAndHEAD(r, "/robots.txt", serveEmbeddedFile(webFS, "robots.txt"))
 
 	// Basic Auth 中间件（如果启用）
 	if authCfg.Enabled() {
@@ -87,17 +117,17 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 	}
 
 	// Web UI (embedded)
-	r.GET("/", serveEmbeddedFile(webFS, "index.html"))
-	r.GET("/index.html", serveEmbeddedFile(webFS, "index.html"))
-	r.GET("/timeline", serveEmbeddedFile(webFS, "timeline.html"))
-	r.GET("/timeline.html", serveEmbeddedFile(webFS, "timeline.html"))
-	r.GET("/logs", serveEmbeddedFile(webFS, "logs.html"))
-	r.GET("/logs.html", serveEmbeddedFile(webFS, "logs.html"))
-	r.GET("/favicon.ico", serveEmbeddedFile(webFS, "favicon.ico"))
+	registerGETAndHEAD(r, "/", serveEmbeddedFile(webFS, "index.html"))
+	registerGETAndHEAD(r, "/index.html", serveEmbeddedFile(webFS, "index.html"))
+	registerGETAndHEAD(r, "/timeline", serveEmbeddedFile(webFS, "timeline.html"))
+	registerGETAndHEAD(r, "/timeline.html", serveEmbeddedFile(webFS, "timeline.html"))
+	registerGETAndHEAD(r, "/logs", serveEmbeddedFile(webFS, "logs.html"))
+	registerGETAndHEAD(r, "/logs.html", serveEmbeddedFile(webFS, "logs.html"))
+	registerGETAndHEAD(r, "/favicon.ico", serveEmbeddedFile(webFS, "favicon.ico"))
 
 	api := r.Group("/api")
 	{
-		api.GET("/version", func(c *gin.Context) {
+		registerGETAndHEAD(api, "/version", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"version":    version,
 				"build_time": buildTime,
@@ -122,23 +152,21 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 		}
 		api.POST("/archive", handler.ArchivePage)
 		api.PUT("/archive/:id", handler.UpdatePage)
-		api.GET("/pages", handler.ListPages)
-		api.GET("/pages/timeline", handler.GetPageTimeline)
-		api.GET("/pages/:id", handler.GetPage)
-		api.GET("/pages/:id/content", handler.GetPageContent)
+		registerGETAndHEAD(api, "/pages", handler.ListPages)
+		registerGETAndHEAD(api, "/pages/timeline", handler.GetPageTimeline)
+		registerGETAndHEAD(api, "/pages/:id", handler.GetPage)
+		registerGETAndHEAD(api, "/pages/:id/content", handler.GetPageContent)
 		api.DELETE("/pages/:id", handler.DeletePage)
-		api.GET("/search", handler.SearchPages)
-		api.GET("/logs", handler.ListLogs)
-		api.GET("/logs/latest", handler.GetLatestLog)
-		api.GET("/logs/:filename", handler.GetLog)
+		registerGETAndHEAD(api, "/search", handler.SearchPages)
+		registerGETAndHEAD(api, "/logs", handler.ListLogs)
+		registerGETAndHEAD(api, "/logs/latest", handler.GetLatestLog)
+		registerGETAndHEAD(api, "/logs/:filename", handler.GetLog)
 	}
 
 	// 查看归档页面
-	r.GET("/view/:id", handler.ViewPage)
-	r.GET("/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
-	r.HEAD("/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
+	registerGETAndHEAD(r, "/view/:id", handler.ViewPage)
+	registerGETAndHEAD(r, "/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
 
 	// 直接资源访问（CSS 中引用的资源路径格式: /archive/resources/xx/yy/hash.ext）
-	r.GET("/archive/resources/*filepath", handler.ServeLocalResource)
-	r.HEAD("/archive/resources/*filepath", handler.ServeLocalResource)
+	registerGETAndHEAD(r, "/archive/resources/*filepath", handler.ServeLocalResource)
 }

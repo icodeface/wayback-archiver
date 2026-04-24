@@ -39,7 +39,7 @@ initializeArchiver()
 
 1. **不冻结页面**：初次捕获只调用 `serializeCSSOMToDOM()`，不调用 `freezePageState()`。这样定时器、WebSocket 等保持运行，后续 DOM 监听器才能观察到变化。
 
-2. **克隆 DOM 写入**：`inlineLayoutStyles()` 克隆整个 DOM 树，从原始 DOM 读取 computed style，写入克隆节点。原始 DOM 不受影响。
+2. **克隆 DOM 写入**：`inlineLayoutStyles()` 克隆整个 DOM 树，从原始 DOM 读取 computed style，写入克隆节点。原始 DOM 不受影响。某些脱离父列的 `position: fixed` 容器也会在这个阶段直接归一化为 `sticky`；如果该容器的 `transform` 只是纯横向平移（常见于 `translateX(-50%)` 居中），会一并清掉，避免在改为 `sticky` 后继续把容器推出父列。客户端捕获结果就是唯一真相，服务端回放不再重复跑一份易漂移的补丁。
 
 3. **虚拟滚动收集**：`DOMCollector` 在页面加载时立即启动，早于捕获流程，确保不遗漏任何被虚拟滚动移除的节点。详见 [virtual-scroll-capture.md](virtual-scroll-capture.md)。
 
