@@ -180,6 +180,20 @@ CSS 文件按内容哈希去重后，会被多个页面共享复用。
 3. CSS 的 `url(...)` 重写必须在查看阶段完成：`GET /archive/:page_id/:timestamp/...css` 返回 CSS 时，再根据当前 `page_id` 动态改写为 `/archive/resources/...`。
 4. 这样共享 CSS 永远保持原始内容，后续页面复用时不会把归档路径误当成原站 URL 再次下载。
 
+### 资源完整性隔离
+
+历史版本曾出现过共享 CSS 被本地流程错误改写、导致磁盘文件内容与 `resources.content_hash` 不一致的情况。
+
+当前仅保留**离线隔离**方案：
+
+1. `wayback-server --quarantine-corrupted-css` 会批量扫描所有未隔离的 CSS 资源
+2. 对每个文件重新计算 SHA-256，若与 `resources.content_hash` 不一致，说明这份共享 CSS 已经被污染或丢失
+3. 被判定为损坏的资源文件会先复制到 `data/resources/quarantine/...`
+4. 对应 `resources` 记录会被标记为 `is_quarantined=true`，并写入 `quarantine_reason`
+5. 后续捕获和去重查询会自动忽略这些已隔离资源，但旧归档页仍可通过隔离副本保留历史文件
+
+这样线上热路径不需要为每次资源复用额外做文件 hash 校验，生产环境只需在发现历史污染后停服执行一次离线扫描即可。
+
 ### 更新归档（PUT /api/archive/:id）
 
 `Deduplicator.UpdateCapture()`:

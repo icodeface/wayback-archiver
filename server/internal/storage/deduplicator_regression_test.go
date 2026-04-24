@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -16,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"wayback/internal/config"
+	"wayback/internal/database"
 	"wayback/internal/models"
 )
 
@@ -41,6 +45,43 @@ func routeStorageHTTPClientToServer(t *testing.T, fs *FileStorage, server *httpt
 	fs.httpClient.Transport = cloned
 
 	return "http://archive-test.example"
+}
+
+func newSQLiteIntegrityTestDeduplicator(t *testing.T) (*Deduplicator, database.Database, *FileStorage) {
+	t.Helper()
+
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "wayback.db")
+	db, err := database.NewSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLite failed: %v", err)
+	}
+
+	fs := NewFileStorage(dataDir)
+	dedup := NewDeduplicator(db, fs, config.ResourceConfig{
+		Workers:           2,
+		MetadataCacheMB:   10,
+		DownloadTimeout:   1,
+		StreamThresholdKB: 2048,
+	})
+
+	return dedup, db, fs
+}
+
+func createStoredTestResource(t *testing.T, db database.Database, fs *FileStorage, resourceURL, resourceType string, content []byte) (int64, string, string) {
+	t.Helper()
+
+	hashBytes := sha256.Sum256(content)
+	hash := hex.EncodeToString(hashBytes[:])
+	relPath, err := fs.SaveResource(content, hash, resourceType)
+	if err != nil {
+		t.Fatalf("SaveResource failed: %v", err)
+	}
+	resourceID, err := db.CreateResource(resourceURL, hash, resourceType, relPath, int64(len(content)))
+	if err != nil {
+		t.Fatalf("CreateResource failed: %v", err)
+	}
+	return resourceID, relPath, hash
 }
 
 func TestProcessResource_SameURLChangedContentCreatesNewVersion(t *testing.T) {
@@ -576,6 +617,261 @@ func TestUpdateCapture_FreshCacheReuseUpdatesLastSeenOnCommit(t *testing.T) {
 	}
 	if linked[0].ID != resource.ID {
 		t.Fatalf("updated page linked resource ID = %d, want %d", linked[0].ID, resource.ID)
+	}
+}
+
+func TestQuarantineCorruptedCSS_QuarantinesExistingBadCSS(t *testing.T) {
+	dedup, db, fs := newSQLiteIntegrityTestDeduplicator(t)
+	defer db.Close()
+
+	resourceURL := fmt.Sprintf("https://integrity-test.example.com/style.css?nonce=%d", time.Now().UnixNano())
+	originalCSS := []byte("body { color: red; }")
+	resourceID, filePath, _ := createStoredTestResource(t, db, fs, resourceURL, "css", originalCSS)
+
+	corruptedCSS := "body { background: url(/archive/resources/bad/file.bin); }"
+	if err := fs.UpdateResource(filePath, []byte(corruptedCSS)); err != nil {
+		t.Fatalf("UpdateResource(corrupt css) failed: %v", err)
+	}
+
+	summary, err := dedup.QuarantineCorruptedCSS(10)
+	if err != nil {
+		t.Fatalf("QuarantineCorruptedCSS failed: %v", err)
+	}
+	if summary.ScannedResources != 1 || summary.ScannedFiles != 1 {
+		t.Fatalf("unexpected scan summary: %#v", summary)
+	}
+	if summary.CorruptedFiles != 1 || summary.QuarantinedFiles != 1 {
+		t.Fatalf("unexpected quarantine summary: %#v", summary)
+	}
+
+	resource, err := db.GetResourceByID(resourceID)
+	if err != nil {
+		t.Fatalf("GetResourceByID failed: %v", err)
+	}
+	if resource == nil || !resource.IsQuarantined {
+		t.Fatalf("expected corrupted CSS resource to be quarantined")
+	}
+	if !strings.Contains(resource.FilePath, "resources/quarantine/") {
+		t.Fatalf("quarantined css path = %q, want resources/quarantine/...", resource.FilePath)
+	}
+
+	reusable, err := db.GetResourceByURL(resourceURL)
+	if err != nil {
+		t.Fatalf("GetResourceByURL(active) failed: %v", err)
+	}
+	if reusable != nil {
+		t.Fatalf("quarantined CSS should be hidden from reusable lookups")
+	}
+
+	quarantinedCSS, err := fs.ReadResource(resource.FilePath)
+	if err != nil {
+		t.Fatalf("ReadResource(quarantined css) failed: %v", err)
+	}
+	if string(quarantinedCSS) != corruptedCSS {
+		t.Fatalf("quarantined css = %q, want %q", string(quarantinedCSS), corruptedCSS)
+	}
+}
+
+func TestQuarantineCorruptedCSS_MixedHealthyCorruptedAndMissingFiles(t *testing.T) {
+	dedup, db, fs := newSQLiteIntegrityTestDeduplicator(t)
+	defer db.Close()
+
+	healthyURL := fmt.Sprintf("https://integrity-test.example.com/healthy.css?nonce=%d", time.Now().UnixNano())
+	corruptedURL := fmt.Sprintf("https://integrity-test.example.com/corrupted.css?nonce=%d", time.Now().UnixNano())
+	missingURL := fmt.Sprintf("https://integrity-test.example.com/missing.css?nonce=%d", time.Now().UnixNano())
+	imageURL := fmt.Sprintf("https://integrity-test.example.com/logo.png?nonce=%d", time.Now().UnixNano())
+
+	healthyID, _, _ := createStoredTestResource(t, db, fs, healthyURL, "css", []byte("body { color: green; }"))
+	corruptedID, corruptedPath, _ := createStoredTestResource(t, db, fs, corruptedURL, "css", []byte("body { color: red; }"))
+	missingID, missingPath, _ := createStoredTestResource(t, db, fs, missingURL, "css", []byte("body { color: blue; }"))
+	imageID, imagePath, _ := createStoredTestResource(t, db, fs, imageURL, "image", []byte("image-bytes"))
+
+	corruptedCSS := "body { background: url(/archive/resources/bad/file.bin); }"
+	if err := fs.UpdateResource(corruptedPath, []byte(corruptedCSS)); err != nil {
+		t.Fatalf("UpdateResource(corrupted css) failed: %v", err)
+	}
+	if err := os.Remove(filepath.Join(fs.baseDir, missingPath)); err != nil {
+		t.Fatalf("Remove(missing css) failed: %v", err)
+	}
+	if err := fs.UpdateResource(imagePath, []byte("corrupted-image")); err != nil {
+		t.Fatalf("UpdateResource(image) failed: %v", err)
+	}
+
+	summary, err := dedup.QuarantineCorruptedCSS(1)
+	if err != nil {
+		t.Fatalf("QuarantineCorruptedCSS failed: %v", err)
+	}
+	if summary.ResourceType != "css" {
+		t.Fatalf("summary.ResourceType = %q, want css", summary.ResourceType)
+	}
+	if summary.ScannedResources != 3 {
+		t.Fatalf("ScannedResources = %d, want 3", summary.ScannedResources)
+	}
+	if summary.ScannedFiles != 3 {
+		t.Fatalf("ScannedFiles = %d, want 3", summary.ScannedFiles)
+	}
+	if summary.CorruptedFiles != 1 || summary.MissingFiles != 1 || summary.QuarantinedFiles != 2 {
+		t.Fatalf("unexpected scan summary: %#v", summary)
+	}
+
+	healthyResource, err := db.GetResourceByID(healthyID)
+	if err != nil {
+		t.Fatalf("GetResourceByID(healthy) failed: %v", err)
+	}
+	if healthyResource == nil || healthyResource.IsQuarantined {
+		t.Fatalf("healthy CSS should remain reusable")
+	}
+
+	corruptedResource, err := db.GetResourceByID(corruptedID)
+	if err != nil {
+		t.Fatalf("GetResourceByID(corrupted) failed: %v", err)
+	}
+	if corruptedResource == nil || !corruptedResource.IsQuarantined {
+		t.Fatalf("corrupted CSS should be quarantined")
+	}
+	if !strings.Contains(corruptedResource.FilePath, "resources/quarantine/") {
+		t.Fatalf("corrupted CSS path = %q, want resources/quarantine/...", corruptedResource.FilePath)
+	}
+	if !strings.Contains(corruptedResource.QuarantineReason, "hash mismatch") {
+		t.Fatalf("corrupted CSS reason = %q, want hash mismatch", corruptedResource.QuarantineReason)
+	}
+
+	missingResource, err := db.GetResourceByID(missingID)
+	if err != nil {
+		t.Fatalf("GetResourceByID(missing) failed: %v", err)
+	}
+	if missingResource == nil || !missingResource.IsQuarantined {
+		t.Fatalf("missing CSS should be quarantined")
+	}
+	if missingResource.FilePath != missingPath {
+		t.Fatalf("missing CSS path = %q, want original path %q", missingResource.FilePath, missingPath)
+	}
+	if missingResource.QuarantineReason != "resource file missing" {
+		t.Fatalf("missing CSS reason = %q, want resource file missing", missingResource.QuarantineReason)
+	}
+
+	imageResource, err := db.GetResourceByID(imageID)
+	if err != nil {
+		t.Fatalf("GetResourceByID(image) failed: %v", err)
+	}
+	if imageResource == nil || imageResource.IsQuarantined {
+		t.Fatalf("non-CSS resources should not be scanned by QuarantineCorruptedCSS")
+	}
+
+	activeCorrupted, err := db.GetResourceByURL(corruptedURL)
+	if err != nil {
+		t.Fatalf("GetResourceByURL(corrupted) failed: %v", err)
+	}
+	if activeCorrupted != nil {
+		t.Fatalf("corrupted CSS should be hidden from active lookups")
+	}
+	activeMissing, err := db.GetResourceByURL(missingURL)
+	if err != nil {
+		t.Fatalf("GetResourceByURL(missing) failed: %v", err)
+	}
+	if activeMissing != nil {
+		t.Fatalf("missing CSS should be hidden from active lookups")
+	}
+	activeHealthy, err := db.GetResourceByURL(healthyURL)
+	if err != nil {
+		t.Fatalf("GetResourceByURL(healthy) failed: %v", err)
+	}
+	if activeHealthy == nil || activeHealthy.ID != healthyID {
+		t.Fatalf("healthy CSS should remain available via active lookup")
+	}
+	activeImage, err := db.GetResourceByURL(imageURL)
+	if err != nil {
+		t.Fatalf("GetResourceByURL(image) failed: %v", err)
+	}
+	if activeImage == nil || activeImage.ID != imageID {
+		t.Fatalf("non-CSS resource should remain available via active lookup")
+	}
+
+	quarantinedCSS, err := fs.ReadResource(corruptedResource.FilePath)
+	if err != nil {
+		t.Fatalf("ReadResource(quarantined corrupted css) failed: %v", err)
+	}
+	if string(quarantinedCSS) != corruptedCSS {
+		t.Fatalf("quarantined corrupted css = %q, want %q", string(quarantinedCSS), corruptedCSS)
+	}
+}
+
+func TestQuarantineCorruptedCSS_QuarantinesAllRowsSharingSameFilePath(t *testing.T) {
+	dedup, db, fs := newSQLiteIntegrityTestDeduplicator(t)
+	defer db.Close()
+
+	sharedContent := []byte("body { color: red; }")
+	urlA := fmt.Sprintf("https://integrity-test.example.com/shared-a.css?nonce=%d", time.Now().UnixNano())
+	urlB := fmt.Sprintf("https://integrity-test.example.com/shared-b.css?nonce=%d", time.Now().UnixNano())
+
+	resourceIDA, sharedPath, sharedHash := createStoredTestResource(t, db, fs, urlA, "css", sharedContent)
+	resourceIDB, err := db.CreateResource(urlB, sharedHash, "css", sharedPath, int64(len(sharedContent)))
+	if err != nil {
+		t.Fatalf("CreateResource(shared duplicate) failed: %v", err)
+	}
+
+	corruptedCSS := "body { background: url(/archive/resources/shared/file.bin); }"
+	if err := fs.UpdateResource(sharedPath, []byte(corruptedCSS)); err != nil {
+		t.Fatalf("UpdateResource(shared css) failed: %v", err)
+	}
+
+	summary, err := dedup.QuarantineCorruptedCSS(10)
+	if err != nil {
+		t.Fatalf("QuarantineCorruptedCSS failed: %v", err)
+	}
+	if summary.ScannedResources != 2 {
+		t.Fatalf("ScannedResources = %d, want 2", summary.ScannedResources)
+	}
+	if summary.ScannedFiles != 1 {
+		t.Fatalf("ScannedFiles = %d, want 1", summary.ScannedFiles)
+	}
+	if summary.CorruptedFiles != 1 || summary.QuarantinedFiles != 1 {
+		t.Fatalf("unexpected scan summary: %#v", summary)
+	}
+
+	resourceA, err := db.GetResourceByID(resourceIDA)
+	if err != nil {
+		t.Fatalf("GetResourceByID(A) failed: %v", err)
+	}
+	resourceB, err := db.GetResourceByID(resourceIDB)
+	if err != nil {
+		t.Fatalf("GetResourceByID(B) failed: %v", err)
+	}
+	if resourceA == nil || resourceB == nil || !resourceA.IsQuarantined || !resourceB.IsQuarantined {
+		t.Fatalf("all rows sharing the same file path should be quarantined")
+	}
+	if resourceA.FilePath != resourceB.FilePath {
+		t.Fatalf("shared quarantined path mismatch: %q vs %q", resourceA.FilePath, resourceB.FilePath)
+	}
+	if !strings.Contains(resourceA.FilePath, "resources/quarantine/") {
+		t.Fatalf("quarantined shared path = %q, want resources/quarantine/...", resourceA.FilePath)
+	}
+}
+
+func TestQuarantineCorruptedCSS_IsIdempotentOnRepeatedRuns(t *testing.T) {
+	dedup, db, fs := newSQLiteIntegrityTestDeduplicator(t)
+	defer db.Close()
+
+	resourceURL := fmt.Sprintf("https://integrity-test.example.com/repeat.css?nonce=%d", time.Now().UnixNano())
+	_, filePath, _ := createStoredTestResource(t, db, fs, resourceURL, "css", []byte("body { color: red; }"))
+	if err := fs.UpdateResource(filePath, []byte("body { background: url(/archive/resources/repeat.bin); }")); err != nil {
+		t.Fatalf("UpdateResource(repeat css) failed: %v", err)
+	}
+
+	first, err := dedup.QuarantineCorruptedCSS(10)
+	if err != nil {
+		t.Fatalf("first QuarantineCorruptedCSS failed: %v", err)
+	}
+	if first.QuarantinedFiles != 1 {
+		t.Fatalf("first run QuarantinedFiles = %d, want 1", first.QuarantinedFiles)
+	}
+
+	second, err := dedup.QuarantineCorruptedCSS(10)
+	if err != nil {
+		t.Fatalf("second QuarantineCorruptedCSS failed: %v", err)
+	}
+	if second.ScannedResources != 0 || second.ScannedFiles != 0 || second.CorruptedFiles != 0 || second.MissingFiles != 0 || second.QuarantinedFiles != 0 {
+		t.Fatalf("second run should be idempotent, got %#v", second)
 	}
 }
 

@@ -106,6 +106,18 @@ echo "DB_NAME=wayback" >> .env
 
 服务器默认在 `http://localhost:8080` 启动。
 
+如需处理生产环境里历史遗留的坏 CSS 缓存，可在停服后执行一次离线隔离：
+
+```bash
+./wayback-server --quarantine-corrupted-css
+```
+
+这个命令会扫描所有未隔离的 CSS 资源，校验磁盘文件内容是否仍然匹配数据库中的 `content_hash`。发现被污染或丢失的文件后，会：
+
+- 把旧文件复制到 `data/resources/quarantine/...`
+- 将对应 `resources` 记录标记为隔离，不再参与后续去重/复用
+- 保留隔离副本，避免旧归档页面完全失去可读性
+
 如需通过代理下载外部资源：
 
 ```bash
@@ -254,8 +266,11 @@ data/
 │   ├── wayback-2026-03-12.001.log
 │   └── wayback-2026-03-12.002.log
 └── resources/                # 去重后的静态资源
-    └── ab/cd/
-        └── <sha256>.css
+    ├── ab/cd/
+    │   └── <sha256>.css
+    └── quarantine/           # 被隔离的历史坏资源副本
+        └── ab/cd/
+            └── <sha256>-quarantined-<ts>.css
 ```
 
 ## 从源码构建
@@ -272,6 +287,7 @@ data/
 - 通过 JS 动态注入的脚本可能无法被捕获
 - 带动态参数的统计/追踪 URL 不会被保存（不影响页面渲染）
 - 大型媒体文件（视频、高清图片）会占用较多存储空间
+- 若生产环境存在历史污染的共享 CSS，请先执行离线隔离命令，再恢复线上流量
 
 ## 许可证
 

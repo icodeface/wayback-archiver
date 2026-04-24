@@ -43,7 +43,9 @@ type Database interface {
 	GetResourceByURLPrefix(urlPrefix string, pageID int64) (*models.Resource, error)
 	GetResourceByURLPath(urlPath string, pageID int64) (*models.Resource, error)
 	GetResourcesByPageID(pageID int64) ([]models.Resource, error)
+	ListResourcesForIntegrityCheck(resourceType string, lastID int64, limit int) ([]models.Resource, error)
 	UpdateResourceLastSeen(id int64) error
+	QuarantineResourcesByFilePath(filePath, quarantinePath, reason string) (int64, error)
 
 	// 页面-资源关联
 	LinkPageResource(pageID, resourceID int64) error

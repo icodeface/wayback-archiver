@@ -405,6 +405,55 @@ func (d *Deduplicator) loadCachedResource(url string) *resourceCacheEntry {
 	return cached
 }
 
+func shortHashForLog(hash string) string {
+	if len(hash) <= 16 {
+		return hash
+	}
+	return hash[:16]
+}
+
+func (d *Deduplicator) quarantineResourceFile(filePath, reason string) error {
+	quarantinePath := filePath
+	fullPath := filepath.Join(d.storage.baseDir, filePath)
+	if _, err := os.Stat(fullPath); err == nil {
+		copiedPath, copyErr := d.storage.CreateResourceQuarantineCopy(filePath)
+		if copyErr != nil {
+			return fmt.Errorf("create quarantine copy failed: %w", copyErr)
+		}
+		quarantinePath = copiedPath
+	}
+
+	affected, err := d.db.QuarantineResourcesByFilePath(filePath, quarantinePath, reason)
+	if err != nil {
+		if quarantinePath != filePath {
+			_ = os.Remove(filepath.Join(d.storage.baseDir, quarantinePath))
+		}
+		return fmt.Errorf("update quarantine metadata failed: %w", err)
+	}
+	if quarantinePath != filePath {
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove corrupted file failed: %w", err)
+		}
+	}
+	log.Printf("[resource] quarantined corrupted file=%s moved_to=%s affected=%d reason=%s", filePath, quarantinePath, affected, reason)
+	return nil
+}
+
+func (d *Deduplicator) ensureReusableResource(resource *models.Resource, reuseURL string) bool {
+	if resource == nil {
+		return false
+	}
+	if resource.IsQuarantined {
+		log.Printf("[resource] skip quarantined reuse id=%d url=%s reason=%s", resource.ID, shortURLForLog(reuseURL), resource.QuarantineReason)
+		return false
+	}
+	if resource.FilePath == "" {
+		log.Printf("[resource] skip reuse for empty file path id=%d url=%s", resource.ID, shortURLForLog(reuseURL))
+		return false
+	}
+	return true
+}
+
 func (d *Deduplicator) tryReuseFreshCache(url string, cached *resourceCacheEntry) (int64, string, bool) {
 	if cached == nil || cached.freshUntil.IsZero() || !time.Now().Before(cached.freshUntil) {
 		return 0, "", false
@@ -413,14 +462,24 @@ func (d *Deduplicator) tryReuseFreshCache(url string, cached *resourceCacheEntry
 		d.cacheDelete(url)
 		return 0, "", false
 	}
+	resource, err := d.db.GetResourceByID(cached.resourceID)
+	if err != nil {
+		log.Printf("[cache] failed to load cached resource %d for %s: %v", cached.resourceID, shortURLForLog(url), err)
+		d.cacheDelete(url)
+		return 0, "", false
+	}
+	if !d.ensureReusableResource(resource, url) {
+		d.cacheDelete(url)
+		return 0, "", false
+	}
 
-	d.cacheStoreWithMetadata(url, cached.resourceID, cached.filePath, downloadMetadata{
+	d.cacheStoreWithMetadata(url, resource.ID, resource.FilePath, downloadMetadata{
 		etag:       cached.etag,
 		lastMod:    cached.lastMod,
 		freshUntil: cached.freshUntil,
 	}, nil)
 	log.Printf("[cache] fresh reuse: %s", shortURLForLog(url))
-	return cached.resourceID, cached.filePath, true
+	return resource.ID, resource.FilePath, true
 }
 
 func shortURLForLog(raw string) string {
@@ -596,18 +655,31 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 				return d.processResourceFallback(url, err)
 			}
 		} else {
-			if !metadata.hasFreshness {
-				metadata.freshUntil = cached.freshUntil
+			cachedResource, err := d.db.GetResourceByID(cached.resourceID)
+			if err != nil {
+				return 0, "", nil, fmt.Errorf("db query cached resource failed: %w", err)
 			}
-			if metadata.etag == "" {
-				metadata.etag = cached.etag
+			if !d.ensureReusableResource(cachedResource, url) {
+				d.cacheDelete(url)
+				data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(url, pageURL, headers, cookies, streamThreshold, "", "")
+				if err != nil {
+					log.Printf("Download failed for %s after corrupted cache revalidation miss: %v", url, err)
+					return d.processResourceFallback(url, err)
+				}
+			} else {
+				if !metadata.hasFreshness {
+					metadata.freshUntil = cached.freshUntil
+				}
+				if metadata.etag == "" {
+					metadata.etag = cached.etag
+				}
+				if metadata.lastMod == "" {
+					metadata.lastMod = cached.lastMod
+				}
+				d.cacheStoreWithMetadata(url, cachedResource.ID, cachedResource.FilePath, metadata, nil)
+				log.Printf("[cache] revalidated 304: %s (%v)", shortURLForLog(url), time.Since(startTime))
+				return cachedResource.ID, cachedResource.FilePath, nil, nil
 			}
-			if metadata.lastMod == "" {
-				metadata.lastMod = cached.lastMod
-			}
-			d.cacheStoreWithMetadata(url, cached.resourceID, cached.filePath, metadata, nil)
-			log.Printf("[cache] revalidated 304: %s (%v)", shortURLForLog(url), time.Since(startTime))
-			return cached.resourceID, cached.filePath, nil, nil
 		}
 	}
 	if data != nil {
@@ -634,16 +706,16 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 		if err != nil {
 			return 0, "", nil, fmt.Errorf("db query cached resource failed: %w", err)
 		}
-		if cachedResource != nil && cachedResource.ContentHash == hash {
+		if cachedResource != nil && cachedResource.ContentHash == hash && d.ensureReusableResource(cachedResource, url) {
 			dbStart = time.Now()
-			if err := d.db.UpdateResourceLastSeen(cached.resourceID); err != nil {
+			if err := d.db.UpdateResourceLastSeen(cachedResource.ID); err != nil {
 				dbDuration += time.Since(dbStart)
 				return 0, "", nil, err
 			}
 			dbDuration += time.Since(dbStart)
-			d.cacheStoreWithMetadata(url, cached.resourceID, cached.filePath, metadata, data)
+			d.cacheStoreWithMetadata(url, cachedResource.ID, cachedResource.FilePath, metadata, data)
 			logSlowResource(url, resourceType, fileSize, trace, dbDuration, saveDuration, time.Since(startTime))
-			return cached.resourceID, cached.filePath, data, nil
+			return cachedResource.ID, cachedResource.FilePath, data, nil
 		}
 	}
 
@@ -653,6 +725,9 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 	dbDuration += time.Since(dbStart)
 	if err != nil {
 		return 0, "", nil, fmt.Errorf("db query by url failed: %w", err)
+	}
+	if existingByURL != nil && !d.ensureReusableResource(existingByURL, url) {
+		existingByURL = nil
 	}
 	if existingByURL != nil {
 		if existingByURL.ContentHash == hash {
@@ -676,6 +751,9 @@ func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string,
 	dbDuration += time.Since(dbStart)
 	if err != nil {
 		return 0, "", nil, fmt.Errorf("db query by hash failed: %w", err)
+	}
+	if existingByHash != nil && !d.ensureReusableResource(existingByHash, url) {
+		existingByHash = nil
 	}
 
 	var filePath string
@@ -734,6 +812,9 @@ func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (i
 		return 0, "", nil, fmt.Errorf("download failed: %w (fallback lookup failed: %v)", downloadErr, err)
 	}
 	if resource == nil || resource.FilePath == "" {
+		return 0, "", nil, fmt.Errorf("download failed: %w", downloadErr)
+	}
+	if !d.ensureReusableResource(resource, url) {
 		return 0, "", nil, fmt.Errorf("download failed: %w", downloadErr)
 	}
 
@@ -887,8 +968,13 @@ func (d *Deduplicator) processInlineResource(url, resourceType string, data []by
 
 	var filePath string
 	if existingByHash != nil {
-		filePath = existingByHash.FilePath
-	} else {
+		if d.ensureReusableResource(existingByHash, url) {
+			filePath = existingByHash.FilePath
+		} else {
+			existingByHash = nil
+		}
+	}
+	if existingByHash == nil {
 		filePath, err = d.storage.SaveResource(data, hash, resourceType)
 		if err != nil {
 			return 0, "", nil, fmt.Errorf("save failed: %w", err)

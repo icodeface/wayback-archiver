@@ -29,6 +29,8 @@ var (
 
 const shutdownTimeout = 30 * time.Second
 
+const quarantineCorruptedCSSFlag = "--quarantine-corrupted-css"
+
 type backgroundTaskWaiter interface {
 	WaitForBackgroundTasks()
 }
@@ -90,14 +92,61 @@ func serveWithGracefulShutdown(ctx context.Context, server *http.Server, waiter 
 	return nil
 }
 
+func runQuarantineCorruptedCSS() error {
+	_ = godotenv.Load()
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		return fmt.Errorf("load configuration failed: %w", err)
+	}
+
+	logger, err := logging.Setup(cfg.Storage.LogDir)
+	if err != nil {
+		return fmt.Errorf("setup logging failed: %w", err)
+	}
+	defer logger.Close()
+
+	db, err := database.Open(&cfg.Database)
+	if err != nil {
+		return fmt.Errorf("connect database failed: %w", err)
+	}
+	defer db.Close()
+
+	fileStorage := storage.NewFileStorage(cfg.Storage.DataDir, cfg.Resource.DownloadTimeout)
+	dedup := storage.NewDeduplicator(db, fileStorage, cfg.Resource)
+
+	log.Printf("Starting corrupted CSS quarantine scan")
+	summary, err := dedup.QuarantineCorruptedCSS(200)
+	if err != nil {
+		return fmt.Errorf("quarantine corrupted css failed: %w", err)
+	}
+	log.Printf(
+		"Corrupted CSS quarantine completed: scanned_resources=%d scanned_files=%d corrupted_files=%d missing_files=%d quarantined_files=%d",
+		summary.ScannedResources,
+		summary.ScannedFiles,
+		summary.CorruptedFiles,
+		summary.MissingFiles,
+		summary.QuarantinedFiles,
+	)
+	return nil
+}
+
 func main() {
 	// Handle --version / -v
-	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
-		fmt.Printf("wayback-server %s\n", Version)
-		if BuildTime != "" {
-			fmt.Printf("built at %s\n", BuildTime)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-v":
+			fmt.Printf("wayback-server %s\n", Version)
+			if BuildTime != "" {
+				fmt.Printf("built at %s\n", BuildTime)
+			}
+			return
+		case quarantineCorruptedCSSFlag:
+			if err := runQuarantineCorruptedCSS(); err != nil {
+				log.Fatalf("Resource integrity task failed: %v", err)
+			}
+			return
 		}
-		return
 	}
 	// 加载 .env 文件（如果存在）
 	// 忽略错误，因为 .env 文件是可选的（可以直接使用环境变量）
