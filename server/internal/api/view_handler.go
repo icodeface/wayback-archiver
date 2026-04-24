@@ -666,10 +666,12 @@ func serveFileStreaming(c *gin.Context, filePath string) {
 // 早期归档的页面 srcset 属性未被重写，这里在渲染时补偿处理
 // 策略：删除 <picture> 中的 <source> 元素，让浏览器回退到 <img> 标签（已被正确重写）
 func fixUnrewrittenSrcset(html string) string {
-	// 删除 <picture> 标签内的 <source> 元素
-	// <source> 提供 avif/webp 等现代格式，但 srcset 未重写会导致加载失败
-	// <img> 的 src 已被正确重写，删除 <source> 后浏览器会回退到 <img>
-	html = sourceTagRe.ReplaceAllString(html, "")
+	// 仅删除 <picture> 标签内的 <source> 元素，避免误伤 video/audio 的可播放资源。
+	html = pictureBlockRe.ReplaceAllStringFunc(html, func(match string) string {
+		// <source> 提供 avif/webp 等现代格式，但 srcset 未重写会导致加载失败。
+		// <img> 的 src 已被正确重写，删除 <source> 后浏览器会回退到 <img>。
+		return sourceTagRe.ReplaceAllString(match, "")
+	})
 
 	return html
 }

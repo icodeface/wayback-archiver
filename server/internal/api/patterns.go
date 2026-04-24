@@ -44,6 +44,7 @@ var (
 	embedTagRe       = regexp.MustCompile(`(?is)<embed\b[^>]*/?>`)
 	autoplayAttrRe   = regexp.MustCompile(`(?i)\s+autoplay(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?`)
 	controlsAttrRe   = regexp.MustCompile(`(?i)\s+controls(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?`)
+	pictureBlockRe   = regexp.MustCompile(`(?is)<picture\b[^>]*>.*?</picture>`)
 	sourceTagRe      = regexp.MustCompile(`(?is)<source[^>]*>`)
 	videoBlockRe     = regexp.MustCompile(`(?is)<video\b([^>]*)>(.*?)</video>|<video\b([^>]*)/>`)
 )
