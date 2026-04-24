@@ -106,6 +106,18 @@ The server will create the configured PostgreSQL database and tables automatical
 
 The server starts at `http://localhost:8080` by default.
 
+If you need to quarantine historically corrupted CSS cache files in production, stop the server and run a one-off offline pass:
+
+```bash
+./wayback-server --quarantine-corrupted-css
+```
+
+This command scans every non-quarantined CSS resource and verifies that the file still matches the `content_hash` stored in the database. When a polluted or missing file is found, it will:
+
+- copy the old file into `data/resources/quarantine/...`
+- mark every matching `resources` row as quarantined so it is no longer reused for deduplication
+- keep the quarantined copy on disk so older archived pages do not lose the historical file completely
+
 If you need a proxy for downloading external resources:
 
 ```bash
@@ -287,8 +299,11 @@ data/
 │   ├── wayback-2026-03-12.001.log
 │   └── wayback-2026-03-12.002.log
 └── resources/                # Deduplicated static resources
-    └── ab/cd/
-        └── <sha256>.css
+    ├── ab/cd/
+    │   └── <sha256>.css
+    └── quarantine/           # Historical corrupted resource copies kept for isolation
+        └── ab/cd/
+            └── <sha256>-quarantined-<ts>.css
 ```
 
 ## Building from Source
@@ -305,6 +320,7 @@ This project includes an [Agent skill](skill.md) for AI-assisted querying and ex
 - Dynamically injected scripts (loaded via JS at runtime) may not be captured
 - Tracking pixels and analytics URLs with dynamic parameters are not preserved (they don't affect page rendering)
 - Very large media files (video, large images) will consume significant storage
+- Historically polluted shared CSS files should be handled with the offline quarantine command before restarting production traffic
 
 ## License
 

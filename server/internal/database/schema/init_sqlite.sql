@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS resources (
     file_path TEXT NOT NULL,
     file_size BIGINT,
     first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
+    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_quarantined BOOLEAN NOT NULL DEFAULT 0,
+    quarantine_reason TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_resources_hash ON resources(content_hash);

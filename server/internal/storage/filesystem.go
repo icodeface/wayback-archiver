@@ -622,6 +622,46 @@ func (fs *FileStorage) ReadResource(relPath string) ([]byte, error) {
 	return os.ReadFile(filePath)
 }
 
+func (fs *FileStorage) ResourceHash(relPath string) (string, error) {
+	filePath := filepath.Join(fs.baseDir, relPath)
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func (fs *FileStorage) CreateResourceQuarantineCopy(relPath string) (string, error) {
+	fullPath := filepath.Join(fs.baseDir, relPath)
+	if _, err := os.Stat(fullPath); err != nil {
+		return "", err
+	}
+
+	ext := filepath.Ext(relPath)
+	baseName := strings.TrimSuffix(filepath.Base(relPath), ext)
+	resourceSubdir := strings.TrimPrefix(filepath.Dir(relPath), "resources"+string(filepath.Separator))
+	quarantineRelPath := filepath.Join(
+		"resources",
+		"quarantine",
+		resourceSubdir,
+		fmt.Sprintf("%s-quarantined-%d%s", baseName, time.Now().UTC().UnixNano(), ext),
+	)
+	quarantineFullPath := filepath.Join(fs.baseDir, quarantineRelPath)
+	if err := os.MkdirAll(filepath.Dir(quarantineFullPath), 0755); err != nil {
+		return "", err
+	}
+	if err := copyFile(fullPath, quarantineFullPath); err != nil {
+		return "", err
+	}
+	return quarantineRelPath, nil
+}
+
 // DeleteHTML deletes an HTML file from disk.
 func (fs *FileStorage) DeleteHTML(relPath string) error {
 	filePath := filepath.Join(fs.baseDir, relPath)

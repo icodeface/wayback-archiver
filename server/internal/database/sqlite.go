@@ -30,7 +30,8 @@ const (
 	sqliteMigrationVersionSnapshotState          = 2
 	sqliteMigrationVersionTimestampNormalization = 3
 	sqliteMigrationVersionTimestampFixedWidth    = 4
-	sqliteMigrationVersionCurrent                = sqliteMigrationVersionTimestampFixedWidth
+	sqliteMigrationVersionResourceQuarantine     = 5
+	sqliteMigrationVersionCurrent                = sqliteMigrationVersionResourceQuarantine
 )
 
 func formatSQLiteTimestamp(t time.Time) string {
@@ -169,6 +170,17 @@ func (db *SQLiteDB) ensureMigrations() error {
 		if err := db.setSQLiteUserVersion(sqliteMigrationVersionTimestampFixedWidth); err != nil {
 			return err
 		}
+		version = sqliteMigrationVersionTimestampFixedWidth
+	}
+
+	if version < sqliteMigrationVersionResourceQuarantine {
+		if err := db.ensureResourceQuarantineColumns(); err != nil {
+			return err
+		}
+
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionResourceQuarantine); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -264,6 +276,19 @@ func (db *SQLiteDB) ensureNormalizedTimestamps() error {
 	}
 
 	return tx.Commit()
+}
+
+func (db *SQLiteDB) ensureResourceQuarantineColumns() error {
+	if _, err := db.conn.Exec("ALTER TABLE resources ADD COLUMN is_quarantined BOOLEAN NOT NULL DEFAULT 0"); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.conn.Exec("ALTER TABLE resources ADD COLUMN quarantine_reason TEXT NOT NULL DEFAULT ''"); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.conn.Exec("UPDATE resources SET quarantine_reason = '' WHERE quarantine_reason IS NULL"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (db *SQLiteDB) ensureFTSConsistency() error {
@@ -411,10 +436,10 @@ func (db *SQLiteDB) UpdatePageLastVisited(id int64, lastVisited time.Time) error
 // GetResourceByHash 根据哈希查找资源
 func (db *SQLiteDB) GetResourceByHash(hash string) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(
-		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE content_hash = ?",
+	err := scanResource(db.conn.QueryRow(
+		"SELECT "+resourceSelectColumns+" FROM resources WHERE content_hash = ? AND is_quarantined = 0 ORDER BY last_seen DESC LIMIT 1",
 		hash,
-	).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -507,10 +532,7 @@ func (db *SQLiteDB) CheckRecentCapture(url string, within time.Duration) (bool, 
 // GetResourceByID 根据 ID 获取资源
 func (db *SQLiteDB) GetResourceByID(id int64) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(
-		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE id = ?",
-		id,
-	).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	err := scanResource(db.conn.QueryRow("SELECT "+resourceSelectColumns+" FROM resources WHERE id = ?", id), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -523,11 +545,17 @@ func (db *SQLiteDB) GetResourceByID(id int64) (*models.Resource, error) {
 
 // GetResourceByURL 根据 URL 获取资源（返回最新的）
 func (db *SQLiteDB) GetResourceByURL(url string) (*models.Resource, error) {
+	return db.getAnyResourceByURL(url, false)
+}
+
+func (db *SQLiteDB) getAnyResourceByURL(url string, includeQuarantined bool) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(
-		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE url = ? ORDER BY last_seen DESC LIMIT 1",
-		url,
-	).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	query := "SELECT " + resourceSelectColumns + " FROM resources WHERE url = ?"
+	if !includeQuarantined {
+		query += " AND is_quarantined = 0"
+	}
+	query += " ORDER BY last_seen DESC LIMIT 1"
+	err := scanResource(db.conn.QueryRow(query, url), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -541,10 +569,10 @@ func (db *SQLiteDB) GetResourceByURL(url string) (*models.Resource, error) {
 // GetResourceByURLLike 根据 URL 模糊匹配查找资源（如忽略查询参数差异）
 func (db *SQLiteDB) GetResourceByURLLike(pattern string) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(
-		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE url LIKE ? ORDER BY last_seen DESC LIMIT 1",
+	err := scanResource(db.conn.QueryRow(
+		"SELECT "+resourceSelectColumns+" FROM resources WHERE url LIKE ? AND is_quarantined = 0 ORDER BY last_seen DESC LIMIT 1",
 		pattern,
-	).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -719,7 +747,7 @@ func (db *SQLiteDB) GetPagesWithoutBodyText() ([]models.Page, error) {
 // GetResourcesByPageID 获取页面关联的所有资源
 func (db *SQLiteDB) GetResourcesByPageID(pageID int64) ([]models.Resource, error) {
 	rows, err := db.conn.Query(`
-		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
+		SELECT `+resourceSelectColumns+`
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
 		WHERE pr.page_id = ?
@@ -732,7 +760,7 @@ func (db *SQLiteDB) GetResourcesByPageID(pageID int64) ([]models.Resource, error
 	var resources []models.Resource
 	for rows.Next() {
 		var r models.Resource
-		if err := rows.Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen); err != nil {
+		if err := scanResource(rows, &r); err != nil {
 			return nil, err
 		}
 		resources = append(resources, r)
@@ -748,19 +776,19 @@ func (db *SQLiteDB) GetResourceByURLAndPageID(url string, pageID int64) (*models
 	}
 
 	// 如果页面关联中没有，尝试直接按URL查找最新的
-	return db.GetResourceByURL(url)
+	return db.getAnyResourceByURL(url, true)
 }
 
 // GetLinkedResourceByURLAndPageID 根据URL和页面ID查找资源，只查询 page_resources 关联，不做全局兜底
 func (db *SQLiteDB) GetLinkedResourceByURLAndPageID(url string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(`
-		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
+	err := scanResource(db.conn.QueryRow(`
+		SELECT `+resourceSelectColumns+`
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
 		WHERE pr.page_id = ? AND r.url = ?
 		LIMIT 1
-	`, pageID, url).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	`, pageID, url), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -775,14 +803,14 @@ func (db *SQLiteDB) GetLinkedResourceByURLAndPageID(url string, pageID int64) (*
 func (db *SQLiteDB) GetResourceByURLPrefix(urlPrefix string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
 	escapedPrefix := escapeLikePattern(urlPrefix)
-	err := db.conn.QueryRow(`
-		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
+	err := scanResource(db.conn.QueryRow(`
+		SELECT `+resourceSelectColumns+`
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
 		WHERE pr.page_id = ? AND (r.url LIKE ? ESCAPE '\' OR r.url LIKE ? ESCAPE '\')
 		ORDER BY r.last_seen DESC, r.id DESC
 		LIMIT 1
-	`, pageID, escapedPrefix+"#%", escapedPrefix+"%23%").Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	`, pageID, escapedPrefix+"#%", escapedPrefix+"%23%"), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -797,14 +825,14 @@ func (db *SQLiteDB) GetResourceByURLPrefix(urlPrefix string, pageID int64) (*mod
 func (db *SQLiteDB) GetResourceByURLPath(urlPath string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
 	escapedPath := escapeLikePattern(urlPath)
-	err := db.conn.QueryRow(`
-		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
+	err := scanResource(db.conn.QueryRow(`
+		SELECT `+resourceSelectColumns+`
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
 		WHERE pr.page_id = ? AND (r.url = ? OR r.url LIKE ? ESCAPE '\')
 		ORDER BY CASE WHEN r.url = ? THEN 0 ELSE 1 END, r.last_seen DESC, r.id DESC
 		LIMIT 1
-	`, pageID, urlPath, escapedPath+"?%", urlPath).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	`, pageID, urlPath, escapedPath+"?%", urlPath), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -813,6 +841,42 @@ func (db *SQLiteDB) GetResourceByURLPath(urlPath string, pageID int64) (*models.
 		return nil, err
 	}
 	return &r, nil
+}
+
+func (db *SQLiteDB) ListResourcesForIntegrityCheck(resourceType string, lastID int64, limit int) ([]models.Resource, error) {
+	rows, err := db.conn.Query(
+		"SELECT "+resourceSelectColumns+" FROM resources WHERE resource_type = ? AND is_quarantined = 0 AND id > ? ORDER BY id ASC LIMIT ?",
+		resourceType,
+		lastID,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	resources := make([]models.Resource, 0, limit)
+	for rows.Next() {
+		var r models.Resource
+		if err := scanResource(rows, &r); err != nil {
+			return nil, err
+		}
+		resources = append(resources, r)
+	}
+	return resources, nil
+}
+
+func (db *SQLiteDB) QuarantineResourcesByFilePath(filePath, quarantinePath, reason string) (int64, error) {
+	result, err := db.conn.Exec(
+		"UPDATE resources SET file_path = ?, is_quarantined = 1, quarantine_reason = ? WHERE file_path = ? AND is_quarantined = 0",
+		quarantinePath,
+		reason,
+		filePath,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // UpdatePageContent 更新页面内容（HTML路径、哈希、标题、最后访问时间）

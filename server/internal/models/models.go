@@ -17,14 +17,16 @@ type Page struct {
 }
 
 type Resource struct {
-	ID           int64     `json:"id"`
-	URL          string    `json:"url"`
-	ContentHash  string    `json:"content_hash"`
-	ResourceType string    `json:"resource_type"`
-	FilePath     string    `json:"file_path"`
-	FileSize     int64     `json:"file_size"`
-	FirstSeen    time.Time `json:"first_seen"`
-	LastSeen     time.Time `json:"last_seen"`
+	ID               int64     `json:"id"`
+	URL              string    `json:"url"`
+	ContentHash      string    `json:"content_hash"`
+	ResourceType     string    `json:"resource_type"`
+	FilePath         string    `json:"file_path"`
+	FileSize         int64     `json:"file_size"`
+	FirstSeen        time.Time `json:"first_seen"`
+	LastSeen         time.Time `json:"last_seen"`
+	IsQuarantined    bool      `json:"is_quarantined"`
+	QuarantineReason string    `json:"quarantine_reason,omitempty"`
 }
 
 type CaptureRequest struct {

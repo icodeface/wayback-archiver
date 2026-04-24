@@ -73,6 +73,10 @@ func NewPostgres(host, port, user, password, dbname string, sslmode ...string) (
 		conn.Close()
 		return nil, fmt.Errorf("failed to ensure snapshot_state column: %w", err)
 	}
+	if err := db.ensureResourceQuarantineColumns(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to ensure resource quarantine columns: %w", err)
+	}
 	return db, nil
 }
 
@@ -260,6 +264,19 @@ func (db *PostgresDB) ensureSnapshotStateColumn() error {
 	return nil
 }
 
+func (db *PostgresDB) ensureResourceQuarantineColumns() error {
+	if _, err := db.conn.Exec(`ALTER TABLE resources ADD COLUMN IF NOT EXISTS is_quarantined BOOLEAN NOT NULL DEFAULT FALSE`); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(`ALTER TABLE resources ADD COLUMN IF NOT EXISTS quarantine_reason TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(`UPDATE resources SET quarantine_reason = '' WHERE quarantine_reason IS NULL`); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (db *PostgresDB) Close() error {
 	return db.conn.Close()
 }
@@ -307,10 +324,10 @@ func (db *PostgresDB) UpdatePageLastVisited(id int64, lastVisited time.Time) err
 // GetResourceByHash 根据哈希查找资源
 func (db *PostgresDB) GetResourceByHash(hash string) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(
-		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE content_hash = $1",
+	err := scanResource(db.conn.QueryRow(
+		"SELECT "+resourceSelectColumns+" FROM resources WHERE content_hash = $1 AND is_quarantined = FALSE ORDER BY last_seen DESC LIMIT 1",
 		hash,
-	).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -390,10 +407,7 @@ func (db *PostgresDB) CheckRecentCapture(url string, within time.Duration) (bool
 // GetResourceByID 根据 ID 获取资源
 func (db *PostgresDB) GetResourceByID(id int64) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(
-		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE id = $1",
-		id,
-	).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	err := scanResource(db.conn.QueryRow("SELECT "+resourceSelectColumns+" FROM resources WHERE id = $1", id), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -406,11 +420,17 @@ func (db *PostgresDB) GetResourceByID(id int64) (*models.Resource, error) {
 
 // GetResourceByURL 根据 URL 获取资源（返回最新的）
 func (db *PostgresDB) GetResourceByURL(url string) (*models.Resource, error) {
+	return db.getAnyResourceByURL(url, false)
+}
+
+func (db *PostgresDB) getAnyResourceByURL(url string, includeQuarantined bool) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(
-		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE url = $1 ORDER BY last_seen DESC LIMIT 1",
-		url,
-	).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	query := "SELECT " + resourceSelectColumns + " FROM resources WHERE url = $1"
+	if !includeQuarantined {
+		query += " AND is_quarantined = FALSE"
+	}
+	query += " ORDER BY last_seen DESC LIMIT 1"
+	err := scanResource(db.conn.QueryRow(query, url), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -424,10 +444,10 @@ func (db *PostgresDB) GetResourceByURL(url string) (*models.Resource, error) {
 // GetResourceByURLLike 根据 URL 模糊匹配查找资源（如忽略查询参数差异）
 func (db *PostgresDB) GetResourceByURLLike(pattern string) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(
-		"SELECT id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen FROM resources WHERE url LIKE $1 ORDER BY last_seen DESC LIMIT 1",
+	err := scanResource(db.conn.QueryRow(
+		"SELECT "+resourceSelectColumns+" FROM resources WHERE url LIKE $1 AND is_quarantined = FALSE ORDER BY last_seen DESC LIMIT 1",
 		pattern,
-	).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -616,7 +636,7 @@ func (db *PostgresDB) GetPagesWithoutBodyText() ([]models.Page, error) {
 // GetResourcesByPageID 获取页面关联的所有资源
 func (db *PostgresDB) GetResourcesByPageID(pageID int64) ([]models.Resource, error) {
 	rows, err := db.conn.Query(`
-		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
+		SELECT `+resourceSelectColumns+`
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
 		WHERE pr.page_id = $1
@@ -629,7 +649,7 @@ func (db *PostgresDB) GetResourcesByPageID(pageID int64) ([]models.Resource, err
 	var resources []models.Resource
 	for rows.Next() {
 		var r models.Resource
-		if err := rows.Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen); err != nil {
+		if err := scanResource(rows, &r); err != nil {
 			return nil, err
 		}
 		resources = append(resources, r)
@@ -645,19 +665,19 @@ func (db *PostgresDB) GetResourceByURLAndPageID(url string, pageID int64) (*mode
 	}
 
 	// 如果页面关联中没有，尝试直接按URL查找最新的
-	return db.GetResourceByURL(url)
+	return db.getAnyResourceByURL(url, true)
 }
 
 // GetLinkedResourceByURLAndPageID 根据URL和页面ID查找资源，只查询 page_resources 关联，不做全局兜底
 func (db *PostgresDB) GetLinkedResourceByURLAndPageID(url string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
-	err := db.conn.QueryRow(`
-		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
+	err := scanResource(db.conn.QueryRow(`
+		SELECT `+resourceSelectColumns+`
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
 		WHERE pr.page_id = $1 AND r.url = $2
 		LIMIT 1
-	`, pageID, url).Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	`, pageID, url), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -672,14 +692,14 @@ func (db *PostgresDB) GetLinkedResourceByURLAndPageID(url string, pageID int64) 
 func (db *PostgresDB) GetResourceByURLPrefix(urlPrefix string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
 	escapedPrefix := escapeLikePattern(urlPrefix)
-	err := db.conn.QueryRow(`
-		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
+	err := scanResource(db.conn.QueryRow(`
+		SELECT `+resourceSelectColumns+`
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
 		WHERE pr.page_id = $1 AND (r.url LIKE $2 ESCAPE '\' OR r.url LIKE $3 ESCAPE '\')
 		ORDER BY r.last_seen DESC, r.id DESC
 		LIMIT 1
-	`, pageID, escapedPrefix+"#%", escapedPrefix+"%23%").Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	`, pageID, escapedPrefix+"#%", escapedPrefix+"%23%"), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -694,14 +714,14 @@ func (db *PostgresDB) GetResourceByURLPrefix(urlPrefix string, pageID int64) (*m
 func (db *PostgresDB) GetResourceByURLPath(urlPath string, pageID int64) (*models.Resource, error) {
 	var r models.Resource
 	escapedPath := escapeLikePattern(urlPath)
-	err := db.conn.QueryRow(`
-		SELECT r.id, r.url, r.content_hash, r.resource_type, r.file_path, r.file_size, r.first_seen, r.last_seen
+	err := scanResource(db.conn.QueryRow(`
+		SELECT `+resourceSelectColumns+`
 		FROM resources r
 		INNER JOIN page_resources pr ON r.id = pr.resource_id
 		WHERE pr.page_id = $1 AND (r.url = $2 OR r.url LIKE $3 ESCAPE '\')
 		ORDER BY CASE WHEN r.url = $2 THEN 0 ELSE 1 END, r.last_seen DESC, r.id DESC
 		LIMIT 1
-	`, pageID, urlPath, escapedPath+"?%").Scan(&r.ID, &r.URL, &r.ContentHash, &r.ResourceType, &r.FilePath, &r.FileSize, &r.FirstSeen, &r.LastSeen)
+	`, pageID, urlPath, escapedPath+"?%"), &r)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -710,6 +730,42 @@ func (db *PostgresDB) GetResourceByURLPath(urlPath string, pageID int64) (*model
 		return nil, err
 	}
 	return &r, nil
+}
+
+func (db *PostgresDB) ListResourcesForIntegrityCheck(resourceType string, lastID int64, limit int) ([]models.Resource, error) {
+	rows, err := db.conn.Query(
+		"SELECT "+resourceSelectColumns+" FROM resources WHERE resource_type = $1 AND is_quarantined = FALSE AND id > $2 ORDER BY id ASC LIMIT $3",
+		resourceType,
+		lastID,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	resources := make([]models.Resource, 0, limit)
+	for rows.Next() {
+		var r models.Resource
+		if err := scanResource(rows, &r); err != nil {
+			return nil, err
+		}
+		resources = append(resources, r)
+	}
+	return resources, nil
+}
+
+func (db *PostgresDB) QuarantineResourcesByFilePath(filePath, quarantinePath, reason string) (int64, error) {
+	result, err := db.conn.Exec(
+		"UPDATE resources SET file_path = $1, is_quarantined = TRUE, quarantine_reason = $2 WHERE file_path = $3 AND is_quarantined = FALSE",
+		quarantinePath,
+		reason,
+		filePath,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // UpdatePageContent 更新页面内容（HTML路径、哈希、标题、最后访问时间）
