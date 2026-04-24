@@ -22,6 +22,7 @@ import { sendToServer, updateOnServer } from './archiver';
 import { DOMCollector } from './dom-collector';
 import { captureDocumentHTMLWithFrames, setupFrameCaptureBridge } from './frame-capture';
 import { chooseFlushAction, choosePendingFlushDependency, shouldClearAsyncState, shouldCommitMonitorUpdate } from './spa-coordinator';
+import { captureViewportMeta, injectViewportMeta } from './viewport-meta';
 
 // Early exit check before any initialization
 if (shouldSkipPage()) {
@@ -88,6 +89,8 @@ function initializeArchiver(): void {
       console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes into snapshot...`);
       html = domCollector.mergeInto(html);
     }
+
+    html = injectViewportMeta(html, captureViewportMeta());
 
     return {
       url: snapshotURL,

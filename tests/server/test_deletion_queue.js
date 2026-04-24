@@ -14,7 +14,7 @@ const path = require('path');
 
 const SERVER_URL = 'http://localhost:8080';
 const TEST_URL = 'https://example.com/test-deletion-queue';
-const DATA_DIR = path.join(__dirname, '../../data');
+const DATA_DIR = process.env.WAYBACK_DATA_DIR || path.join(__dirname, '../../data');
 const DELETION_QUEUE_FILE = path.join(DATA_DIR, 'deletion_queue.jsonl');
 
 async function sleep(ms) {

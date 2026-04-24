@@ -110,6 +110,22 @@ func TestRoutes_CORS_IncludesAuthorizationHeader(t *testing.T) {
 	}
 }
 
+func TestRoutes_CORS_IncludesHEADMethod(t *testing.T) {
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("OPTIONS", "/api/archive", nil)
+	r.ServeHTTP(w, req)
+
+	allowMethods := w.Header().Get("Access-Control-Allow-Methods")
+	if allowMethods == "" {
+		t.Fatal("Access-Control-Allow-Methods not set")
+	}
+	if !containsSubstring(allowMethods, "HEAD") {
+		t.Fatalf("CORS Allow-Methods = %q, want it to include HEAD", allowMethods)
+	}
+}
+
 func TestRoutes_CORS_AllowedOriginsEnvEnablesCustomOrigin(t *testing.T) {
 	t.Setenv("ALLOWED_ORIGINS", "https://allowed.example.com")
 	r := setupRouterFromEnv(t)
@@ -214,6 +230,57 @@ func TestServeEmbeddedFile_SetsContentType(t *testing.T) {
 	}
 }
 
+func TestRoutes_HEAD_EmbeddedPageReturnsHeadersWithoutBody(t *testing.T) {
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodHead, "/", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want text/html; charset=utf-8", got)
+	}
+	if bodyLen := w.Body.Len(); bodyLen != 0 {
+		t.Fatalf("HEAD / body length = %d, want 0", bodyLen)
+	}
+}
+
+func TestRoutes_HEAD_APIVersionReturnsHeadersWithoutBody(t *testing.T) {
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodHead, "/api/version", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got == "" {
+		t.Fatal("Content-Type not set for HEAD /api/version")
+	}
+	if bodyLen := w.Body.Len(); bodyLen != 0 {
+		t.Fatalf("HEAD /api/version body length = %d, want 0", bodyLen)
+	}
+}
+
+func TestRoutes_HEAD_ViewPageInvalidIDReturnsNoBody(t *testing.T) {
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodHead, "/view/not-a-number", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	if bodyLen := w.Body.Len(); bodyLen != 0 {
+		t.Fatalf("HEAD /view/not-a-number body length = %d, want 0", bodyLen)
+	}
+}
+
 func containsSubstring(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && stringContains(s, substr))
 }
@@ -225,42 +292,4 @@ func stringContains(s, substr string) bool {
 		}
 	}
 	return false
-}
-
-func TestRoutes_HEAD_ProxyResource(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-
-	// Register a simple handler that returns 200 for HEAD requests
-	r.HEAD("/archive/:page_id/:timestamp/*resource_path", func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("HEAD", "/archive/123/20240309150405mp_/https://example.com/style.css", nil)
-	r.ServeHTTP(w, req)
-
-	// Should not be 404 (route should exist)
-	if w.Code == http.StatusNotFound {
-		t.Errorf("HEAD /archive/:page_id/:timestamp/*resource_path route not registered, got 404")
-	}
-}
-
-func TestRoutes_HEAD_ServeLocalResource(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-
-	// Register a simple handler that returns 200 for HEAD requests
-	r.HEAD("/archive/resources/*filepath", func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("HEAD", "/archive/resources/ab/cd/hash.css", nil)
-	r.ServeHTTP(w, req)
-
-	// Should not be 404 (route should exist)
-	if w.Code == http.StatusNotFound {
-		t.Errorf("HEAD /archive/resources/*filepath route not registered, got 404")
-	}
 }

@@ -7,6 +7,7 @@ import { shouldSkipPage } from './page-filter';
 import { waitForDOMStable } from './page-freezer';
 import { DOMCollector } from './dom-collector';
 import { captureDocumentHTMLWithFrames, setupFrameCaptureBridge } from './frame-capture';
+import { captureViewportMeta, injectViewportMeta } from './viewport-meta';
 
 // pako is loaded via script tag in Puppeteer
 declare const pako: any;
@@ -122,6 +123,8 @@ export async function archivePage(): Promise<void> {
     console.log(`[Wayback] Merging ${domCollector.collectedCount} collected nodes`);
     html = domCollector.mergeInto(html);
   }
+
+  html = injectViewportMeta(html, captureViewportMeta());
 
   collectorObserver.disconnect();
 
