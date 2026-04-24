@@ -8,10 +8,15 @@ const {
   mockCompiledModule,
 } = require('./helpers/fake-browser.js');
 
-function loadMainWithEnvironment(environment, sendToServer) {
+function loadMainWithEnvironment(environment, sendToServer, options = {}) {
   const mainPath = require.resolve('../dist-test/main.js');
   const pageFreezerPath = require.resolve('../dist-test/page-freezer.js');
   const distTestPath = path.join(__dirname, '../dist-test');
+  const updateOnServer = options.updateOnServer || (async () => ({ action: 'updated', page_id: 1, status: 'success' }));
+  const captureDocumentHTMLWithFrames = options.captureDocumentHTMLWithFrames || (async () => ({
+    frames: [],
+    html: '<html><body>quiet page</body></html>',
+  }));
   const restoreGlobals = installGlobalBindings({
     window: environment.window,
     document: environment.document,
@@ -51,7 +56,7 @@ function loadMainWithEnvironment(environment, sendToServer) {
     }),
     mockCompiledModule(path.join(distTestPath, 'archiver.js'), {
       sendToServer,
-      updateOnServer: async () => ({ action: 'updated', page_id: 1, status: 'success' }),
+      updateOnServer,
     }),
     mockCompiledModule(path.join(distTestPath, 'dom-collector.js'), {
       DOMCollector: class {
@@ -70,10 +75,7 @@ function loadMainWithEnvironment(environment, sendToServer) {
       },
     }),
     mockCompiledModule(path.join(distTestPath, 'frame-capture.js'), {
-      captureDocumentHTMLWithFrames: async () => ({
-        frames: [],
-        html: '<html><body>quiet page</body></html>',
-      }),
+      captureDocumentHTMLWithFrames,
       setupFrameCaptureBridge: () => {},
     }),
   ];
@@ -203,6 +205,80 @@ test('main archives a short quiet-page visit once before beforeunload', async ()
     await flushMicrotasks();
     assert.equal(sendCalls.length, 1, 'beforeunload should not duplicate the initial archive send');
   } finally {
+    restore();
+  }
+});
+
+test('main ignores stale in-flight update when SPA navigation resets state', async () => {
+  const environment = createFakeBrowserEnvironment();
+  const sendCalls = [];
+  const updateCalls = [];
+  let resolveUpdate;
+
+  environment.history.pushState = function pushState(_state, _title, url) {
+    const nextURL = new URL(url, environment.location.href);
+    environment.location.href = nextURL.href;
+    environment.location.hostname = nextURL.hostname;
+  };
+
+  const { restore } = loadMainWithEnvironment(
+    environment,
+    async (captureData) => {
+      sendCalls.push(captureData);
+      return { action: sendCalls.length === 1 ? 'created' : 'created', page_id: sendCalls.length, status: 'success' };
+    },
+    {
+      captureDocumentHTMLWithFrames: async () => ({
+        frames: [],
+        html: `<html><body>${environment.location.href}</body></html>`,
+      }),
+      updateOnServer: async (pageId, captureData) => {
+        updateCalls.push({ pageId, captureData });
+        await new Promise((resolve) => {
+          resolveUpdate = resolve;
+        });
+        return { action: 'updated', page_id: pageId, status: 'success' };
+      },
+    },
+  );
+
+  try {
+    environment.advanceTime(5);
+    await flushMicrotasks();
+    environment.advanceTime(25);
+    await flushMicrotasks();
+
+    assert.equal(sendCalls.length, 1, 'initial capture should complete before update test starts');
+
+    const activeObserver = environment.MutationObserver.instances.at(-1);
+    activeObserver.trigger(Array.from({ length: 10 }, () => ({ type: 'childList' })));
+    environment.advanceTime(100);
+    await flushMicrotasks();
+
+    assert.equal(updateCalls.length, 1, 'DOM monitor should start one update');
+    assert.equal(updateCalls[0].pageId, 1, 'update should target the original archived page');
+
+    environment.document.title = 'Next page';
+    environment.history.pushState({}, '', '/articles/next-page');
+    await flushMicrotasks();
+
+    resolveUpdate();
+    await flushMicrotasks();
+
+    environment.advanceTime(5);
+    await flushMicrotasks();
+    environment.advanceTime(25);
+    await flushMicrotasks();
+
+    assert.equal(sendCalls.length, 2, 'new SPA page should still archive after stale update settles');
+    assert.equal(sendCalls[0].url, 'https://example.com/articles/quiet-page');
+    assert.equal(sendCalls[1].url, 'https://example.com/articles/next-page');
+    assert.equal(sendCalls[1].title, 'Next page');
+    assert.equal(updateCalls.length, 1, 'stale update completion should not trigger extra updates');
+  } finally {
+    if (resolveUpdate) {
+      resolveUpdate();
+    }
     restore();
   }
 });

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"wayback/internal/database"
 )
 
 func TestProxyResource_RewritesCSSForCurrentPage(t *testing.T) {
@@ -229,6 +230,92 @@ func TestProxyResource_EncodedCSSSubresourceDoesNotLeakAcrossPages(t *testing.T)
 	}
 	if !strings.Contains(w2.Body.String(), `url("../img/icon space.png")`) {
 		t.Fatalf("page2 should keep original encoded relative URL source, got: %s", w2.Body.String())
+	}
+}
+
+func TestProxyResource_SamePageVersionedQueryResourcesDoNotCrossRewrite(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "wayback.db")
+	db, err := database.NewSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLite failed: %v", err)
+	}
+	defer db.Close()
+
+	handler := NewHandler(nil, db, dataDir, nil)
+
+	router := gin.New()
+	router.GET("/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	pageID, err := handler.db.CreatePage("https://versioned-query-test.example.com/page-"+suffix, "Versioned Query", "html/test/versioned-query.html", strings.Repeat("b", 64), time.Now())
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer handler.db.DeletePage(pageID)
+
+	cssV1URL := "https://versioned-query-test.example.com/assets/css/app.css?v=1"
+	cssV2URL := "https://versioned-query-test.example.com/assets/css/app.css?v=2"
+	imgV1URL := "https://versioned-query-test.example.com/assets/img/logo.png?v=1"
+	imgV2URL := "https://versioned-query-test.example.com/assets/img/logo.png?v=2"
+
+	cssV1Path := "resources/51/61/app-v1.css"
+	cssV2Path := "resources/52/62/app-v2.css"
+	imgV1Path := "resources/53/63/logo-v1.img"
+	imgV2Path := "resources/54/64/logo-v2.img"
+
+	writeTestResourceFile(t, handler.dataDir, cssV1Path, []byte(`.hero{background:url("../img/logo.png?v=1")}`))
+	writeTestResourceFile(t, handler.dataDir, cssV2Path, []byte(`.hero{background:url("../img/logo.png?v=2")}`))
+	writeTestResourceFile(t, handler.dataDir, imgV1Path, []byte("img-v1"))
+	writeTestResourceFile(t, handler.dataDir, imgV2Path, []byte("img-v2"))
+
+	cssV1ID, err := handler.db.CreateResource(cssV1URL, strings.Repeat("c", 64), "css", cssV1Path, 32)
+	if err != nil {
+		t.Fatalf("CreateResource css v1 failed: %v", err)
+	}
+	cssV2ID, err := handler.db.CreateResource(cssV2URL, strings.Repeat("d", 64), "css", cssV2Path, 32)
+	if err != nil {
+		t.Fatalf("CreateResource css v2 failed: %v", err)
+	}
+	imgV1ID, err := handler.db.CreateResource(imgV1URL, strings.Repeat("e", 64), "image", imgV1Path, 6)
+	if err != nil {
+		t.Fatalf("CreateResource img v1 failed: %v", err)
+	}
+	imgV2ID, err := handler.db.CreateResource(imgV2URL, strings.Repeat("f", 64), "image", imgV2Path, 6)
+	if err != nil {
+		t.Fatalf("CreateResource img v2 failed: %v", err)
+	}
+
+	for _, resourceID := range []int64{cssV1ID, cssV2ID, imgV1ID, imgV2ID} {
+		if err := handler.db.LinkPageResource(pageID, resourceID); err != nil {
+			t.Fatalf("LinkPageResource(%d) failed: %v", resourceID, err)
+		}
+	}
+
+	reqV1 := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/archive/%d/20260410122500mp_/%s", pageID, cssV1URL), nil)
+	wV1 := httptest.NewRecorder()
+	router.ServeHTTP(wV1, reqV1)
+	if wV1.Code != http.StatusOK {
+		t.Fatalf("css v1 expected 200, got %d: %s", wV1.Code, wV1.Body.String())
+	}
+	if !strings.Contains(wV1.Body.String(), `url("/archive/resources/53/63/logo-v1.img")`) {
+		t.Fatalf("css v1 should rewrite to image v1, got: %s", wV1.Body.String())
+	}
+	if strings.Contains(wV1.Body.String(), "/archive/resources/54/64/logo-v2.img") {
+		t.Fatalf("css v1 should not rewrite to image v2, got: %s", wV1.Body.String())
+	}
+
+	reqV2 := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/archive/%d/20260410122500mp_/%s", pageID, cssV2URL), nil)
+	wV2 := httptest.NewRecorder()
+	router.ServeHTTP(wV2, reqV2)
+	if wV2.Code != http.StatusOK {
+		t.Fatalf("css v2 expected 200, got %d: %s", wV2.Code, wV2.Body.String())
+	}
+	if !strings.Contains(wV2.Body.String(), `url("/archive/resources/54/64/logo-v2.img")`) {
+		t.Fatalf("css v2 should rewrite to image v2, got: %s", wV2.Body.String())
+	}
+	if strings.Contains(wV2.Body.String(), "/archive/resources/53/63/logo-v1.img") {
+		t.Fatalf("css v2 should not rewrite to image v1, got: %s", wV2.Body.String())
 	}
 }
 

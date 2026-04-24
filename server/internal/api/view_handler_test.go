@@ -670,6 +670,27 @@ func TestSanitizeArchivedHTML_PreservesMediaSourcesOutsidePicture(t *testing.T) 
 	}
 }
 
+func TestSanitizeArchivedHTML_HidesEmptyVideoButPreservesPlayableMediaSources(t *testing.T) {
+	html := `<picture><source srcset="/fallback.avif"><img src="/fallback.jpg"></picture><video autoplay></video><video autoplay><source src="/kept-video.mp4" type="video/mp4"></video><audio controls><source src="/kept-audio.mp3" type="audio/mpeg"></audio>`
+	result := sanitizeArchivedHTML(html)
+
+	if strings.Contains(result, `<picture><source`) {
+		t.Fatalf("picture source tags should be removed during sanitize, got: %s", result)
+	}
+	if !strings.Contains(result, `<img src="/fallback.jpg">`) {
+		t.Fatalf("picture fallback img should remain after sanitize, got: %s", result)
+	}
+	if !strings.Contains(result, `<video style="display:none!important"></video>`) {
+		t.Fatalf("empty video should be hidden during sanitize, got: %s", result)
+	}
+	if !strings.Contains(strings.ToLower(result), `<video controls><source src="/kept-video.mp4" type="video/mp4"></video>`) {
+		t.Fatalf("playable video source should remain during sanitize, got: %s", result)
+	}
+	if !strings.Contains(result, `<audio controls><source src="/kept-audio.mp3" type="audio/mpeg"></audio>`) {
+		t.Fatalf("audio source should remain during sanitize, got: %s", result)
+	}
+}
+
 func TestRemoveUnsupportedEmbeddedContent_RemovesObjectEmbedButKeepsIframe(t *testing.T) {
 	html := `<div><iframe src="https://example.com/app"></iframe><object data="//cdn.example.com/plugin.swf"><param name="wmode" value="transparent"></object><embed src="https://example.com/movie.swf"><img src="/archive/1/20260414mp_/https://example.com/logo.png"></div>`
 	result := removeUnsupportedEmbeddedContent(html)
