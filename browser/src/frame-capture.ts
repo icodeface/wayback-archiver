@@ -85,26 +85,30 @@ function assessFrameDocument(doc: Document, url: string): FrameCaptureStatus {
   return 'ok';
 }
 
-async function waitForFrameReady(url: string): Promise<void> {
+async function waitForFrameReady(url: string): Promise<boolean> {
   const deadline = Date.now() + CONFIG.FRAME_CONTENT_WAIT_TIMEOUT;
 
   while (Date.now() < deadline) {
     if (assessFrameDocument(document, url) === 'ok') {
-      return;
+      return true;
     }
     await new Promise((resolve) => window.setTimeout(resolve, CONFIG.FRAME_CONTENT_CHECK_INTERVAL));
   }
+
+  return false;
 }
 
-async function waitForMeaningfulBodyContent(): Promise<void> {
+async function waitForMeaningfulBodyContent(): Promise<boolean> {
   const deadline = Date.now() + CONFIG.FRAME_CONTENT_WAIT_TIMEOUT;
 
   while (Date.now() < deadline) {
     if (hasMeaningfulBodyContent(document)) {
-      return;
+      return true;
     }
     await new Promise((resolve) => window.setTimeout(resolve, CONFIG.FRAME_CONTENT_CHECK_INTERVAL));
   }
+
+  return false;
 }
 
 function isMeaningfulCapturedHTML(html: string): boolean {
@@ -228,16 +232,20 @@ async function requestFrameCapture(frame: HTMLIFrameElement): Promise<FrameCaptu
       resolve(null);
     }, CONFIG.FRAME_CAPTURE_TIMEOUT);
 
-    function handleMessage(event: MessageEvent): void {
-      if (!isCaptureResult(event.data) || event.data.requestId !== requestId) {
-        return;
-      }
+      function handleMessage(event: MessageEvent): void {
+        if (!isCaptureResult(event.data) || event.data.requestId !== requestId) {
+          return;
+        }
 
-      window.clearTimeout(timeoutId);
-      responsePort.removeEventListener('message', handleMessage);
-      responsePort.close();
-      resolve(isMeaningfulCapturedHTML(event.data.html) ? event.data : null);
-    }
+        window.clearTimeout(timeoutId);
+        responsePort.removeEventListener('message', handleMessage);
+        responsePort.close();
+        if (event.data.status === 'ok' && !isMeaningfulCapturedHTML(event.data.html)) {
+          resolve(null);
+          return;
+        }
+        resolve(event.data);
+      }
 
     responsePort.addEventListener('message', handleMessage);
     responsePort.start();
@@ -329,11 +337,9 @@ export function setupFrameCaptureBridge(): void {
           // Fall through and capture best-effort current DOM.
         }
 
-        try {
-          await waitForMeaningfulBodyContent();
+        const hasBodyContent = await waitForMeaningfulBodyContent();
+        if (hasBodyContent) {
           await waitForFrameReady(window.location.href);
-        } catch {
-          // Fall through and capture best-effort current DOM.
         }
 
         const captured = await captureDocumentHTMLWithFrames();

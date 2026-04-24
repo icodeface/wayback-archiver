@@ -1,8 +1,9 @@
 // DOMCollector tracks nodes removed by virtual scrolling and merges them
 // back into the snapshot so we capture the union of all visible content.
 //
-// Uses arrays (not Sets) to preserve genuinely duplicated nodes
-// (e.g. two retweets with identical outerHTML).
+// Dedup uses textKey on purpose: if multiple removed nodes have identical
+// visible content, we keep only one archived copy. This is an intentional
+// snapshot-size tradeoff, not a bug.
 
 const MAX_COLLECTED_SIZE = 10 * 1024 * 1024; // 10MB cap
 const MIN_NODE_SIZE = 2 * 1024; // Only collect nodes >= 2KB (filters out loading skeletons)
@@ -22,8 +23,8 @@ export class DOMCollector {
 
   handleMutations(mutations: MutationRecord[]): void {
     for (const mutation of mutations) {
-      // When a node is re-added (user scrolled back), remove ONE matching
-      // entry from collected — not all of them, since duplicates are distinct items.
+      // When a node is re-added (user scrolled back), remove one collected entry.
+      // textKey-based dedup is intentional, so one re-added copy is enough.
       for (const node of Array.from(mutation.addedNodes)) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
         const html = (node as Element).outerHTML;
@@ -108,8 +109,9 @@ export class DOMCollector {
           continue;
         }
 
-        // Only allow merging this key once — increment existing but NOT skipped,
-        // so subsequent duplicates see existCount > skippedSoFar and get skipped
+        // Intentionally keep only one archived copy for the same textKey.
+        // If the page shows multiple visually identical items, the snapshot may
+        // collapse them to one representative copy to reduce archive size.
         globalExisting.set(key, existCount + 1);
 
         const tpl = doc.createElement('template');
