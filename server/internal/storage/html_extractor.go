@@ -191,6 +191,9 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 			rawURL = htmlpkg.UnescapeString(rawURL)
 			// 移除可能残留的引号
 			rawURL = strings.Trim(rawURL, `"'`)
+			if isSkippableResourceURL(rawURL) {
+				continue
+			}
 			fullURL := e.resolveURL(rawURL, pageURL)
 			if e.isExternalURL(fullURL) {
 				// 猜测类型
@@ -206,6 +209,9 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 		if len(match) > 1 {
 			rawURL := htmlpkg.UnescapeString(match[1])
 			rawURL = strings.Trim(rawURL, `"'`)
+			if isSkippableResourceURL(rawURL) {
+				continue
+			}
 			fullURL := e.resolveURL(rawURL, pageURL)
 			if e.isExternalURL(fullURL) {
 				resourceType := guessResourceType(fullURL)

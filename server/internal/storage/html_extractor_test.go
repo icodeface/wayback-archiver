@@ -231,15 +231,21 @@ func TestExtractResources_IframeCGIWithoutHTMLExtension(t *testing.T) {
 func TestExtractResources_SkipsFragmentOnlyCSSURLs(t *testing.T) {
 	extractor := NewHTMLResourceExtractor()
 
-	html := `<html><body><svg><rect style="fill:url(#paint0_linear_0_3)"></rect></svg></body></html>`
+	html := `<html><body><svg><rect style="fill:url(#paint0_linear_0_3);mask:url(%23clip)"></rect></svg></body></html>`
 	resources := extractor.ExtractResources(html, "https://example.com/page")
 
 	for _, r := range resources {
 		if r.URL == "https://example.com/page#paint0_linear_0_3" {
 			t.Fatalf("should not extract same-document fragment URL, got %q", r.URL)
 		}
+		if r.URL == "https://example.com/%23clip" || r.URL == "https://example.com/page%23clip" {
+			t.Fatalf("should not extract encoded same-document fragment URL, got %q", r.URL)
+		}
 		if r.URL == "#paint0_linear_0_3" {
 			t.Fatalf("should not extract raw fragment URL, got %q", r.URL)
+		}
+		if r.URL == "%23clip" {
+			t.Fatalf("should not extract raw encoded fragment URL, got %q", r.URL)
 		}
 	}
 }
@@ -263,20 +269,52 @@ func TestExtractResources_SkipsFragmentOnlyQuotedCSSURLs(t *testing.T) {
 func TestExtractResources_PreservesAssetURLsWithFragments(t *testing.T) {
 	extractor := NewHTMLResourceExtractor()
 
-	html := `<html><body><div style="mask:url(icons.svg#sprite)"></div></body></html>`
+	html := `<html><body><div style="mask:url(icons.svg#sprite);clip-path:url(icons.svg%23encoded-sprite)"></div></body></html>`
 	resources := extractor.ExtractResources(html, "https://example.com/assets/page")
 
-	found := false
+	foundPlainFragment := false
+	foundEncodedFragment := false
 	for _, r := range resources {
-		if r.URL == "https://example.com/assets/icons.svg#sprite" {
-			found = true
+		switch r.URL {
+		case "https://example.com/assets/icons.svg#sprite":
+			foundPlainFragment = true
 			if r.Type != "image" {
 				t.Fatalf("asset URL with fragment type = %q, want image", r.Type)
+			}
+		case "https://example.com/assets/icons.svg%23encoded-sprite":
+			foundEncodedFragment = true
+			if r.Type != "image" {
+				t.Fatalf("asset URL with encoded fragment type = %q, want image", r.Type)
 			}
 		}
 	}
 
-	if !found {
-		t.Fatal("should preserve asset URL with fragment suffix")
+	if !foundPlainFragment || !foundEncodedFragment {
+		t.Fatalf("should preserve asset URL with fragment suffix, got %#v", resources)
+	}
+}
+
+func TestExtractResources_SkipsDataURLNestedFragmentReferences(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	html := `<html><body><div style="background-image:url(&quot;data:image/svg+xml,%3Csvg%3E%3Ccircle mask='url(%23clip)'/%3E%3C/svg%3E&quot;)"></div></body></html>`
+	resources := extractor.ExtractResources(html, "https://example.com/page")
+
+	if len(resources) != 0 {
+		t.Fatalf("data URL internals should not be extracted as resources, got %#v", resources)
+	}
+}
+
+func TestExtractResources_SkipsUnsupportedCSSURLSchemes(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	html := `<html><body><div style="background:url(BLOB:https://example.com/id);border-image:url(&quot; JAVASCRIPT:noop &quot;);mask:url(about:blank);list-style:url(mailto:a@example.com);background-image:url(/img.png)"></div></body></html>`
+	resources := extractor.ExtractResources(html, "https://example.com/page")
+
+	if len(resources) != 1 {
+		t.Fatalf("expected only the downloadable image URL, got %#v", resources)
+	}
+	if resources[0].URL != "https://example.com/img.png" {
+		t.Fatalf("expected /img.png to be preserved, got %#v", resources)
 	}
 }

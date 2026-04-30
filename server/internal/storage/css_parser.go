@@ -1,6 +1,7 @@
 package storage
 
 import (
+	neturl "net/url"
 	"regexp"
 	"strings"
 )
@@ -31,7 +32,7 @@ func (p *CSSParser) ExtractResources(cssContent string) []string {
 	for _, match := range importMatches {
 		if len(match) > 1 {
 			url := strings.TrimSpace(match[1])
-			if url != "" && !seen[url] && !isDataURL(url) && !isFragmentOnlyURL(url) {
+			if !isSkippableResourceURL(url) && !seen[url] {
 				seen[url] = true
 				resources = append(resources, url)
 			}
@@ -43,7 +44,7 @@ func (p *CSSParser) ExtractResources(cssContent string) []string {
 	for _, match := range urlMatches {
 		if len(match) > 1 {
 			url := strings.TrimSpace(match[1])
-			if url != "" && !seen[url] && !isDataURL(url) && !isFragmentOnlyURL(url) {
+			if !isSkippableResourceURL(url) && !seen[url] {
 				seen[url] = true
 				resources = append(resources, url)
 			}
@@ -96,11 +97,39 @@ func (p *CSSParser) RewriteCSS(cssContent string, urlMapping map[string]string) 
 	return result
 }
 
-// isDataURL checks if a URL is a data URL (data:...)
-func isDataURL(url string) bool {
-	return strings.HasPrefix(url, "data:")
+func isSkippableResourceURL(rawURL string) bool {
+	resourceURL := strings.TrimSpace(rawURL)
+	resourceURL = strings.Trim(resourceURL, `"'`)
+	if resourceURL == "" {
+		return true
+	}
+
+	return isDataURL(resourceURL) || isFragmentOnlyURL(resourceURL) || hasUnsupportedResourceScheme(resourceURL)
 }
 
-func isFragmentOnlyURL(url string) bool {
-	return strings.HasPrefix(url, "#")
+func isDataURL(rawURL string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "data:")
+}
+
+func isFragmentOnlyURL(rawURL string) bool {
+	resourceURL := strings.TrimSpace(rawURL)
+	resourceURL = strings.Trim(resourceURL, `"'`)
+	if strings.HasPrefix(resourceURL, "#") {
+		return true
+	}
+
+	decodedURL, err := neturl.PathUnescape(resourceURL)
+	if err != nil {
+		return false
+	}
+
+	return strings.HasPrefix(strings.TrimSpace(decodedURL), "#")
+}
+
+func hasUnsupportedResourceScheme(rawURL string) bool {
+	resourceURL := strings.ToLower(strings.TrimSpace(rawURL))
+	return strings.HasPrefix(resourceURL, "blob:") ||
+		strings.HasPrefix(resourceURL, "javascript:") ||
+		strings.HasPrefix(resourceURL, "mailto:") ||
+		strings.HasPrefix(resourceURL, "about:")
 }
