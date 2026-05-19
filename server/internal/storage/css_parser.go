@@ -104,7 +104,10 @@ func isSkippableResourceURL(rawURL string) bool {
 		return true
 	}
 
-	return isDataURL(resourceURL) || isFragmentOnlyURL(resourceURL) || hasUnsupportedResourceScheme(resourceURL)
+	return isDataURL(resourceURL) ||
+		isFragmentOnlyURL(resourceURL) ||
+		hasUnsupportedResourceScheme(resourceURL) ||
+		hasMalformedAbsoluteHost(resourceURL)
 }
 
 func isDataURL(rawURL string) bool {
@@ -132,4 +135,41 @@ func hasUnsupportedResourceScheme(rawURL string) bool {
 		strings.HasPrefix(resourceURL, "javascript:") ||
 		strings.HasPrefix(resourceURL, "mailto:") ||
 		strings.HasPrefix(resourceURL, "about:")
+}
+
+// hasMalformedAbsoluteHost rejects absolute http(s) URLs whose hostname
+// contains characters that can never appear in a valid DNS name. Some
+// upstream CSS files ship typos like https://www&google.com/... which would
+// otherwise fail DNS lookup and spam the log on every page that uses them.
+func hasMalformedAbsoluteHost(rawURL string) bool {
+	resourceURL := strings.TrimSpace(rawURL)
+	resourceURL = strings.Trim(resourceURL, `"'`)
+	lower := strings.ToLower(resourceURL)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return false
+	}
+
+	parsed, err := neturl.Parse(resourceURL)
+	if err != nil {
+		return true
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return true
+	}
+	for _, r := range host {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '.', r == '_', r == ':':
+			continue
+		default:
+			if r > 0x7f {
+				continue
+			}
+			return true
+		}
+	}
+	return false
 }

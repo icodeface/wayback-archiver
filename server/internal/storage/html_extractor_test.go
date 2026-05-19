@@ -318,3 +318,17 @@ func TestExtractResources_SkipsUnsupportedCSSURLSchemes(t *testing.T) {
 		t.Fatalf("expected /img.png to be preserved, got %#v", resources)
 	}
 }
+
+func TestExtractResources_SkipsMalformedAbsoluteHostInCSSURL(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	// Mirrors a real typo Google ships in their translate CSS.
+	html := `<html><body><div style="background-image:url(https://www&google.com/images/zippy_minus_sm.gif)"></div></body></html>`
+	resources := extractor.ExtractResources(html, "https://example.com/page")
+
+	for _, r := range resources {
+		if r.URL == "https://www&google.com/images/zippy_minus_sm.gif" {
+			t.Fatalf("malformed absolute host should be skipped, got %q", r.URL)
+		}
+	}
+}
