@@ -1,6 +1,9 @@
 package storage
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCSSParserExtractResources_SkipsFragmentOnlyURLs(t *testing.T) {
 	parser := NewCSSParser()
@@ -68,5 +71,20 @@ func TestCSSParserExtractResources_SkipsUnsupportedSchemes(t *testing.T) {
 	}
 	if resources[0] != "/img.png" {
 		t.Fatalf("expected /img.png to be preserved, got %#v", resources)
+	}
+}
+
+func TestCSSParserExtractResources_SkipsMalformedAbsoluteHosts(t *testing.T) {
+	parser := NewCSSParser()
+	// Mirrors a real typo in Google translate CSS: https://www&google.com/...
+	resources := parser.ExtractResources(`.bad{background-image:url(https://www&google.com/images/zippy_minus_sm.gif)} .ok{background-image:url(https://www.google.com/images/zippy_plus_sm.gif)} .rel{background-image:url(/img.png)}`)
+
+	for _, r := range resources {
+		if strings.Contains(r, "www&google.com") {
+			t.Fatalf("malformed absolute host should be skipped, got %q", r)
+		}
+	}
+	if len(resources) != 2 {
+		t.Fatalf("expected 2 valid resources, got %#v", resources)
 	}
 }
