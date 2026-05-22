@@ -103,7 +103,7 @@ func ResolveRelativeURLs(html, baseURL string) string {
 		return `url("` + resolved + `")`
 	})
 
-	// 4. srcset 中的相对路径（多值，逗号分隔）
+	// 4. srcset 中的相对路径（使用规范解析，正确处理 URL 中的逗号）
 	html = resolveSrcsetRe.ReplaceAllStringFunc(html, func(match string) string {
 		sub := resolveSrcsetRe.FindStringSubmatch(match)
 		if len(sub) < 3 {
@@ -111,22 +111,17 @@ func ResolveRelativeURLs(html, baseURL string) string {
 		}
 		attr, value := sub[1], sub[2]
 		changed := false
-		parts := strings.Split(value, ",")
-		for i, part := range parts {
-			fields := strings.Fields(strings.TrimSpace(part))
-			if len(fields) == 0 {
-				continue
-			}
-			if resolved := resolve(fields[0]); resolved != "" {
-				fields[0] = resolved
-				parts[i] = " " + strings.Join(fields, " ")
+		candidates := parseSrcsetCandidates(value)
+		for i, c := range candidates {
+			if resolved := resolve(c.url); resolved != "" {
+				candidates[i].url = resolved
 				changed = true
 			}
 		}
 		if !changed {
 			return match
 		}
-		return attr + `="` + strings.TrimLeft(strings.Join(parts, ","), " ") + `"`
+		return attr + `="` + joinSrcsetCandidates(candidates) + `"`
 	})
 
 	return html
