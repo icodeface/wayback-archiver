@@ -333,6 +333,25 @@ func TestExtractResources_SkipsMalformedAbsoluteHostInCSSURL(t *testing.T) {
 	}
 }
 
+func TestExtractResources_SkipsTemplateLiterals(t *testing.T) {
+	extractor := NewHTMLResourceExtractor()
+
+	html := `<html><body>
+		<img src="https://v2ex.com/$%7BescapeHtml%28imgBannerUrl%29%7D">
+		<img src="https://example.com/${variable}">
+		<img src="https://example.com/{{placeholder}}">
+		<img src="https://example.com/real-image.png">
+	</body></html>`
+	resources := extractor.ExtractResources(html, "https://example.com/page")
+
+	if len(resources) != 1 {
+		t.Fatalf("expected only the real image, got %d: %#v", len(resources), resources)
+	}
+	if resources[0].URL != "https://example.com/real-image.png" {
+		t.Fatalf("expected real-image.png, got %q", resources[0].URL)
+	}
+}
+
 func TestParseSrcset(t *testing.T) {
 	tests := []struct {
 		name     string
