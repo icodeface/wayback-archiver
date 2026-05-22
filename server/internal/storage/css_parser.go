@@ -107,7 +107,18 @@ func isSkippableResourceURL(rawURL string) bool {
 	return isDataURL(resourceURL) ||
 		isFragmentOnlyURL(resourceURL) ||
 		hasUnsupportedResourceScheme(resourceURL) ||
-		hasMalformedAbsoluteHost(resourceURL)
+		hasMalformedAbsoluteHost(resourceURL) ||
+		isTemplateLiteral(resourceURL)
+}
+
+// isTemplateLiteral detects unrendered template expressions in URLs.
+// e.g. ${escapeHtml(imgBannerUrl)} or {{variable}} — either raw or percent-encoded.
+func isTemplateLiteral(rawURL string) bool {
+	decoded, err := neturl.PathUnescape(rawURL)
+	if err != nil {
+		decoded = rawURL
+	}
+	return strings.Contains(decoded, "${") || strings.Contains(decoded, "{{")
 }
 
 func isDataURL(rawURL string) bool {

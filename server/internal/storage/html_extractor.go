@@ -231,19 +231,24 @@ func (e *HTMLResourceExtractor) ExtractResources(html string, pageURL string) []
 }
 
 // isExternalURL 判断是否是外部 URL
-func (e *HTMLResourceExtractor) isExternalURL(url string) bool {
+func (e *HTMLResourceExtractor) isExternalURL(rawURL string) bool {
 	// 跳过 data: URLs
-	if strings.HasPrefix(url, "data:") {
+	if strings.HasPrefix(rawURL, "data:") {
 		return false
 	}
 
 	// 跳过相对路径（这些应该由浏览器端处理）
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return false
 	}
 
 	// 跳过本地 URL
-	if strings.Contains(url, "localhost") || strings.Contains(url, "127.0.0.1") {
+	if strings.Contains(rawURL, "localhost") || strings.Contains(rawURL, "127.0.0.1") {
+		return false
+	}
+
+	// 跳过未渲染的模板表达式
+	if isTemplateLiteral(rawURL) {
 		return false
 	}
 
