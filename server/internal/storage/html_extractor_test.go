@@ -280,3 +280,61 @@ func TestExtractResources_PreservesAssetURLsWithFragments(t *testing.T) {
 		t.Fatal("should preserve asset URL with fragment suffix")
 	}
 }
+
+func TestParseSrcset(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "standard srcset with width descriptors",
+			input:    "image-300.png 300w, image-600.png 600w, image-1200.png 1200w",
+			expected: []string{"image-300.png", "image-600.png", "image-1200.png"},
+		},
+		{
+			name:     "standard srcset with density descriptors",
+			input:    "image.png 1x, image@2x.png 2x",
+			expected: []string{"image.png", "image@2x.png"},
+		},
+		{
+			name:     "URL with commas in query params (OSS image processing)",
+			input:    "https://www.okx.com/cdn/icon/btc.png?x-oss-process=image/format,webp/resize,w_200,h_200,type_6/ignore-error,1",
+			expected: []string{"https://www.okx.com/cdn/icon/btc.png?x-oss-process=image/format,webp/resize,w_200,h_200,type_6/ignore-error,1"},
+		},
+		{
+			name:     "single URL without descriptor",
+			input:    "https://example.com/image.png",
+			expected: []string{"https://example.com/image.png"},
+		},
+		{
+			name:     "empty srcset",
+			input:    "",
+			expected: nil,
+		},
+		{
+			name:     "whitespace only",
+			input:    "   ",
+			expected: nil,
+		},
+		{
+			name:     "URLs with descriptors and query params containing commas",
+			input:    "https://cdn.example.com/img.png?process=format,webp 300w, https://cdn.example.com/img2.png?process=format,webp 600w",
+			expected: []string{"https://cdn.example.com/img.png?process=format,webp", "https://cdn.example.com/img2.png?process=format,webp"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseSrcset(tt.input)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("expected %d URLs, got %d: %v", len(tt.expected), len(result), result)
+			}
+			for i, url := range result {
+				if url != tt.expected[i] {
+					t.Errorf("URL[%d]: expected %q, got %q", i, tt.expected[i], url)
+				}
+			}
+		})
+	}
+}

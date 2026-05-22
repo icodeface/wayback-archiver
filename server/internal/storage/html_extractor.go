@@ -316,15 +316,84 @@ func guessResourceType(fullURL string) string {
 	return "other"
 }
 
-// parseSrcset 解析 srcset 属性值，返回 URL 列表
+// parseSrcset parses a srcset attribute value per the HTML spec algorithm.
+// URLs are sequences of non-whitespace characters; commas inside a URL
+// (e.g. OSS query params like ?x-oss-process=image/format,webp) are kept
+// intact because the spec only treats commas as separators when preceded by
+// whitespace or a descriptor.
 func parseSrcset(srcset string) []string {
-	var urls []string
-	parts := strings.Split(srcset, ",")
-	for _, part := range parts {
-		fields := strings.Fields(strings.TrimSpace(part))
-		if len(fields) > 0 && fields[0] != "" {
-			urls = append(urls, fields[0])
-		}
+	candidates := parseSrcsetCandidates(srcset)
+	urls := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		urls = append(urls, c.url)
 	}
 	return urls
+}
+
+type srcsetCandidate struct {
+	url        string
+	descriptor string
+}
+
+func parseSrcsetCandidates(srcset string) []srcsetCandidate {
+	var candidates []srcsetCandidate
+	input := srcset
+	i := 0
+	n := len(input)
+
+	for i < n {
+		// Step 1: skip ASCII whitespace and commas (separators between candidates)
+		for i < n && (input[i] == ' ' || input[i] == '\t' || input[i] == '\n' ||
+			input[i] == '\r' || input[i] == '\f' || input[i] == ',') {
+			i++
+		}
+		if i >= n {
+			break
+		}
+
+		// Step 2: collect non-whitespace characters → URL
+		start := i
+		for i < n && input[i] != ' ' && input[i] != '\t' && input[i] != '\n' &&
+			input[i] != '\r' && input[i] != '\f' {
+			i++
+		}
+		rawURL := input[start:i]
+		if rawURL == "" {
+			continue
+		}
+		// Strip trailing commas that act as candidate separators
+		rawURL = strings.TrimRight(rawURL, ",")
+		if rawURL == "" {
+			continue
+		}
+
+		// Step 3: skip whitespace after URL
+		for i < n && (input[i] == ' ' || input[i] == '\t' || input[i] == '\n' ||
+			input[i] == '\r' || input[i] == '\f') {
+			i++
+		}
+
+		// Step 4: collect descriptor (e.g. "200w", "2x") until comma or end
+		descStart := i
+		for i < n && input[i] != ',' {
+			i++
+		}
+		desc := strings.TrimSpace(input[descStart:i])
+
+		candidates = append(candidates, srcsetCandidate{url: rawURL, descriptor: desc})
+	}
+
+	return candidates
+}
+
+func joinSrcsetCandidates(candidates []srcsetCandidate) string {
+	var parts []string
+	for _, c := range candidates {
+		if c.descriptor != "" {
+			parts = append(parts, c.url+" "+c.descriptor)
+		} else {
+			parts = append(parts, c.url)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
