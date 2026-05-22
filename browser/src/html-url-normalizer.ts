@@ -24,18 +24,55 @@ function toAbsoluteURL(value: string, baseURL: string): string {
   }
 }
 
-function normalizeSrcset(value: string, baseURL: string): string {
-  return value
-    .split(',')
-    .map((part) => {
-      const trimmed = part.trim();
-      if (!trimmed) {
-        return part;
-      }
+// Parse srcset per HTML spec: URLs are non-whitespace sequences, so commas
+// without surrounding whitespace are part of the URL (e.g. OSS query params).
+function parseSrcsetCandidates(srcset: string): Array<{ url: string; descriptor: string }> {
+  const candidates: Array<{ url: string; descriptor: string }> = [];
+  let i = 0;
+  const n = srcset.length;
 
-      const fields = trimmed.split(/\s+/);
-      fields[0] = toAbsoluteURL(fields[0], baseURL);
-      return fields.join(' ');
+  while (i < n) {
+    // Skip whitespace and commas (separators)
+    while (i < n && (srcset[i] === ' ' || srcset[i] === '\t' || srcset[i] === '\n' ||
+      srcset[i] === '\r' || srcset[i] === '\f' || srcset[i] === ',')) {
+      i++;
+    }
+    if (i >= n) break;
+
+    // Collect non-whitespace → URL
+    const start = i;
+    while (i < n && srcset[i] !== ' ' && srcset[i] !== '\t' && srcset[i] !== '\n' &&
+      srcset[i] !== '\r' && srcset[i] !== '\f') {
+      i++;
+    }
+    let url = srcset.slice(start, i).replace(/,+$/, '');
+    if (!url) continue;
+
+    // Skip whitespace after URL
+    while (i < n && (srcset[i] === ' ' || srcset[i] === '\t' || srcset[i] === '\n' ||
+      srcset[i] === '\r' || srcset[i] === '\f')) {
+      i++;
+    }
+
+    // Collect descriptor until comma or end
+    const descStart = i;
+    while (i < n && srcset[i] !== ',') {
+      i++;
+    }
+    const descriptor = srcset.slice(descStart, i).trim();
+
+    candidates.push({ url, descriptor });
+  }
+
+  return candidates;
+}
+
+function normalizeSrcset(value: string, baseURL: string): string {
+  const candidates = parseSrcsetCandidates(value);
+  return candidates
+    .map((c) => {
+      const absoluteURL = toAbsoluteURL(c.url, baseURL);
+      return c.descriptor ? `${absoluteURL} ${c.descriptor}` : absoluteURL;
     })
     .join(', ');
 }
