@@ -681,11 +681,11 @@ func (db *SQLiteDB) GetPageByID(id string) (*models.Page, error) {
 // SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
 func (db *SQLiteDB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
 	query := `SELECT ` + pageSelectColumns + ` FROM pages WHERE (` +
-		`LOWER(COALESCE(url, '')) LIKE LOWER(?) OR ` +
-		`LOWER(COALESCE(title, '')) LIKE LOWER(?) OR ` +
-		`LOWER(COALESCE(body_text, '')) LIKE LOWER(?)` +
+		`LOWER(COALESCE(url, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
+		`LOWER(COALESCE(title, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
+		`LOWER(COALESCE(body_text, '')) LIKE LOWER(?) ESCAPE '\'` +
 		`)`
-	pattern := "%" + keyword + "%"
+	pattern := "%" + escapeLikePattern(keyword) + "%"
 	args := []interface{}{pattern, pattern, pattern}
 
 	// 追加时间过滤条件

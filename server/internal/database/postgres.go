@@ -570,8 +570,8 @@ func (db *PostgresDB) GetPageByID(id string) (*models.Page, error) {
 // SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
 func (db *PostgresDB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
 	likeOp := db.qb.CaseInsensitiveLike()
-	query := fmt.Sprintf("SELECT %s FROM pages WHERE (url %s $1 OR title %s $1 OR body_text %s $1)", pageSelectColumns, likeOp, likeOp, likeOp)
-	args := []interface{}{"%" + keyword + "%"}
+	query := fmt.Sprintf("SELECT %s FROM pages WHERE (url %s $1 ESCAPE '\\' OR title %s $1 ESCAPE '\\' OR body_text %s $1 ESCAPE '\\')", pageSelectColumns, likeOp, likeOp, likeOp)
+	args := []interface{}{"%" + escapeLikePattern(keyword) + "%"}
 	argIndex := 2
 
 	// 追加时间过滤条件
