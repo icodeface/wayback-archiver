@@ -278,6 +278,62 @@ func TestGetPagesByURL_NoResults(t *testing.T) {
 	}
 }
 
+func TestPostgresSearchPages_EscapesLikeWildcards(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	domain := "search-escape-" + suffix + ".example.com"
+	now := time.Now()
+
+	exactID, err := db.CreatePage("https://"+domain+"/exact", "Literal Token", "html/test/exact.html", strings.Repeat("a", 64), now)
+	if err != nil {
+		t.Fatalf("CreatePage(exact) failed: %v", err)
+	}
+	defer db.DeletePage(exactID)
+	if err := db.UpdatePageBodyText(exactID, "literal on_fail marker and progress 100% done"); err != nil {
+		t.Fatalf("UpdatePageBodyText(exact) failed: %v", err)
+	}
+
+	hyphenID, err := db.CreatePage("https://"+domain+"/hyphen", "Hyphen Token", "html/test/hyphen.html", strings.Repeat("b", 64), now)
+	if err != nil {
+		t.Fatalf("CreatePage(hyphen) failed: %v", err)
+	}
+	defer db.DeletePage(hyphenID)
+	if err := db.UpdatePageBodyText(hyphenID, "ctest --output-on-failure"); err != nil {
+		t.Fatalf("UpdatePageBodyText(hyphen) failed: %v", err)
+	}
+
+	percentID, err := db.CreatePage("https://"+domain+"/percent", "Percent Token", "html/test/percent.html", strings.Repeat("c", 64), now)
+	if err != nil {
+		t.Fatalf("CreatePage(percent) failed: %v", err)
+	}
+	defer db.DeletePage(percentID)
+	if err := db.UpdatePageBodyText(percentID, "progress 100x done"); err != nil {
+		t.Fatalf("UpdatePageBodyText(percent) failed: %v", err)
+	}
+
+	tests := []struct {
+		keyword string
+		wantID  int64
+	}{
+		{keyword: "on_fail", wantID: exactID},
+		{keyword: "100%", wantID: exactID},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.keyword, func(t *testing.T) {
+			pages, err := db.SearchPages(tt.keyword, nil, nil, domain)
+			if err != nil {
+				t.Fatalf("SearchPages(%q) failed: %v", tt.keyword, err)
+			}
+			if len(pages) != 1 || pages[0].ID != tt.wantID {
+				t.Fatalf("SearchPages(%q) returned %+v, want only page %d", tt.keyword, pages, tt.wantID)
+			}
+		})
+	}
+}
+
 func TestGetResourceByURLPath_EscapesPercentWildcards(t *testing.T) {
 	db := skipIfNoDB(t)
 	defer db.Close()

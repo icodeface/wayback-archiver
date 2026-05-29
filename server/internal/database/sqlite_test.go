@@ -84,6 +84,56 @@ func TestSQLiteSearchPages_MatchesURLTitleAndBodyText(t *testing.T) {
 	}
 }
 
+func TestSQLiteSearchPages_EscapesLikeWildcards(t *testing.T) {
+	db := newSQLiteTestDB(t)
+
+	now := time.Now().UTC()
+	domain := "search-escape.example.com"
+	exactID, err := db.CreatePage("https://"+domain+"/exact", "Literal Token", "html/test/exact.html", "hash-exact", now)
+	if err != nil {
+		t.Fatalf("CreatePage(exact) failed: %v", err)
+	}
+	if err := db.UpdatePageBodyText(exactID, "literal on_fail marker and progress 100% done"); err != nil {
+		t.Fatalf("UpdatePageBodyText(exact) failed: %v", err)
+	}
+
+	hyphenID, err := db.CreatePage("https://"+domain+"/hyphen", "Hyphen Token", "html/test/hyphen.html", "hash-hyphen", now)
+	if err != nil {
+		t.Fatalf("CreatePage(hyphen) failed: %v", err)
+	}
+	if err := db.UpdatePageBodyText(hyphenID, "ctest --output-on-failure"); err != nil {
+		t.Fatalf("UpdatePageBodyText(hyphen) failed: %v", err)
+	}
+
+	percentID, err := db.CreatePage("https://"+domain+"/percent", "Percent Token", "html/test/percent.html", "hash-percent", now)
+	if err != nil {
+		t.Fatalf("CreatePage(percent) failed: %v", err)
+	}
+	if err := db.UpdatePageBodyText(percentID, "progress 100x done"); err != nil {
+		t.Fatalf("UpdatePageBodyText(percent) failed: %v", err)
+	}
+
+	tests := []struct {
+		keyword string
+		wantID  int64
+	}{
+		{keyword: "on_fail", wantID: exactID},
+		{keyword: "100%", wantID: exactID},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.keyword, func(t *testing.T) {
+			pages, err := db.SearchPages(tt.keyword, nil, nil, domain)
+			if err != nil {
+				t.Fatalf("SearchPages(%q) failed: %v", tt.keyword, err)
+			}
+			if len(pages) != 1 || pages[0].ID != tt.wantID {
+				t.Fatalf("SearchPages(%q) returned %+v, want only page %d", tt.keyword, pages, tt.wantID)
+			}
+		})
+	}
+}
+
 func TestSQLiteReplacePageSnapshotWithBodyText(t *testing.T) {
 	db := newSQLiteTestDB(t)
 
