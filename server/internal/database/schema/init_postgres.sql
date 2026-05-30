@@ -21,12 +21,12 @@ CREATE INDEX IF NOT EXISTS idx_pages_url_time ON pages(url, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pages_content_hash ON pages(content_hash);
 CREATE INDEX IF NOT EXISTS idx_pages_url_hash ON pages(url, content_hash);
 CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain);
+CREATE INDEX IF NOT EXISTS idx_pages_activity_desc ON pages ((COALESCE(last_visited, captured_at)) DESC, id DESC);
 
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
-        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_pages_body_text_trgm ON pages USING gin (body_text gin_trgm_ops)';
-        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_pages_title_trgm ON pages USING gin (title gin_trgm_ops)';
+        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_pages_search_text_trgm ON pages USING gin ((COALESCE(url, '''') || E''\n'' || COALESCE(title, '''') || E''\n'' || COALESCE(body_text, '''')) gin_trgm_ops)';
     END IF;
 END $$;
 

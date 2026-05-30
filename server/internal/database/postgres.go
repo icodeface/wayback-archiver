@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	_ "embed"
 	"errors"
@@ -17,9 +18,12 @@ var postgresSchema string
 
 // PostgresDB PostgreSQL 数据库实现
 type PostgresDB struct {
-	conn *sql.DB
-	qb   *QueryBuilder
+	conn                   *sql.DB
+	qb                     *QueryBuilder
+	searchTextTrigramReady bool
 }
+
+const postgresSearchTextExpression = "(COALESCE(url, '') || E'\\n' || COALESCE(title, '') || E'\\n' || COALESCE(body_text, ''))"
 
 // 保持向后兼容的类型别名
 type DB = PostgresDB
@@ -57,27 +61,55 @@ func NewPostgres(host, port, user, password, dbname string, sslmode ...string) (
 		conn: conn,
 		qb:   NewQueryBuilder(DBTypePostgreSQL),
 	}
-	if err := db.ensureSchema(); err != nil {
+	if err := db.ensurePostgresMigrations(); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to initialize PostgreSQL schema: %w", err)
-	}
-	if err := db.ensureResourcesContentHashNotUnique(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to ensure resources content_hash is not unique: %w", err)
-	}
-	if err := db.ensureDomainColumn(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to ensure domain column: %w", err)
-	}
-	if err := db.ensureSnapshotStateColumn(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to ensure snapshot_state column: %w", err)
-	}
-	if err := db.ensureResourceQuarantineColumns(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to ensure resource quarantine columns: %w", err)
+		return nil, err
 	}
 	return db, nil
+}
+
+func (db *PostgresDB) ensurePostgresMigrations() error {
+	return db.withPostgresMigrationLock(func() error {
+		if err := db.ensureSchema(); err != nil {
+			return fmt.Errorf("failed to initialize PostgreSQL schema: %w", err)
+		}
+		if err := db.ensureResourcesContentHashNotUnique(); err != nil {
+			return fmt.Errorf("failed to ensure resources content_hash is not unique: %w", err)
+		}
+		if err := db.ensureDomainColumn(); err != nil {
+			return fmt.Errorf("failed to ensure domain column: %w", err)
+		}
+		if err := db.ensureSnapshotStateColumn(); err != nil {
+			return fmt.Errorf("failed to ensure snapshot_state column: %w", err)
+		}
+		if err := db.ensureResourceQuarantineColumns(); err != nil {
+			return fmt.Errorf("failed to ensure resource quarantine columns: %w", err)
+		}
+		searchTextTrigramReady, err := db.ensureSearchIndexes()
+		if err != nil {
+			return fmt.Errorf("failed to ensure search indexes: %w", err)
+		}
+		db.searchTextTrigramReady = searchTextTrigramReady
+		return nil
+	})
+}
+
+func (db *PostgresDB) withPostgresMigrationLock(fn func() error) error {
+	ctx := context.Background()
+	conn, err := db.conn.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(20260530, 447392260)`); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock(20260530, 447392260)`)
+	}()
+
+	return fn()
 }
 
 func openPostgresConnection(host, port, user, password, dbname, sslmode string) (*sql.DB, error) {
@@ -221,6 +253,40 @@ func (db *PostgresDB) ensureTrigramExtension() error {
 	if err == nil || isOptionalTrigramExtensionError(err) {
 		return nil
 	}
+	return err
+}
+
+func (db *PostgresDB) ensureSearchIndexes() (bool, error) {
+	if _, err := db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_pages_activity_desc ON pages ((COALESCE(last_visited, captured_at)) DESC, id DESC)`); err != nil {
+		return false, err
+	}
+
+	hasTrigram, err := db.hasPostgresExtension("pg_trgm")
+	if err != nil || !hasTrigram {
+		return false, err
+	}
+
+	if _, err := db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_pages_search_text_trgm ON pages USING gin (` + postgresSearchTextExpression + ` gin_trgm_ops)`); err != nil {
+		return false, err
+	}
+	// The combined expression index replaces the old per-column trigram indexes.
+	// Cleanup is best-effort so a permission issue cannot prevent startup after
+	// the new search path is ready.
+	_ = db.dropLegacySearchTrigramIndexes()
+	return true, nil
+}
+
+func (db *PostgresDB) hasPostgresExtension(name string) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = $1)`, name).Scan(&exists)
+	return exists, err
+}
+
+func (db *PostgresDB) dropLegacySearchTrigramIndexes() error {
+	_, err := db.conn.Exec(`
+DROP INDEX IF EXISTS idx_pages_body_text_trgm;
+DROP INDEX IF EXISTS idx_pages_title_trgm;
+`)
 	return err
 }
 
@@ -569,7 +635,7 @@ func (db *PostgresDB) GetPageByID(id string) (*models.Page, error) {
 
 func (db *PostgresDB) buildSearchWhere(keyword string, from, to *time.Time, domain string) (string, []interface{}, int) {
 	likeOp := db.qb.CaseInsensitiveLike()
-	where := fmt.Sprintf(" WHERE (COALESCE(url, '') %s $1 ESCAPE '\\' OR COALESCE(title, '') %s $1 ESCAPE '\\' OR COALESCE(body_text, '') %s $1 ESCAPE '\\')", likeOp, likeOp, likeOp)
+	where := fmt.Sprintf(" WHERE %s %s $1 ESCAPE '\\'", postgresSearchTextExpression, likeOp)
 	args := []interface{}{"%" + escapeLikePattern(keyword) + "%"}
 	argIndex := 2
 
@@ -607,12 +673,61 @@ func (db *PostgresDB) SearchPages(keyword string, limit, offset int, from, to *t
 	)
 	args = append(args, limit, offset)
 
+	if db.shouldForceSearchTextTrigram(keyword) {
+		return db.searchPagesWithTrigramPlan(query, args, keyword)
+	}
+
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
+	return scanPostgresSearchPages(rows, keyword)
+}
+
+func (db *PostgresDB) shouldForceSearchTextTrigram(keyword string) bool {
+	return db.searchTextTrigramReady && len([]rune(keyword)) >= 3
+}
+
+func (db *PostgresDB) searchPagesWithTrigramPlan(query string, args []interface{}, keyword string) ([]models.Page, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.Exec(`SET LOCAL enable_seqscan = off`); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	pages, err := scanPostgresSearchPages(rows, keyword)
+	closeErr := rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	committed = true
+	return pages, nil
+}
+
+func scanPostgresSearchPages(rows *sql.Rows, keyword string) ([]models.Page, error) {
 	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
@@ -623,6 +738,9 @@ func (db *PostgresDB) SearchPages(keyword string, limit, offset int, from, to *t
 		applySearchHighlights(&p, keyword, bodyText)
 		pages = append(pages, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return pages, nil
 }
 
@@ -631,9 +749,40 @@ func (db *PostgresDB) GetSearchPagesCount(keyword string, from, to *time.Time, d
 	where, args, _ := db.buildSearchWhere(keyword, from, to, domain)
 	query := "SELECT COUNT(*) FROM pages" + where
 
+	if db.shouldForceSearchTextTrigram(keyword) {
+		return db.getSearchPagesCountWithTrigramPlan(query, args)
+	}
+
 	var count int
 	err := db.conn.QueryRow(query, args...).Scan(&count)
 	return count, err
+}
+
+func (db *PostgresDB) getSearchPagesCountWithTrigramPlan(query string, args []interface{}) (int, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.Exec(`SET LOCAL enable_seqscan = off`); err != nil {
+		return 0, err
+	}
+
+	var count int
+	if err := tx.QueryRow(query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	committed = true
+	return count, nil
 }
 
 // GetPagesWithoutBodyText 获取所有没有 body_text 的页面（用于回填）
