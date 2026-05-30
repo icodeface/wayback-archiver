@@ -680,7 +680,7 @@ func (db *SQLiteDB) GetPageByID(id string) (*models.Page, error) {
 
 // SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
 func (db *SQLiteDB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
-	query := `SELECT ` + pageSelectColumns + ` FROM pages WHERE (` +
+	query := `SELECT ` + pageSearchSelectColumns + ` FROM pages WHERE (` +
 		`LOWER(COALESCE(url, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
 		`LOWER(COALESCE(title, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
 		`LOWER(COALESCE(body_text, '')) LIKE LOWER(?) ESCAPE '\'` +
@@ -715,9 +715,11 @@ func (db *SQLiteDB) SearchPages(keyword string, from, to *time.Time, domain stri
 	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
-		if err := scanPage(rows, &p); err != nil {
+		var bodyText string
+		if err := scanSearchPage(rows, &p, &bodyText); err != nil {
 			return nil, err
 		}
+		applySearchHighlights(&p, keyword, bodyText)
 		pages = append(pages, p)
 	}
 	return pages, nil

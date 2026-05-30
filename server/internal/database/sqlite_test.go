@@ -84,6 +84,47 @@ func TestSQLiteSearchPages_MatchesURLTitleAndBodyText(t *testing.T) {
 	}
 }
 
+func TestSQLiteSearchPages_ReturnsEscapedHighlights(t *testing.T) {
+	db := newSQLiteTestDB(t)
+
+	now := time.Now().UTC()
+	pageID, err := db.CreatePage("https://snippet.example.com/archive/Needle", "Needle <Title>", "html/test/highlight.html", "hash-highlight", now)
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	if err := db.UpdatePageBodyText(pageID, "prefix unsafe <script>alert(1)</script> body Needle suffix"); err != nil {
+		t.Fatalf("UpdatePageBodyText failed: %v", err)
+	}
+
+	pages, err := db.SearchPages("needle", nil, nil, "")
+	if err != nil {
+		t.Fatalf("SearchPages failed: %v", err)
+	}
+	if len(pages) != 1 || pages[0].ID != pageID {
+		t.Fatalf("SearchPages returned %+v, want page %d", pages, pageID)
+	}
+
+	page := pages[0]
+	if !strings.Contains(page.HighlightedTitle, "<mark>Needle</mark>") {
+		t.Fatalf("HighlightedTitle = %q, want highlighted title", page.HighlightedTitle)
+	}
+	if strings.Contains(page.HighlightedTitle, "<Title>") || !strings.Contains(page.HighlightedTitle, "&lt;Title&gt;") {
+		t.Fatalf("HighlightedTitle = %q, want escaped title markup", page.HighlightedTitle)
+	}
+	if !strings.Contains(page.HighlightedURL, "<mark>Needle</mark>") {
+		t.Fatalf("HighlightedURL = %q, want highlighted URL", page.HighlightedURL)
+	}
+	if !strings.Contains(page.SearchSnippet, "<mark>Needle</mark>") {
+		t.Fatalf("SearchSnippet = %q, want highlighted snippet", page.SearchSnippet)
+	}
+	if strings.Contains(page.SearchSnippet, "<script>") || !strings.Contains(page.SearchSnippet, "&lt;script&gt;") {
+		t.Fatalf("SearchSnippet = %q, want escaped snippet markup", page.SearchSnippet)
+	}
+	if page.BodyText != "" {
+		t.Fatalf("BodyText should not be returned in search results, got %q", page.BodyText)
+	}
+}
+
 func TestSQLiteSearchPages_EscapesLikeWildcards(t *testing.T) {
 	db := newSQLiteTestDB(t)
 
