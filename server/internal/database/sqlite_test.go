@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func TestSQLiteFTSUpdatePageBodyText(t *testing.T) {
 		t.Fatalf("UpdatePageBodyText failed: %v", err)
 	}
 
-	pages, err := db.SearchPages("archived", nil, nil, "")
+	pages, err := db.SearchPages("archived", 100, 0, nil, nil, "")
 	if err != nil {
 		t.Fatalf("SearchPages failed: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestSQLiteSearchPages_MatchesURLTitleAndBodyText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pages, err := db.SearchPages(tt.keyword, nil, nil, "")
+			pages, err := db.SearchPages(tt.keyword, 100, 0, nil, nil, "")
 			if err != nil {
 				t.Fatalf("SearchPages failed: %v", err)
 			}
@@ -96,7 +97,7 @@ func TestSQLiteSearchPages_ReturnsEscapedHighlights(t *testing.T) {
 		t.Fatalf("UpdatePageBodyText failed: %v", err)
 	}
 
-	pages, err := db.SearchPages("needle", nil, nil, "")
+	pages, err := db.SearchPages("needle", 100, 0, nil, nil, "")
 	if err != nil {
 		t.Fatalf("SearchPages failed: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestSQLiteSearchPages_EscapesLikeWildcards(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.keyword, func(t *testing.T) {
-			pages, err := db.SearchPages(tt.keyword, nil, nil, domain)
+			pages, err := db.SearchPages(tt.keyword, 100, 0, nil, nil, domain)
 			if err != nil {
 				t.Fatalf("SearchPages(%q) failed: %v", tt.keyword, err)
 			}
@@ -172,6 +173,54 @@ func TestSQLiteSearchPages_EscapesLikeWildcards(t *testing.T) {
 				t.Fatalf("SearchPages(%q) returned %+v, want only page %d", tt.keyword, pages, tt.wantID)
 			}
 		})
+	}
+}
+
+func TestSQLiteSearchPages_PaginatesAndCounts(t *testing.T) {
+	db := newSQLiteTestDB(t)
+
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		pageID, err := db.CreatePage(
+			fmt.Sprintf("https://search-pagination.example.com/page-%d", i),
+			fmt.Sprintf("Search Pagination Token %d", i),
+			fmt.Sprintf("html/test/search-pagination-%d.html", i),
+			fmt.Sprintf("hash-search-pagination-%d", i),
+			now.Add(time.Duration(i)*time.Second),
+		)
+		if err != nil {
+			t.Fatalf("CreatePage(%d) failed: %v", i, err)
+		}
+		if err := db.UpdatePageBodyText(pageID, "search pagination token body"); err != nil {
+			t.Fatalf("UpdatePageBodyText(%d) failed: %v", i, err)
+		}
+	}
+
+	total, err := db.GetSearchPagesCount("search pagination token", nil, nil, "search-pagination.example.com")
+	if err != nil {
+		t.Fatalf("GetSearchPagesCount failed: %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("GetSearchPagesCount = %d, want 3", total)
+	}
+
+	firstPage, err := db.SearchPages("search pagination token", 2, 0, nil, nil, "search-pagination.example.com")
+	if err != nil {
+		t.Fatalf("SearchPages(first page) failed: %v", err)
+	}
+	if len(firstPage) != 2 {
+		t.Fatalf("first page length = %d, want 2", len(firstPage))
+	}
+
+	secondPage, err := db.SearchPages("search pagination token", 2, 2, nil, nil, "search-pagination.example.com")
+	if err != nil {
+		t.Fatalf("SearchPages(second page) failed: %v", err)
+	}
+	if len(secondPage) != 1 {
+		t.Fatalf("second page length = %d, want 1", len(secondPage))
+	}
+	if secondPage[0].ID == firstPage[0].ID || secondPage[0].ID == firstPage[1].ID {
+		t.Fatalf("second page returned a duplicate result: first=%+v second=%+v", firstPage, secondPage)
 	}
 }
 
@@ -206,7 +255,7 @@ func TestSQLiteReplacePageSnapshotWithBodyText(t *testing.T) {
 		t.Fatalf("Title = %q, want %q", page.Title, "Updated Title")
 	}
 
-	pages, err := db.SearchPages("snapshot", nil, nil, "")
+	pages, err := db.SearchPages("snapshot", 100, 0, nil, nil, "")
 	if err != nil {
 		t.Fatalf("SearchPages failed: %v", err)
 	}

@@ -130,11 +130,16 @@ func (h *Handler) GetPage(c *gin.Context) {
 	c.JSON(http.StatusOK, page)
 }
 
-// SearchPages 搜索页面（支持时间过滤）
+// SearchPages 搜索页面（支持分页、时间和域名过滤）
 func (h *Handler) SearchPages(c *gin.Context) {
 	keyword := c.Query("q")
 	if keyword == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing query parameter"})
+		return
+	}
+
+	limit, offset, ok := parsePaginationParams(c)
+	if !ok {
 		return
 	}
 
@@ -145,12 +150,24 @@ func (h *Handler) SearchPages(c *gin.Context) {
 
 	domain := c.Query("domain")
 
-	pages, err := h.db.SearchPages(keyword, from, to, domain)
+	pages, err := h.db.SearchPages(keyword, limit, offset, from, to, domain)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, pages)
+
+	total, err := h.db.GetSearchPagesCount(keyword, from, to, domain)
+	if err != nil {
+		log.Printf("Failed to get search count: %v", err)
+		total = len(pages)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"pages":  pages,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 // GetPageTimeline 获取同一 URL 的所有快照

@@ -3,10 +3,12 @@ package database
 import (
 	"errors"
 	"fmt"
-	"github.com/lib/pq"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lib/pq"
+	"wayback/internal/models"
 )
 
 func TestBuildConnectionString_DefaultSSLMode(t *testing.T) {
@@ -92,6 +94,15 @@ func skipIfNoDB(t *testing.T) *DB {
 
 func idStr(id int64) string {
 	return fmt.Sprintf("%d", id)
+}
+
+func containsResourceID(resources []models.Resource, id int64) bool {
+	for _, resource := range resources {
+		if resource.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func TestUpdatePageContent(t *testing.T) {
@@ -323,7 +334,7 @@ func TestPostgresSearchPages_EscapesLikeWildcards(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.keyword, func(t *testing.T) {
-			pages, err := db.SearchPages(tt.keyword, nil, nil, domain)
+			pages, err := db.SearchPages(tt.keyword, 100, 0, nil, nil, domain)
 			if err != nil {
 				t.Fatalf("SearchPages(%q) failed: %v", tt.keyword, err)
 			}
@@ -331,6 +342,212 @@ func TestPostgresSearchPages_EscapesLikeWildcards(t *testing.T) {
 				t.Fatalf("SearchPages(%q) returned %+v, want only page %d", tt.keyword, pages, tt.wantID)
 			}
 		})
+	}
+}
+
+func TestPostgresSearchPages_MatchesURLTitleAndBodyText(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	domain := "postgres-search-match-" + suffix + ".example.com"
+	pageID, err := db.CreatePage(
+		"https://"+domain+"/url-token",
+		"Postgres Title Token",
+		"html/test/postgres-search-match.html",
+		strings.Repeat("a", 64),
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer db.DeletePage(pageID)
+
+	if err := db.UpdatePageBodyText(pageID, "This archived body includes postgres body token."); err != nil {
+		t.Fatalf("UpdatePageBodyText failed: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		keyword string
+	}{
+		{name: "URL substring", keyword: "url-token"},
+		{name: "title substring", keyword: "Postgres Title Token"},
+		{name: "body text substring", keyword: "postgres body token"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pages, err := db.SearchPages(tt.keyword, 100, 0, nil, nil, domain)
+			if err != nil {
+				t.Fatalf("SearchPages(%q) failed: %v", tt.keyword, err)
+			}
+			if len(pages) != 1 || pages[0].ID != pageID {
+				t.Fatalf("SearchPages(%q) returned %+v, want page %d", tt.keyword, pages, pageID)
+			}
+		})
+	}
+}
+
+func TestPostgresSearchPages_ReturnsEscapedHighlights(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	domain := "postgres-highlight-" + suffix + ".example.com"
+	pageID, err := db.CreatePage(
+		"https://"+domain+"/archive/Needle",
+		"Needle <Title>",
+		"html/test/postgres-highlight.html",
+		strings.Repeat("b", 64),
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer db.DeletePage(pageID)
+
+	if err := db.UpdatePageBodyText(pageID, "prefix unsafe <script>alert(1)</script> body Needle suffix"); err != nil {
+		t.Fatalf("UpdatePageBodyText failed: %v", err)
+	}
+
+	pages, err := db.SearchPages("needle", 100, 0, nil, nil, domain)
+	if err != nil {
+		t.Fatalf("SearchPages failed: %v", err)
+	}
+	if len(pages) != 1 || pages[0].ID != pageID {
+		t.Fatalf("SearchPages returned %+v, want page %d", pages, pageID)
+	}
+
+	page := pages[0]
+	if !strings.Contains(page.HighlightedTitle, "<mark>Needle</mark>") {
+		t.Fatalf("HighlightedTitle = %q, want highlighted title", page.HighlightedTitle)
+	}
+	if strings.Contains(page.HighlightedTitle, "<Title>") || !strings.Contains(page.HighlightedTitle, "&lt;Title&gt;") {
+		t.Fatalf("HighlightedTitle = %q, want escaped title markup", page.HighlightedTitle)
+	}
+	if !strings.Contains(page.HighlightedURL, "<mark>Needle</mark>") {
+		t.Fatalf("HighlightedURL = %q, want highlighted URL", page.HighlightedURL)
+	}
+	if !strings.Contains(page.SearchSnippet, "<mark>Needle</mark>") {
+		t.Fatalf("SearchSnippet = %q, want highlighted snippet", page.SearchSnippet)
+	}
+	if strings.Contains(page.SearchSnippet, "<script>") || !strings.Contains(page.SearchSnippet, "&lt;script&gt;") {
+		t.Fatalf("SearchSnippet = %q, want escaped snippet markup", page.SearchSnippet)
+	}
+	if page.BodyText != "" {
+		t.Fatalf("BodyText should not be returned in search results, got %q", page.BodyText)
+	}
+}
+
+func TestPostgresSearchPages_PaginatesAndCounts(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	domain := "search-pagination-" + suffix + ".example.com"
+	token := "search-pagination-token-" + suffix
+	now := time.Now()
+
+	for i := 0; i < 3; i++ {
+		pageID, err := db.CreatePage(
+			fmt.Sprintf("https://%s/page-%d", domain, i),
+			fmt.Sprintf("Search Pagination Token %d", i),
+			fmt.Sprintf("html/test/search-pagination-%s-%d.html", suffix, i),
+			fmt.Sprintf("%064d", i+1000),
+			now.Add(time.Duration(i)*time.Second),
+		)
+		if err != nil {
+			t.Fatalf("CreatePage(%d) failed: %v", i, err)
+		}
+		defer db.DeletePage(pageID)
+
+		if err := db.UpdatePageBodyText(pageID, token); err != nil {
+			t.Fatalf("UpdatePageBodyText(%d) failed: %v", i, err)
+		}
+	}
+
+	total, err := db.GetSearchPagesCount(token, nil, nil, domain)
+	if err != nil {
+		t.Fatalf("GetSearchPagesCount failed: %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("GetSearchPagesCount = %d, want 3", total)
+	}
+
+	firstPage, err := db.SearchPages(token, 2, 0, nil, nil, domain)
+	if err != nil {
+		t.Fatalf("SearchPages(first page) failed: %v", err)
+	}
+	if len(firstPage) != 2 {
+		t.Fatalf("first page length = %d, want 2", len(firstPage))
+	}
+
+	secondPage, err := db.SearchPages(token, 2, 2, nil, nil, domain)
+	if err != nil {
+		t.Fatalf("SearchPages(second page) failed: %v", err)
+	}
+	if len(secondPage) != 1 {
+		t.Fatalf("second page length = %d, want 1", len(secondPage))
+	}
+	if secondPage[0].ID == firstPage[0].ID || secondPage[0].ID == firstPage[1].ID {
+		t.Fatalf("second page returned a duplicate result: first=%+v second=%+v", firstPage, secondPage)
+	}
+}
+
+func TestPostgresReplacePageSnapshotWithBodyText(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	domain := "postgres-replace-body-" + suffix + ".example.com"
+	pageID, err := db.CreatePage(
+		"https://"+domain+"/replace",
+		"Original Title",
+		"html/test/postgres-replace-original.html",
+		strings.Repeat("c", 64),
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	defer db.DeletePage(pageID)
+
+	bodyText := "postgres replace snapshot body token"
+	if err := db.ReplacePageSnapshot(
+		pageID,
+		"html/test/postgres-replace-updated.html",
+		strings.Repeat("d", 64),
+		"Updated Title",
+		&bodyText,
+		nil,
+	); err != nil {
+		t.Fatalf("ReplacePageSnapshot failed: %v", err)
+	}
+
+	page, err := db.GetPageByID(idStr(pageID))
+	if err != nil {
+		t.Fatalf("GetPageByID failed: %v", err)
+	}
+	if page == nil {
+		t.Fatal("page should exist after ReplacePageSnapshot")
+	}
+	if page.HTMLPath != "html/test/postgres-replace-updated.html" {
+		t.Fatalf("HTMLPath = %q, want updated path", page.HTMLPath)
+	}
+	if page.ContentHash != strings.Repeat("d", 64) {
+		t.Fatalf("ContentHash = %q, want updated hash", page.ContentHash)
+	}
+	if page.Title != "Updated Title" {
+		t.Fatalf("Title = %q, want Updated Title", page.Title)
+	}
+
+	pages, err := db.SearchPages("replace snapshot body", 100, 0, nil, nil, domain)
+	if err != nil {
+		t.Fatalf("SearchPages failed: %v", err)
+	}
+	if len(pages) != 1 || pages[0].ID != pageID {
+		t.Fatalf("SearchPages returned %+v, want page %d", pages, pageID)
 	}
 }
 
@@ -425,6 +642,94 @@ func TestGetResourceByURLPrefix_EscapesUnderscoreWildcards(t *testing.T) {
 	}
 	if resource.ID != correctID {
 		t.Fatalf("resource ID = %d, want %d (wrong wildcard match to %q)", resource.ID, correctID, wrongURL)
+	}
+}
+
+func TestPostgresQuarantineResourcesByFilePath_HidesActiveResources(t *testing.T) {
+	db := skipIfNoDB(t)
+	defer db.Close()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	sharedPath := "resources/test/quarantine-shared-" + suffix + ".css"
+	quarantinePath := "resources/quarantine/quarantine-shared-" + suffix + ".css"
+	reason := "test quarantine"
+	urlA := "https://postgres-quarantine.example.com/a.css?nonce=" + suffix
+	urlB := "https://postgres-quarantine.example.com/b.css?nonce=" + suffix
+	urlImage := "https://postgres-quarantine.example.com/logo.png?nonce=" + suffix
+
+	resourceIDA, err := db.CreateResource(urlA, strings.Repeat("a", 64), "css", sharedPath, 10)
+	if err != nil {
+		t.Fatalf("CreateResource(A) failed: %v", err)
+	}
+	defer db.conn.Exec("DELETE FROM resources WHERE id = $1", resourceIDA)
+
+	resourceIDB, err := db.CreateResource(urlB, strings.Repeat("b", 64), "css", sharedPath, 10)
+	if err != nil {
+		t.Fatalf("CreateResource(B) failed: %v", err)
+	}
+	defer db.conn.Exec("DELETE FROM resources WHERE id = $1", resourceIDB)
+
+	imageID, err := db.CreateResource(urlImage, strings.Repeat("c", 64), "image", "resources/test/quarantine-image-"+suffix+".img", 10)
+	if err != nil {
+		t.Fatalf("CreateResource(image) failed: %v", err)
+	}
+	defer db.conn.Exec("DELETE FROM resources WHERE id = $1", imageID)
+
+	scanAfterID := resourceIDA - 1
+	resources, err := db.ListResourcesForIntegrityCheck("css", scanAfterID, 10)
+	if err != nil {
+		t.Fatalf("ListResourcesForIntegrityCheck(before) failed: %v", err)
+	}
+	if !containsResourceID(resources, resourceIDA) || !containsResourceID(resources, resourceIDB) {
+		t.Fatalf("expected both CSS resources in integrity scan before quarantine")
+	}
+
+	affected, err := db.QuarantineResourcesByFilePath(sharedPath, quarantinePath, reason)
+	if err != nil {
+		t.Fatalf("QuarantineResourcesByFilePath failed: %v", err)
+	}
+	if affected != 2 {
+		t.Fatalf("affected rows = %d, want 2", affected)
+	}
+
+	for _, resourceID := range []int64{resourceIDA, resourceIDB} {
+		resource, err := db.GetResourceByID(resourceID)
+		if err != nil {
+			t.Fatalf("GetResourceByID(%d) failed: %v", resourceID, err)
+		}
+		if resource == nil || !resource.IsQuarantined {
+			t.Fatalf("resource %d should be quarantined", resourceID)
+		}
+		if resource.FilePath != quarantinePath {
+			t.Fatalf("resource %d path = %q, want %q", resourceID, resource.FilePath, quarantinePath)
+		}
+		if resource.QuarantineReason != reason {
+			t.Fatalf("resource %d reason = %q, want %q", resourceID, resource.QuarantineReason, reason)
+		}
+	}
+
+	active, err := db.GetResourceByURL(urlA)
+	if err != nil {
+		t.Fatalf("GetResourceByURL(A) failed: %v", err)
+	}
+	if active != nil {
+		t.Fatalf("quarantined resource should be hidden from active URL lookup")
+	}
+
+	resources, err = db.ListResourcesForIntegrityCheck("css", scanAfterID, 10)
+	if err != nil {
+		t.Fatalf("ListResourcesForIntegrityCheck(after) failed: %v", err)
+	}
+	if containsResourceID(resources, resourceIDA) || containsResourceID(resources, resourceIDB) {
+		t.Fatalf("quarantined resources should be hidden from integrity scans")
+	}
+
+	image, err := db.GetResourceByURL(urlImage)
+	if err != nil {
+		t.Fatalf("GetResourceByURL(image) failed: %v", err)
+	}
+	if image == nil || image.ID != imageID {
+		t.Fatalf("unrelated image resource should remain active")
 	}
 }
 

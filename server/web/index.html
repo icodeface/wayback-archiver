@@ -616,49 +616,202 @@
         let currentPage = 1;
         let pageSize = 50;
         let totalCount = 0;
+        let searchTimer = null;
+        let domainTimer = null;
+        let activeRequestController = null;
+        let latestRequestSeq = 0;
+
+        function normalizePageNumber(page) {
+            const parsed = Number.parseInt(page, 10);
+            if (!Number.isFinite(parsed) || parsed < 1) {
+                return 1;
+            }
+            return parsed;
+        }
+
+        function getFilters() {
+            return {
+                keyword: document.getElementById('searchInput').value.trim(),
+                dateFrom: document.getElementById('dateFrom').value,
+                dateTo: document.getElementById('dateTo').value,
+                domain: document.getElementById('domainInput').value.trim()
+            };
+        }
+
+        function buildArchiveParams(page, keyword = '') {
+            const filters = getFilters();
+            const params = new URLSearchParams();
+            params.set('limit', String(pageSize));
+            params.set('offset', String((page - 1) * pageSize));
+            if (keyword) params.set('q', keyword);
+            if (filters.dateFrom) params.set('from', filters.dateFrom);
+            if (filters.dateTo) params.set('to', filters.dateTo);
+            if (filters.domain) params.set('domain', filters.domain);
+            return params;
+        }
+
+        function syncBrowserURL(page) {
+            const filters = getFilters();
+            const params = new URLSearchParams();
+            if (filters.keyword) params.set('q', filters.keyword);
+            if (filters.dateFrom) params.set('from', filters.dateFrom);
+            if (filters.dateTo) params.set('to', filters.dateTo);
+            if (filters.domain) params.set('domain', filters.domain);
+            if (page > 1) params.set('page', String(page));
+
+            const query = params.toString();
+            const nextURL = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+            window.history.replaceState(null, '', nextURL);
+        }
+
+        function applyURLFilters() {
+            const params = new URLSearchParams(window.location.search);
+            document.getElementById('searchInput').value = params.get('q') || '';
+            document.getElementById('dateFrom').value = params.get('from') || '';
+            document.getElementById('dateTo').value = params.get('to') || '';
+            document.getElementById('domainInput').value = params.get('domain') || '';
+            return normalizePageNumber(params.get('page'));
+        }
+
+        function invalidateActiveRequest() {
+            latestRequestSeq += 1;
+            if (activeRequestController) {
+                activeRequestController.abort();
+                activeRequestController = null;
+            }
+        }
+
+        function beginArchiveRequest() {
+            if (activeRequestController) {
+                activeRequestController.abort();
+            }
+            const controller = new AbortController();
+            activeRequestController = controller;
+            const seq = latestRequestSeq + 1;
+            latestRequestSeq = seq;
+            return { controller, signal: controller.signal, seq };
+        }
+
+        function isCurrentRequest(seq) {
+            return seq === latestRequestSeq;
+        }
+
+        function finishArchiveRequest(seq, controller) {
+            if (isCurrentRequest(seq) && activeRequestController === controller) {
+                activeRequestController = null;
+            }
+        }
+
+        function isAbortError(error) {
+            return error && error.name === 'AbortError';
+        }
+
+        function parsePaginatedResponse(data) {
+            if (data && Array.isArray(data.pages)) {
+                return {
+                    pages: data.pages,
+                    total: Number.isFinite(Number(data.total)) ? Number(data.total) : data.pages.length
+                };
+            }
+
+            const pages = Array.isArray(data) ? data : [];
+            return {
+                pages,
+                total: pages.length
+            };
+        }
+
+        function applyPageResults(pages, total) {
+            const computedTotalPages = Math.ceil(total / pageSize);
+            if (total > 0 && currentPage > computedTotalPages) {
+                loadCurrentMode(computedTotalPages);
+                return;
+            }
+
+            allPages = pages || [];
+            totalCount = total;
+            totalPages = computedTotalPages;
+            document.getElementById('totalPages').textContent = totalCount;
+            renderPages(allPages);
+            updatePagination();
+        }
+
+        function showLoadError(error) {
+            console.error('Failed to load pages:', error);
+            const message = error && error.message ? error.message : String(error);
+            const isNetworkError = message.includes('fetch') || message.includes('NetworkError');
+            const errorMsg = isNetworkError
+                ? 'Unable to connect to server. Please check if the server is running.'
+                : 'Failed to load pages. Please try again.';
+            document.getElementById('pageList').innerHTML = `<li class="empty"><div class="empty-icon">[ ! ]</div>${errorMsg}</li>`;
+        }
 
         async function loadPages(page = 1) {
+            const request = beginArchiveRequest();
+            const normalizedPage = normalizePageNumber(page);
+            currentPage = normalizedPage;
+            syncBrowserURL(normalizedPage);
+
             try {
-                currentPage = page;
-                const offset = (page - 1) * pageSize;
-
-                // 构建 URL，包含日期过滤参数
-                let url = `/api/pages?limit=${pageSize}&offset=${offset}`;
-                const dateFrom = document.getElementById('dateFrom').value;
-                const dateTo = document.getElementById('dateTo').value;
-                const domain = document.getElementById('domainInput').value.trim();
-                if (dateFrom) url += `&from=${dateFrom}`;
-                if (dateTo) url += `&to=${dateTo}`;
-                if (domain) url += `&domain=${encodeURIComponent(domain)}`;
-
-                const response = await fetch(url);
+                const params = buildArchiveParams(normalizedPage);
+                const response = await fetch(`/api/pages?${params.toString()}`, {
+                    signal: request.signal
+                });
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => ({}));
                     throw new Error(errorData.error || `HTTP ${response.status}`);
                 }
                 const data = await response.json();
-
-                // Handle new paginated response format
-                if (data.pages !== undefined && data.total !== undefined) {
-                    allPages = data.pages || [];
-                    totalCount = data.total;
-                } else {
-                    // Fallback for old format (array)
-                    allPages = Array.isArray(data) ? data : [];
-                    totalCount = allPages.length;
+                if (!isCurrentRequest(request.seq)) {
+                    return;
                 }
 
-                totalPages = Math.ceil(totalCount / pageSize);
-                document.getElementById('totalPages').textContent = totalCount;
-                renderPages(allPages);
-                updatePagination();
+                const result = parsePaginatedResponse(data);
+                applyPageResults(result.pages, result.total);
             } catch (error) {
-                console.error('Failed to load pages:', error);
-                const isNetworkError = error.message.includes('fetch') || error.message.includes('NetworkError');
-                const errorMsg = isNetworkError
-                    ? 'Unable to connect to server. Please check if the server is running.'
-                    : 'Failed to load pages. Please try again.';
-                document.getElementById('pageList').innerHTML = `<li class="empty"><div class="empty-icon">[ ! ]</div>${errorMsg}</li>`;
+                if (!isAbortError(error) && isCurrentRequest(request.seq)) {
+                    showLoadError(error);
+                }
+            } finally {
+                finishArchiveRequest(request.seq, request.controller);
+            }
+        }
+
+        async function searchPages(keyword, page = 1) {
+            const searchKeyword = keyword.trim();
+            if (!searchKeyword) {
+                loadPages(page);
+                return;
+            }
+
+            const request = beginArchiveRequest();
+            const normalizedPage = normalizePageNumber(page);
+            currentPage = normalizedPage;
+            syncBrowserURL(normalizedPage);
+
+            try {
+                const params = buildArchiveParams(normalizedPage, searchKeyword);
+                const response = await fetch(`/api/search?${params.toString()}`, {
+                    signal: request.signal
+                });
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                if (!isCurrentRequest(request.seq)) {
+                    return;
+                }
+
+                const result = parsePaginatedResponse(data);
+                applyPageResults(result.pages, result.total);
+            } catch (error) {
+                if (!isAbortError(error) && isCurrentRequest(request.seq)) {
+                    console.error('Search error:', error);
+                    showLoadError(error);
+                }
+            } finally {
+                finishArchiveRequest(request.seq, request.controller);
             }
         }
 
@@ -670,23 +823,32 @@
 
             if (totalPages > 1) {
                 pagination.style.display = 'flex';
-                prevBtn.disabled = currentPage === 1;
-                nextBtn.disabled = currentPage === totalPages;
+                prevBtn.disabled = currentPage <= 1;
+                nextBtn.disabled = currentPage >= totalPages;
                 pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
             } else {
                 pagination.style.display = 'none';
             }
         }
 
+        function loadCurrentMode(page = currentPage) {
+            const keyword = getFilters().keyword;
+            if (keyword) {
+                searchPages(keyword, page);
+            } else {
+                loadPages(page);
+            }
+        }
+
         function loadPreviousPage() {
             if (currentPage > 1) {
-                loadPages(currentPage - 1);
+                loadCurrentMode(currentPage - 1);
             }
         }
 
         function loadNextPage() {
             if (currentPage < totalPages) {
-                loadPages(currentPage + 1);
+                loadCurrentMode(currentPage + 1);
             }
         }
 
@@ -810,8 +972,8 @@
                 });
 
                 if (response.ok) {
-                    // Reload current page to refresh the list
-                    loadPages(currentPage);
+                    // Reload current mode to refresh the list
+                    loadCurrentMode(currentPage);
                 } else {
                     const error = await response.json();
                     alert('删除失败: ' + (error.error || '未知错误'));
@@ -821,15 +983,12 @@
             }
         }
 
-        let searchTimer = null;
-        let isSearchMode = false;
-
         document.getElementById('searchInput').addEventListener('input', (e) => {
             const keyword = e.target.value.trim();
             clearTimeout(searchTimer);
+            invalidateActiveRequest();
 
             if (!keyword) {
-                isSearchMode = false;
                 loadPages(1);
                 return;
             }
@@ -840,49 +999,17 @@
 
         // 过滤器变化时重新加载
         function onFilterChange() {
-            if (isSearchMode) {
-                const keyword = document.getElementById('searchInput').value.trim();
-                if (keyword) {
-                    searchPages(keyword);
-                } else {
-                    isSearchMode = false;
-                    loadPages(1);
-                }
-            } else {
-                loadPages(1);
-            }
+            loadCurrentMode(1);
         }
 
         document.getElementById('dateFrom').addEventListener('change', onFilterChange);
         document.getElementById('dateTo').addEventListener('change', onFilterChange);
 
-        let domainTimer = null;
         document.getElementById('domainInput').addEventListener('input', () => {
             clearTimeout(domainTimer);
+            invalidateActiveRequest();
             domainTimer = setTimeout(onFilterChange, 300);
         });
-
-        async function searchPages(keyword) {
-            try {
-                // 构建 URL，包含日期过滤参数
-                let url = `/api/search?q=${encodeURIComponent(keyword)}`;
-                const dateFrom = document.getElementById('dateFrom').value;
-                const dateTo = document.getElementById('dateTo').value;
-                const domain = document.getElementById('domainInput').value.trim();
-                if (dateFrom) url += `&from=${dateFrom}`;
-                if (dateTo) url += `&to=${dateTo}`;
-                if (domain) url += `&domain=${encodeURIComponent(domain)}`;
-
-                const response = await fetch(url);
-                if (!response.ok) throw new Error('搜索失败');
-                const pages = await response.json();
-                isSearchMode = true;
-                renderPages(pages || []);
-                document.getElementById('pagination').style.display = 'none';
-            } catch (error) {
-                console.error('Search error:', error);
-            }
-        }
 
         function createMetaItem(icon, text) {
             const item = document.createElement('span');
@@ -961,7 +1088,8 @@
             }
         }
 
-        loadPages(1);
+        const initialPage = applyURLFilters();
+        loadCurrentMode(initialPage);
 
         fetch('/api/version').then(r => r.json()).then(d => {
             const el = document.getElementById('versionLink');
