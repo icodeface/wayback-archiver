@@ -289,6 +289,50 @@ func TestGetPagesByURL_NoResults(t *testing.T) {
 	}
 }
 
+func TestPostgresBuildSearchWhereUsesCombinedSearchTextExpression(t *testing.T) {
+	db := &PostgresDB{qb: NewQueryBuilder(DBTypePostgreSQL)}
+
+	where, args, nextArg := db.buildSearchWhere("needle", nil, nil, "")
+
+	if !strings.Contains(where, postgresSearchTextExpression+" ILIKE $1 ESCAPE '\\'") {
+		t.Fatalf("search WHERE = %q, want combined search expression", where)
+	}
+	if strings.Contains(where, " OR ") {
+		t.Fatalf("search WHERE = %q, should not use per-column OR search", where)
+	}
+	if len(args) != 1 || args[0] != "%needle%" {
+		t.Fatalf("args = %#v, want escaped LIKE pattern", args)
+	}
+	if nextArg != 2 {
+		t.Fatalf("nextArg = %d, want 2", nextArg)
+	}
+}
+
+func TestPostgresShouldForceSearchTextTrigram(t *testing.T) {
+	db := &PostgresDB{searchTextTrigramReady: true}
+
+	tests := []struct {
+		keyword string
+		want    bool
+	}{
+		{keyword: "ai", want: false},
+		{keyword: "git", want: true},
+		{keyword: "中文", want: false},
+		{keyword: "中文搜", want: true},
+	}
+
+	for _, tt := range tests {
+		if got := db.shouldForceSearchTextTrigram(tt.keyword); got != tt.want {
+			t.Fatalf("shouldForceSearchTextTrigram(%q) = %v, want %v", tt.keyword, got, tt.want)
+		}
+	}
+
+	db.searchTextTrigramReady = false
+	if db.shouldForceSearchTextTrigram("github") {
+		t.Fatal("should not force trigram plan when the search index is unavailable")
+	}
+}
+
 func TestPostgresSearchPages_EscapesLikeWildcards(t *testing.T) {
 	db := skipIfNoDB(t)
 	defer db.Close()
