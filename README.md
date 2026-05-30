@@ -230,10 +230,10 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 | `GET` | `/api/version` | Server version and build info |
 | `POST` | `/api/archive` | Create a page archive |
 | `PUT` | `/api/archive/:id` | Update an existing archive snapshot |
-| `GET` | `/api/pages` | List all archived pages |
+| `GET` | `/api/pages?limit=50&offset=0` | List archived pages with pagination |
 | `GET` | `/api/pages/:id` | Get page details |
 | `GET` | `/api/pages/:id/content` | Get page content as Markdown (for AI/LLM consumption) |
-| `GET` | `/api/search?q=keyword` | Search pages by URL or title |
+| `GET` | `/api/search?q=keyword&limit=50&offset=0` | Search pages by URL, title, or body text with pagination |
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
 | `GET` | `/api/logs` | List available log files |
 | `GET` | `/api/logs/latest` | Get latest log file content (supports `?tail=N&grep=keyword`) |

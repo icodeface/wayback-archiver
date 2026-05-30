@@ -1138,7 +1138,7 @@ func TestUpdateCapture_ClearsBodyTextWhenSnapshotBecomesEmpty(t *testing.T) {
 	}
 	defer db.DeletePage(pageID)
 
-	matches, err := db.SearchPages("disappear", nil, nil, "")
+	matches, err := db.SearchPages("disappear", 100, 0, nil, nil, "")
 	if err != nil {
 		t.Fatalf("SearchPages(before update) failed: %v", err)
 	}
@@ -1160,7 +1160,7 @@ func TestUpdateCapture_ClearsBodyTextWhenSnapshotBecomesEmpty(t *testing.T) {
 		t.Fatalf("action = %q, want %q", action, models.ArchiveActionUpdated)
 	}
 
-	matches, err = db.SearchPages("disappear", nil, nil, "")
+	matches, err = db.SearchPages("disappear", 100, 0, nil, nil, "")
 	if err != nil {
 		t.Fatalf("SearchPages(after update) failed: %v", err)
 	}

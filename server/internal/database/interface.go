@@ -18,7 +18,8 @@ type Database interface {
 	GetPagesByURL(pageURL string) ([]models.Page, error)
 	ListPages(limit, offset int, from, to *time.Time, domain string) ([]models.Page, error)
 	GetTotalPagesCount(from, to *time.Time, domain string) (int, error)
-	SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error)
+	SearchPages(keyword string, limit, offset int, from, to *time.Time, domain string) ([]models.Page, error)
+	GetSearchPagesCount(keyword string, from, to *time.Time, domain string) (int, error)
 	GetPagesWithoutBodyText() ([]models.Page, error)
 	GetSnapshotNeighbors(pageURL string, currentID int64) (prev *models.Page, next *models.Page, total int, err error)
 

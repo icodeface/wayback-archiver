@@ -567,33 +567,45 @@ func (db *PostgresDB) GetPageByID(id string) (*models.Page, error) {
 	return &p, nil
 }
 
-// SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
-func (db *PostgresDB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
+func (db *PostgresDB) buildSearchWhere(keyword string, from, to *time.Time, domain string) (string, []interface{}, int) {
 	likeOp := db.qb.CaseInsensitiveLike()
-	query := fmt.Sprintf("SELECT %s FROM pages WHERE (url %s $1 ESCAPE '\\' OR title %s $1 ESCAPE '\\' OR body_text %s $1 ESCAPE '\\')", pageSearchSelectColumns, likeOp, likeOp, likeOp)
+	where := fmt.Sprintf(" WHERE (COALESCE(url, '') %s $1 ESCAPE '\\' OR COALESCE(title, '') %s $1 ESCAPE '\\' OR COALESCE(body_text, '') %s $1 ESCAPE '\\')", likeOp, likeOp, likeOp)
 	args := []interface{}{"%" + escapeLikePattern(keyword) + "%"}
 	argIndex := 2
 
 	// 追加时间过滤条件
 	if from != nil {
-		query += fmt.Sprintf(" AND captured_at >= $%d", argIndex)
+		where += fmt.Sprintf(" AND captured_at >= $%d", argIndex)
 		args = append(args, *from)
 		argIndex++
 	}
 	if to != nil {
 		// to 使用 < nextDay 确保包含当天全部记录
 		nextDay := to.AddDate(0, 0, 1)
-		query += fmt.Sprintf(" AND captured_at < $%d", argIndex)
+		where += fmt.Sprintf(" AND captured_at < $%d", argIndex)
 		args = append(args, nextDay)
 		argIndex++
 	}
 	if domain != "" {
-		query += fmt.Sprintf(" AND (domain = $%d OR domain LIKE $%d)", argIndex, argIndex+1)
+		where += fmt.Sprintf(" AND (domain = $%d OR domain LIKE $%d)", argIndex, argIndex+1)
 		args = append(args, domain, "%."+domain)
 		argIndex += 2
 	}
 
-	query += " ORDER BY last_visited DESC LIMIT 100"
+	return where, args, argIndex
+}
+
+// SearchPages 搜索页面（按 URL、标题或正文内容，支持分页、时间和域名过滤）
+func (db *PostgresDB) SearchPages(keyword string, limit, offset int, from, to *time.Time, domain string) ([]models.Page, error) {
+	where, args, argIndex := db.buildSearchWhere(keyword, from, to, domain)
+	query := fmt.Sprintf(
+		"SELECT %s FROM pages%s ORDER BY COALESCE(last_visited, captured_at) DESC, id DESC LIMIT $%d OFFSET $%d",
+		pageSearchSelectColumns,
+		where,
+		argIndex,
+		argIndex+1,
+	)
+	args = append(args, limit, offset)
 
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
@@ -612,6 +624,16 @@ func (db *PostgresDB) SearchPages(keyword string, from, to *time.Time, domain st
 		pages = append(pages, p)
 	}
 	return pages, nil
+}
+
+// GetSearchPagesCount 获取搜索结果总数（支持时间和域名过滤）
+func (db *PostgresDB) GetSearchPagesCount(keyword string, from, to *time.Time, domain string) (int, error) {
+	where, args, _ := db.buildSearchWhere(keyword, from, to, domain)
+	query := "SELECT COUNT(*) FROM pages" + where
+
+	var count int
+	err := db.conn.QueryRow(query, args...).Scan(&count)
+	return count, err
 }
 
 // GetPagesWithoutBodyText 获取所有没有 body_text 的页面（用于回填）

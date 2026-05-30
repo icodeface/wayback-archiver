@@ -678,9 +678,8 @@ func (db *SQLiteDB) GetPageByID(id string) (*models.Page, error) {
 	return &p, nil
 }
 
-// SearchPages 搜索页面（按 URL、标题或正文内容，支持时间和域名过滤）
-func (db *SQLiteDB) SearchPages(keyword string, from, to *time.Time, domain string) ([]models.Page, error) {
-	query := `SELECT ` + pageSearchSelectColumns + ` FROM pages WHERE (` +
+func buildSQLiteSearchWhere(keyword string, from, to *time.Time, domain string) (string, []interface{}) {
+	where := ` WHERE (` +
 		`LOWER(COALESCE(url, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
 		`LOWER(COALESCE(title, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
 		`LOWER(COALESCE(body_text, '')) LIKE LOWER(?) ESCAPE '\'` +
@@ -690,21 +689,29 @@ func (db *SQLiteDB) SearchPages(keyword string, from, to *time.Time, domain stri
 
 	// 追加时间过滤条件
 	if from != nil {
-		query += " AND captured_at >= ?"
+		where += " AND captured_at >= ?"
 		args = append(args, formatSQLiteTimestamp(*from))
 	}
 	if to != nil {
 		// to 使用 < nextDay 确保包含当天全部记录
 		nextDay := to.AddDate(0, 0, 1)
-		query += " AND captured_at < ?"
+		where += " AND captured_at < ?"
 		args = append(args, formatSQLiteTimestamp(nextDay))
 	}
 	if domain != "" {
-		query += " AND (domain = ? OR domain LIKE ?)"
+		where += " AND (domain = ? OR domain LIKE ?)"
 		args = append(args, domain, "%."+domain)
 	}
 
-	query += " ORDER BY COALESCE(julianday(last_visited), julianday(captured_at)) DESC, id DESC LIMIT 100"
+	return where, args
+}
+
+// SearchPages 搜索页面（按 URL、标题或正文内容，支持分页、时间和域名过滤）
+func (db *SQLiteDB) SearchPages(keyword string, limit, offset int, from, to *time.Time, domain string) ([]models.Page, error) {
+	where, args := buildSQLiteSearchWhere(keyword, from, to, domain)
+	query := `SELECT ` + pageSearchSelectColumns + ` FROM pages` + where +
+		` ORDER BY COALESCE(julianday(last_visited), julianday(captured_at)) DESC, id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
 
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
@@ -723,6 +730,16 @@ func (db *SQLiteDB) SearchPages(keyword string, from, to *time.Time, domain stri
 		pages = append(pages, p)
 	}
 	return pages, nil
+}
+
+// GetSearchPagesCount 获取搜索结果总数（支持时间和域名过滤）
+func (db *SQLiteDB) GetSearchPagesCount(keyword string, from, to *time.Time, domain string) (int, error) {
+	where, args := buildSQLiteSearchWhere(keyword, from, to, domain)
+	query := "SELECT COUNT(*) FROM pages" + where
+
+	var count int
+	err := db.conn.QueryRow(query, args...).Scan(&count)
+	return count, err
 }
 
 // GetPagesWithoutBodyText 获取所有没有 body_text 的页面（用于回填）
