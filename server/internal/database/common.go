@@ -10,6 +10,8 @@ import (
 // pageSelectColumns 定义查询页面时的标准列列表
 const pageSelectColumns = "id, url, title, captured_at, html_path, content_hash, snapshot_state, first_visited, last_visited"
 
+const pageSearchSelectColumns = pageSelectColumns + ", COALESCE(body_text, '')"
+
 const resourceSelectColumns = "id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen, is_quarantined, quarantine_reason"
 
 // pageScanner 定义可以扫描数据库行的接口
@@ -24,6 +26,10 @@ type resourceScanner interface {
 // scanPage 从数据库行扫描页面数据到 Page 结构体
 func scanPage(scanner pageScanner, page *models.Page) error {
 	return scanner.Scan(&page.ID, &page.URL, &page.Title, &page.CapturedAt, &page.HTMLPath, &page.ContentHash, &page.SnapshotState, &page.FirstVisited, &page.LastVisited)
+}
+
+func scanSearchPage(scanner pageScanner, page *models.Page, bodyText *string) error {
+	return scanner.Scan(&page.ID, &page.URL, &page.Title, &page.CapturedAt, &page.HTMLPath, &page.ContentHash, &page.SnapshotState, &page.FirstVisited, &page.LastVisited, bodyText)
 }
 
 func scanResource(scanner resourceScanner, resource *models.Resource) error {

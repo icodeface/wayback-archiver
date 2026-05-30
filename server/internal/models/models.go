@@ -3,17 +3,20 @@ package models
 import "time"
 
 type Page struct {
-	ID            int64     `json:"id"`
-	URL           string    `json:"url"`
-	Title         string    `json:"title"`
-	CapturedAt    time.Time `json:"captured_at"`
-	HTMLPath      string    `json:"html_path"`
-	ContentHash   string    `json:"content_hash"`
-	SnapshotState string    `json:"snapshot_state"`
-	FirstVisited  time.Time `json:"first_visited"`
-	LastVisited   time.Time `json:"last_visited"`
-	BodyText      string    `json:"body_text,omitempty"`
-	Domain        string    `json:"domain,omitempty"`
+	ID               int64     `json:"id"`
+	URL              string    `json:"url"`
+	Title            string    `json:"title"`
+	CapturedAt       time.Time `json:"captured_at"`
+	HTMLPath         string    `json:"html_path"`
+	ContentHash      string    `json:"content_hash"`
+	SnapshotState    string    `json:"snapshot_state"`
+	FirstVisited     time.Time `json:"first_visited"`
+	LastVisited      time.Time `json:"last_visited"`
+	BodyText         string    `json:"body_text,omitempty"`
+	Domain           string    `json:"domain,omitempty"`
+	SearchSnippet    string    `json:"search_snippet,omitempty"`
+	HighlightedURL   string    `json:"highlighted_url,omitempty"`
+	HighlightedTitle string    `json:"highlighted_title,omitempty"`
 }
 
 type Resource struct {

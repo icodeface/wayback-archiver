@@ -425,6 +425,23 @@
             text-decoration: underline;
         }
 
+        .search-snippet {
+            margin: 0 0 12px;
+            color: var(--color-text-secondary);
+            font-size: 0.8125rem;
+            line-height: 1.6;
+            font-family: var(--font-sans);
+            word-break: break-word;
+        }
+
+        .page-title mark,
+        .page-url mark,
+        .search-snippet mark {
+            background: rgba(0, 255, 136, 0.18);
+            color: var(--color-accent);
+            padding: 0 2px;
+        }
+
         .page-meta {
             display: flex;
             align-items: center;
@@ -712,7 +729,7 @@
 
                 const title = document.createElement('h2');
                 title.className = 'page-title';
-                title.textContent = page.title || 'Untitled';
+                appendHighlightedHTML(title, page.highlighted_title, page.title || 'Untitled');
 
                 const pageId = document.createElement('span');
                 pageId.className = 'page-id';
@@ -734,7 +751,7 @@
                 deleteBtn.textContent = 'Delete';
                 deleteBtn.addEventListener('click', (event) => deletePage(event, page.id));
 
-                const urlLink = createSafeExternalLink(page.url, 'page-url');
+                const urlLink = createSafeExternalLink(page.url, 'page-url', page.highlighted_url);
 
                 const meta = document.createElement('div');
                 meta.className = 'page-meta';
@@ -754,6 +771,12 @@
 
                 item.appendChild(header);
                 item.appendChild(urlLink);
+                if (page.search_snippet) {
+                    const snippet = document.createElement('div');
+                    snippet.className = 'search-snippet';
+                    appendHighlightedHTML(snippet, page.search_snippet, '');
+                    item.appendChild(snippet);
+                }
                 item.appendChild(meta);
 
                 item.addEventListener('click', (e) => {
@@ -874,10 +897,10 @@
             return item;
         }
 
-        function createSafeExternalLink(rawURL, className) {
+        function createSafeExternalLink(rawURL, className, highlightedHTML) {
             const link = document.createElement('a');
             link.className = className;
-            link.textContent = rawURL || '';
+            appendHighlightedHTML(link, highlightedHTML, rawURL || '');
 
             const safeURL = normalizeExternalURL(rawURL);
             if (safeURL) {
@@ -890,6 +913,40 @@
             }
 
             return link;
+        }
+
+        function appendHighlightedHTML(target, highlightedHTML, fallbackText) {
+            target.textContent = '';
+            if (!highlightedHTML) {
+                target.textContent = fallbackText || '';
+                return;
+            }
+
+            const template = document.createElement('template');
+            template.innerHTML = highlightedHTML;
+            const nodes = Array.from(template.content.childNodes);
+            if (nodes.length === 0) {
+                target.textContent = fallbackText || '';
+                return;
+            }
+
+            nodes.forEach((node) => appendAllowedHighlightNode(target, node));
+        }
+
+        function appendAllowedHighlightNode(target, node) {
+            if (node.nodeType === Node.TEXT_NODE) {
+                target.appendChild(document.createTextNode(node.textContent || ''));
+                return;
+            }
+
+            if (node.nodeType === Node.ELEMENT_NODE && node.tagName.toLowerCase() === 'mark') {
+                const mark = document.createElement('mark');
+                mark.textContent = node.textContent || '';
+                target.appendChild(mark);
+                return;
+            }
+
+            target.appendChild(document.createTextNode(node.textContent || ''));
         }
 
         function normalizeExternalURL(rawURL) {
