@@ -39,6 +39,9 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		</div>`, prevLink, timelineLink, nextLink)
 	}
 
+	shareControls := fmt.Sprintf(`<button type="button" data-wayback-share-action="snapshot" data-page-id="%d" style="color:white;text-decoration:none;padding:4px 12px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;cursor:pointer;font-family:inherit;">Share</button>
+		<button type="button" data-wayback-share-action="revoke" style="display:none;color:white;text-decoration:none;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;cursor:pointer;font-family:inherit;">Revoke</button>`, page.ID)
+
 	// 归档信息栏 HTML
 	archiveHeader := fmt.Sprintf(`
 <div id="wayback-archive-header" style="
@@ -66,6 +69,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		<span style="font-size:11px;opacity:0.7;white-space:nowrap;">%s</span>
 	</div>
 	<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+		%s
 		%s
 		<a href="/" style="color:white;text-decoration:none;padding:4px 12px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;">← Archives</a>
 	</div>
@@ -236,14 +240,158 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		console.log('[Wayback] Text selection enabled for', allElements.length, 'elements');
 	}
 
+	function absoluteArchiveURL(path) {
+		return new URL(path, window.location.origin).toString();
+	}
+
+	async function copyArchiveText(text) {
+		if (navigator.clipboard && window.isSecureContext) {
+			await navigator.clipboard.writeText(text);
+			return;
+		}
+
+		const textarea = document.createElement('textarea');
+		textarea.value = text;
+		textarea.setAttribute('readonly', '');
+		textarea.style.position = 'fixed';
+		textarea.style.left = '-9999px';
+		document.body.appendChild(textarea);
+		textarea.select();
+		document.execCommand('copy');
+		document.body.removeChild(textarea);
+	}
+
+	let activeShare = null;
+
+	function findShareControl(action) {
+		const header = document.getElementById('wayback-archive-header');
+		if (!header) return null;
+		return header.querySelector('[data-wayback-share-action="' + action + '"]');
+	}
+
+	function setShareControlBusy(button, busy) {
+		if (!button) return;
+		button.disabled = busy;
+		button.style.opacity = busy ? '0.65' : '';
+	}
+
+	function updateShareSecondaryControls() {
+		const revokeButton = findShareControl('revoke');
+		if (revokeButton) {
+			revokeButton.style.display = activeShare && activeShare.id ? '' : 'none';
+		}
+	}
+
+	async function createArchiveShare(pageId) {
+		const response = await fetch('/api/pages/' + encodeURIComponent(pageId) + '/shares', {
+			method: 'POST',
+			headers: {'Content-Type': 'application/json'},
+			credentials: 'same-origin',
+			body: '{}'
+		});
+		const data = await response.json().catch(function() { return {}; });
+		if (!response.ok) {
+			throw new Error(data.error || ('HTTP ' + response.status));
+		}
+		if (!data.snapshot_url) {
+			throw new Error('missing snapshot_url');
+		}
+		return data;
+	}
+
+	async function copyShareURL(path, promptMessage) {
+		const shareURL = absoluteArchiveURL(path);
+		try {
+			await copyArchiveText(shareURL);
+			return 'copied';
+		} catch (copyError) {
+			window.prompt(promptMessage, shareURL);
+			return 'prompted';
+		}
+	}
+
+	function stopShareEvent(event) {
+		event.preventDefault();
+		event.stopPropagation();
+	}
+
+	function initShareControls() {
+		const shareButton = findShareControl('snapshot');
+		const revokeButton = findShareControl('revoke');
+		if (!shareButton) return;
+
+		shareButton.addEventListener('click', async function(event) {
+			stopShareEvent(event);
+			const pageId = shareButton.getAttribute('data-page-id');
+			if (!pageId) return;
+
+			setShareControlBusy(shareButton, true);
+			shareButton.textContent = activeShare ? 'Copying' : 'Sharing';
+
+			try {
+				if (!activeShare) {
+					activeShare = await createArchiveShare(pageId);
+					updateShareSecondaryControls();
+				}
+
+				const copyResult = await copyShareURL(activeShare.snapshot_url, '分享已创建，请复制链接');
+				shareButton.textContent = copyResult === 'copied' ? 'Copied' : 'Created';
+				setTimeout(function() {
+					shareButton.textContent = 'Share';
+				}, 1600);
+			} catch (error) {
+				alert('分享失败: ' + error.message);
+				shareButton.textContent = 'Share';
+			} finally {
+				setShareControlBusy(shareButton, false);
+			}
+		});
+
+		if (revokeButton) {
+			revokeButton.addEventListener('click', async function(event) {
+				stopShareEvent(event);
+				if (!activeShare || !activeShare.id) return;
+				if (!confirm('确定要撤销这个公开分享吗？')) return;
+
+				setShareControlBusy(revokeButton, true);
+				const originalText = revokeButton.textContent;
+				revokeButton.textContent = 'Revoking';
+
+				try {
+					const response = await fetch('/api/shares/' + encodeURIComponent(activeShare.id), {
+						method: 'DELETE',
+						credentials: 'same-origin'
+					});
+					const data = await response.json().catch(function() { return {}; });
+					if (!response.ok) {
+						throw new Error(data.error || ('HTTP ' + response.status));
+					}
+					activeShare = null;
+					updateShareSecondaryControls();
+					shareButton.textContent = 'Share';
+					revokeButton.textContent = originalText;
+				} catch (error) {
+					alert('撤销失败: ' + error.message);
+					revokeButton.textContent = originalText;
+				} finally {
+					setShareControlBusy(revokeButton, false);
+				}
+			});
+		}
+
+		updateShareSecondaryControls();
+	}
+
 	// 页面加载完成后执行
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', function() {
+			initShareControls();
 			localizeArchiveTimes();
 			fixPositionedElements();
 			forceEnableInteraction();
 		});
 	} else {
+		initShareControls();
 		localizeArchiveTimes();
 		fixPositionedElements();
 		forceEnableInteraction();
@@ -260,7 +408,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 
 })();
 </script>
-	`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), archiveTimeElement(page.CapturedAt, "full"), navHTML, nonce)
+	`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), archiveTimeElement(page.CapturedAt, "full"), navHTML, shareControls, nonce)
 
 	// 在 <body> 标签后注入
 	if bodyTagRe.MatchString(html) {

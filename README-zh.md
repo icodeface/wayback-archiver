@@ -227,7 +227,7 @@ export https_proxy=http://127.0.0.1:7897
 
 ### 公开分享
 
-`POST /api/pages/:id/shares` 会为当前快照创建不可枚举公开 token，返回 `{ token, snapshot_url, markdown_url }`。公开入口不需要 Basic Auth，但只暴露该分享创建时固定的 HTML 文件和资源集合；后续页面更新不会改变已创建分享指向的特定快照。撤销分享后 `/share/:token` 和 `/share/:token/md` 返回 `404`。
+`POST /api/pages/:id/shares` 会为当前快照创建不可枚举公开 token，返回 `{ token, snapshot_url, markdown_url }`。也可以在 `/view/:id` 快照页顶部点击 `Share` 创建并复制公开链接；创建成功后顶部栏会显示 `Revoke`，用于撤销本次分享。公开入口不需要 Basic Auth，但只暴露该分享创建时固定的 HTML 文件和资源集合；后续页面更新不会改变已创建分享指向的特定快照。撤销分享后 `/share/:token` 和 `/share/:token/md` 返回 `404`。
 
 ## 项目结构
 

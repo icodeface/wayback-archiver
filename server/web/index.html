@@ -363,10 +363,7 @@
             gap: 8px;
         }
 
-        .timeline-btn,
-        .share-btn,
-        .share-md-btn,
-        .share-revoke-btn {
+        .timeline-btn {
             background: transparent;
             border: 1px solid var(--color-border);
             color: var(--color-text-dim);
@@ -382,20 +379,6 @@
             border-color: var(--color-cyan);
             color: var(--color-cyan);
             background: rgba(0, 217, 255, 0.1);
-        }
-
-        .share-btn:hover,
-        .share-btn.is-active,
-        .share-md-btn:hover {
-            border-color: var(--color-accent);
-            color: var(--color-accent);
-            background: rgba(0, 255, 136, 0.1);
-        }
-
-        .share-revoke-btn:hover {
-            border-color: #ff4444;
-            color: #ff4444;
-            background: rgba(255, 68, 68, 0.1);
         }
 
         .delete-btn {
@@ -637,7 +620,6 @@
         let domainTimer = null;
         let activeRequestController = null;
         let latestRequestSeq = 0;
-        const pageShareState = new Map();
 
         function normalizePageNumber(page) {
             const parsed = Number.parseInt(page, 10);
@@ -924,15 +906,6 @@
                 timelineBtn.textContent = 'Timeline';
                 timelineBtn.addEventListener('click', (event) => openTimeline(event, page.url));
 
-                const shareBtn = document.createElement('button');
-                shareBtn.className = 'share-btn';
-                shareBtn.type = 'button';
-                shareBtn.textContent = 'Share';
-                if (pageShareState.has(page.id)) {
-                    shareBtn.classList.add('is-active');
-                }
-                shareBtn.addEventListener('click', (event) => createShare(event, page.id, shareBtn, actions));
-
                 const deleteBtn = document.createElement('button');
                 deleteBtn.className = 'delete-btn';
                 deleteBtn.type = 'button';
@@ -953,8 +926,6 @@
                 titleGroup.appendChild(pageId);
 
                 actions.appendChild(timelineBtn);
-                actions.appendChild(shareBtn);
-                renderShareStateActions(actions, page.id);
                 actions.appendChild(deleteBtn);
 
                 header.appendChild(titleGroup);
@@ -971,7 +942,7 @@
                 item.appendChild(meta);
 
                 item.addEventListener('click', (e) => {
-                    if (e.target.closest('.page-url') || e.target.closest('.delete-btn') || e.target.closest('.timeline-btn') || e.target.closest('.share-btn') || e.target.closest('.share-md-btn') || e.target.closest('.share-revoke-btn')) {
+                    if (e.target.closest('.page-url') || e.target.closest('.delete-btn') || e.target.closest('.timeline-btn')) {
                         return;
                     }
                     window.open(`/view/${page.id}`, '_blank');
@@ -986,122 +957,6 @@
         function openTimeline(event, pageUrl) {
             event.stopPropagation();
             window.open(`/timeline?url=${encodeURIComponent(pageUrl)}`, '_blank');
-        }
-
-        function absoluteURL(path) {
-            return new URL(path, window.location.origin).toString();
-        }
-
-        async function copyText(text) {
-            if (navigator.clipboard && window.isSecureContext) {
-                await navigator.clipboard.writeText(text);
-                return;
-            }
-
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.setAttribute('readonly', '');
-            textarea.style.position = 'fixed';
-            textarea.style.left = '-9999px';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-        }
-
-        function setButtonTextTemporarily(button, text) {
-            const original = button.textContent;
-            button.textContent = text;
-            setTimeout(() => {
-                button.textContent = original;
-            }, 1600);
-        }
-
-        function renderShareStateActions(actions, pageId) {
-            const state = pageShareState.get(pageId);
-            if (!state || !state.id) {
-                return;
-            }
-
-            if (state.markdown_url) {
-                const mdBtn = document.createElement('button');
-                mdBtn.className = 'share-md-btn';
-                mdBtn.type = 'button';
-                mdBtn.textContent = 'Copy MD';
-                mdBtn.addEventListener('click', async (event) => {
-                    event.stopPropagation();
-                    try {
-                        await copyText(absoluteURL(state.markdown_url));
-                        setButtonTextTemporarily(mdBtn, 'Copied');
-                    } catch (error) {
-                        alert('复制失败: ' + error.message);
-                    }
-                });
-                actions.appendChild(mdBtn);
-            }
-
-            const revokeBtn = document.createElement('button');
-            revokeBtn.className = 'share-revoke-btn';
-            revokeBtn.type = 'button';
-            revokeBtn.textContent = 'Revoke';
-            revokeBtn.addEventListener('click', async (event) => {
-                event.stopPropagation();
-                if (!confirm('确定要撤销这个公开分享吗？')) {
-                    return;
-                }
-                try {
-                    const response = await fetch(`/api/shares/${state.id}`, {method: 'DELETE'});
-                    if (!response.ok) {
-                        const data = await response.json().catch(() => ({}));
-                        throw new Error(data.error || `HTTP ${response.status}`);
-                    }
-                    pageShareState.delete(pageId);
-                    actions.querySelectorAll('.share-md-btn, .share-revoke-btn').forEach((el) => el.remove());
-                    const shareBtn = actions.querySelector('.share-btn');
-                    if (shareBtn) {
-                        shareBtn.classList.remove('is-active');
-                        shareBtn.textContent = 'Share';
-                    }
-                } catch (error) {
-                    alert('撤销失败: ' + error.message);
-                }
-            });
-            actions.appendChild(revokeBtn);
-        }
-
-        async function createShare(event, pageId, button, actions) {
-            event.stopPropagation();
-            button.disabled = true;
-            const originalText = button.textContent;
-            button.textContent = 'Sharing';
-
-            try {
-                const response = await fetch(`/api/pages/${pageId}/shares`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: '{}'
-                });
-                const data = await response.json().catch(() => ({}));
-                if (!response.ok) {
-                    throw new Error(data.error || `HTTP ${response.status}`);
-                }
-
-                pageShareState.set(pageId, data);
-                await copyText(absoluteURL(data.snapshot_url));
-                button.classList.add('is-active');
-                button.textContent = 'Copied';
-
-                actions.querySelectorAll('.share-md-btn, .share-revoke-btn').forEach((el) => el.remove());
-                renderShareStateActions(actions, pageId);
-                setTimeout(() => {
-                    button.textContent = 'Share';
-                }, 1600);
-            } catch (error) {
-                alert('分享失败: ' + error.message);
-                button.textContent = originalText;
-            } finally {
-                button.disabled = false;
-            }
         }
 
         async function deletePage(event, pageId) {

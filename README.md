@@ -260,7 +260,7 @@ The request body `url` must exactly match the existing page URL for `:id`; other
 
 ### Public Sharing
 
-`POST /api/pages/:id/shares` creates an unguessable public token for the current snapshot and returns `{ token, snapshot_url, markdown_url }`. Public share routes do not require Basic Auth, but they only expose the HTML file and resource set fixed at share creation time. Later page updates do not change the shared snapshot. Revoked shares return `404` from `/share/:token` and `/share/:token/md`.
+`POST /api/pages/:id/shares` creates an unguessable public token for the current snapshot and returns `{ token, snapshot_url, markdown_url }`. Use the `Share` button in the `/view/:id` snapshot header to create and copy the public URL; after creation the header also exposes `Revoke` for that share. Public share routes do not require Basic Auth, but they only expose the HTML file and resource set fixed at share creation time. Later page updates do not change the shared snapshot. Revoked shares return `404` from `/share/:token` and `/share/:token/md`.
 
 ## Project Structure
 

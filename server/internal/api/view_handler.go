@@ -112,12 +112,16 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	nonce := generateNonce()
 	modifiedHTML = injectArchiveHeader(modifiedHTML, page, prev, next, snapshotTotal, nonce)
 
-	// 设置安全响应头（允许带 nonce 的内联脚本，用于修复定位问题）
+	// 设置安全响应头（允许带 nonce 的内联脚本，用于修复定位和顶部栏分享）
 	c.Header("X-Frame-Options", "SAMEORIGIN")
 	c.Header("Referrer-Policy", "no-referrer")
-	c.Header("Content-Security-Policy", fmt.Sprintf("default-src 'self'; script-src 'nonce-%s'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'self'; object-src 'none';", nonce))
+	c.Header("Content-Security-Policy", viewPageContentSecurityPolicy(nonce))
 
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(modifiedHTML))
+}
+
+func viewPageContentSecurityPolicy(nonce string) string {
+	return fmt.Sprintf("default-src 'self'; script-src 'nonce-%s'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'self'; frame-src 'self'; object-src 'none';", nonce)
 }
 
 // ViewPageMarkdown 返回归档页面正文的 Markdown 格式（精简版，方便 AI 读取）

@@ -51,6 +51,31 @@ func TestViewPage_DatabaseErrorReturnsInternalServerError(t *testing.T) {
 	}
 }
 
+func TestViewPageContentSecurityPolicy_AllowsOnlyNonceScriptAndSelfConnect(t *testing.T) {
+	got := viewPageContentSecurityPolicy("test-nonce")
+
+	for _, want := range []string{
+		`script-src 'nonce-test-nonce'`,
+		`connect-src 'self'`,
+		`object-src 'none'`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("CSP missing %q: %s", want, got)
+		}
+	}
+
+	for _, unwanted := range []string{
+		`script-src 'unsafe-inline'`,
+		`connect-src *`,
+		`connect-src http:`,
+		`connect-src https:`,
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("CSP contains unsafe directive %q: %s", unwanted, got)
+		}
+	}
+}
+
 func TestViewPageMarkdown_InvalidID(t *testing.T) {
 	handler, cleanup := setupTestHandler(t)
 	defer cleanup()
