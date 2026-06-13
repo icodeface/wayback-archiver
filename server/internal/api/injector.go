@@ -39,6 +39,8 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		</div>`, prevLink, timelineLink, nextLink)
 	}
 
+	shareButton := fmt.Sprintf(`<button type="button" id="wayback-share-button" data-page-id="%d" style="color:white;text-decoration:none;padding:4px 12px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;cursor:pointer;font-family:inherit;">Share</button>`, page.ID)
+
 	// 归档信息栏 HTML
 	archiveHeader := fmt.Sprintf(`
 <div id="wayback-archive-header" style="
@@ -66,6 +68,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		<span style="font-size:11px;opacity:0.7;white-space:nowrap;">%s</span>
 	</div>
 	<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+		%s
 		%s
 		<a href="/" style="color:white;text-decoration:none;padding:4px 12px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;">← Archives</a>
 	</div>
@@ -236,14 +239,87 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		console.log('[Wayback] Text selection enabled for', allElements.length, 'elements');
 	}
 
+	function absoluteArchiveURL(path) {
+		return new URL(path, window.location.origin).toString();
+	}
+
+	async function copyArchiveText(text) {
+		if (navigator.clipboard && window.isSecureContext) {
+			await navigator.clipboard.writeText(text);
+			return;
+		}
+
+		const textarea = document.createElement('textarea');
+		textarea.value = text;
+		textarea.setAttribute('readonly', '');
+		textarea.style.position = 'fixed';
+		textarea.style.left = '-9999px';
+		document.body.appendChild(textarea);
+		textarea.select();
+		document.execCommand('copy');
+		document.body.removeChild(textarea);
+	}
+
+	function initShareButton() {
+		const button = document.getElementById('wayback-share-button');
+		if (!button) return;
+
+		button.addEventListener('click', async function() {
+			const pageId = button.getAttribute('data-page-id');
+			if (!pageId) return;
+
+			const originalText = button.textContent;
+			button.disabled = true;
+			button.style.opacity = '0.65';
+			button.textContent = 'Sharing';
+
+			try {
+				const response = await fetch('/api/pages/' + encodeURIComponent(pageId) + '/shares', {
+					method: 'POST',
+					headers: {'Content-Type': 'application/json'},
+					credentials: 'same-origin',
+					body: '{}'
+				});
+				const data = await response.json().catch(function() { return {}; });
+				if (!response.ok) {
+					throw new Error(data.error || ('HTTP ' + response.status));
+				}
+				if (!data.snapshot_url) {
+					throw new Error('missing snapshot_url');
+				}
+
+				const shareURL = absoluteArchiveURL(data.snapshot_url);
+				try {
+					await copyArchiveText(shareURL);
+					button.textContent = 'Copied';
+				} catch (copyError) {
+					button.textContent = 'Created';
+					window.prompt('分享已创建，请复制链接', shareURL);
+				}
+
+				setTimeout(function() {
+					button.textContent = originalText;
+				}, 1600);
+			} catch (error) {
+				alert('分享失败: ' + error.message);
+				button.textContent = originalText;
+			} finally {
+				button.disabled = false;
+				button.style.opacity = '';
+			}
+		});
+	}
+
 	// 页面加载完成后执行
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', function() {
+			initShareButton();
 			localizeArchiveTimes();
 			fixPositionedElements();
 			forceEnableInteraction();
 		});
 	} else {
+		initShareButton();
 		localizeArchiveTimes();
 		fixPositionedElements();
 		forceEnableInteraction();
@@ -260,7 +336,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 
 })();
 </script>
-	`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), archiveTimeElement(page.CapturedAt, "full"), navHTML, nonce)
+	`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), archiveTimeElement(page.CapturedAt, "full"), navHTML, shareButton, nonce)
 
 	// 在 <body> 标签后注入
 	if bodyTagRe.MatchString(html) {

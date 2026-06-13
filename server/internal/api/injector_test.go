@@ -51,6 +51,35 @@ func TestInjectArchiveHeader_LocalizesSnapshotTimesInBrowser(t *testing.T) {
 	}
 }
 
+func TestInjectArchiveHeader_IncludesShareButtonInSnapshotHeader(t *testing.T) {
+	page := &models.Page{
+		ID:         42,
+		URL:        "https://example.com/page",
+		CapturedAt: time.Date(2026, 4, 15, 12, 34, 56, 0, time.UTC),
+	}
+
+	got := injectArchiveHeader(`<html><body><main>hello</main></body></html>`, page, nil, nil, 1, "nonce")
+
+	for _, want := range []string{
+		`id="wayback-share-button"`,
+		`data-page-id="42"`,
+		`<script nonce="nonce">`,
+		`function initShareButton()`,
+		`button.addEventListener('click'`,
+		`fetch('/api/pages/' + encodeURIComponent(pageId) + '/shares'`,
+		`credentials: 'same-origin'`,
+		`navigator.clipboard.writeText`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing share header marker %q in %s", want, got)
+		}
+	}
+
+	if strings.Contains(got, `onclick=`) {
+		t.Fatalf("share button should not use inline event handlers: %s", got)
+	}
+}
+
 func TestInjectArchiveHeader_DoesNotIncludeCollapsedFixedLayoutRepair(t *testing.T) {
 	page := &models.Page{
 		ID:         1,
