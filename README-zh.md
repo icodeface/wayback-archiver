@@ -199,13 +199,13 @@ export https_proxy=http://127.0.0.1:7897
 | `PUT` | `/api/archive/:id` | 更新已有归档快照 |
 | `GET` | `/api/pages?limit=50&offset=0` | 分页列出归档页面 |
 | `GET` | `/api/pages/:id` | 获取页面详情 |
-| `GET` | `/api/pages/:id/content` | 获取页面正文的 Markdown 格式（方便 AI/LLM 读取） |
 | `GET` | `/api/search?q=keyword&limit=50&offset=0` | 按 URL、标题或正文分页搜索 |
 | `GET` | `/api/pages/timeline?url=URL` | 获取同一 URL 的所有快照（时间线视图） |
 | `GET` | `/api/logs` | 列出可用日志文件 |
 | `GET` | `/api/logs/latest` | 获取最新日志文件内容（支持 `?tail=N&grep=关键词`） |
 | `GET` | `/api/logs/:filename` | 获取日志文件内容（支持 `?tail=N&grep=关键词`） |
 | `GET` | `/view/:id` | 还原归档页面 |
+| `GET` | `/view/:id/md` | 获取归档页面正文的 Markdown 格式（方便 AI/LLM 读取） |
 | `GET` | `/timeline?url=URL` | URL 时间线可视化页面 |
 | `GET` | `/logs` | 服务器日志查看器 |
 

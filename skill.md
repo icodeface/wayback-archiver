@@ -131,7 +131,7 @@ curl "http://localhost:8080/api/pages/$PAGE_ID"
 Returns the page body as clean Markdown (strips scripts, nav, footer, etc.). Ideal for AI/LLM consumption.
 
 ```bash
-curl "http://localhost:8080/api/pages/$PAGE_ID/content"
+curl "http://localhost:8080/view/$PAGE_ID/md"
 ```
 
 #### Get Timeline for URL

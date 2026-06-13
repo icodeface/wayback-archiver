@@ -19,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"wayback/internal/models"
+	"wayback/internal/storage"
 )
 
 // generateNonce 生成随机 CSP nonce（128 位，base64 编码）
@@ -117,6 +118,36 @@ func (h *Handler) ViewPage(c *gin.Context) {
 	c.Header("Content-Security-Policy", fmt.Sprintf("default-src 'self'; script-src 'nonce-%s'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'self'; object-src 'none';", nonce))
 
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(modifiedHTML))
+}
+
+// ViewPageMarkdown 返回归档页面正文的 Markdown 格式（精简版，方便 AI 读取）
+func (h *Handler) ViewPageMarkdown(c *gin.Context) {
+	pageID, ok := parsePageIDParam(c)
+	if !ok {
+		return
+	}
+
+	page, err := h.db.GetPageByID(strconv.FormatInt(pageID, 10))
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Database error")
+		return
+	}
+	if page == nil {
+		c.String(http.StatusNotFound, "Page not found")
+		return
+	}
+
+	htmlPath := filepath.Join(h.dataDir, page.HTMLPath)
+	htmlContent, err := os.ReadFile(htmlPath)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Failed to read HTML file")
+		return
+	}
+
+	markdown := storage.ExtractMarkdown(string(htmlContent))
+
+	c.Header("Content-Type", "text/markdown; charset=utf-8")
+	c.String(http.StatusOK, markdown)
 }
 
 // ProxyResource 代理资源请求

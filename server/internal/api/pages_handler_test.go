@@ -18,7 +18,6 @@ func setupPagesRouter(handler *Handler) *gin.Engine {
 	api := r.Group("/api")
 	api.GET("/pages", handler.ListPages)
 	api.GET("/pages/:id", handler.GetPage)
-	api.GET("/pages/:id/content", handler.GetPageContent)
 	api.DELETE("/pages/:id", handler.DeletePage)
 	api.GET("/search", handler.SearchPages)
 	return r
@@ -45,20 +44,6 @@ func TestDeletePage_InvalidID(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodDelete, "/api/pages/not-a-number", nil)
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for invalid page ID, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestGetPageContent_InvalidID(t *testing.T) {
-	handler, cleanup := setupTestHandler(t)
-	defer cleanup()
-	router := setupPagesRouter(handler)
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/pages/not-a-number/content", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {

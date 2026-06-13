@@ -155,7 +155,6 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 		registerGETAndHEAD(api, "/pages", handler.ListPages)
 		registerGETAndHEAD(api, "/pages/timeline", handler.GetPageTimeline)
 		registerGETAndHEAD(api, "/pages/:id", handler.GetPage)
-		registerGETAndHEAD(api, "/pages/:id/content", handler.GetPageContent)
 		api.DELETE("/pages/:id", handler.DeletePage)
 		registerGETAndHEAD(api, "/search", handler.SearchPages)
 		registerGETAndHEAD(api, "/logs", handler.ListLogs)
@@ -165,6 +164,7 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 
 	// 查看归档页面
 	registerGETAndHEAD(r, "/view/:id", handler.ViewPage)
+	registerGETAndHEAD(r, "/view/:id/md", handler.ViewPageMarkdown)
 	registerGETAndHEAD(r, "/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
 
 	// 直接资源访问（CSS 中引用的资源路径格式: /archive/resources/xx/yy/hash.ext）
