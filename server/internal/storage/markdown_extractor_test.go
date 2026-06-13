@@ -189,6 +189,105 @@ func TestExtractMarkdown_PrefersSemanticArticle(t *testing.T) {
 	}
 }
 
+func TestExtractMarkdown_SelectsNonSemanticMainContent(t *testing.T) {
+	html := `<html><body>
+		<div id="Top"><a href="/">Home</a><a href="/settings">Settings</a></div>
+		<div id="Rightbar">
+			<p>Promoted product should not be selected as the page body.</p>
+			<p>Related link one. Related link two. Related link three.</p>
+		</div>
+		<div id="Main">
+			<h1>Thread Title</h1>
+			<div class="topic_content">
+				<p>This is the original post with enough text to be selected as readable content.</p>
+				<p>It should keep the main discussion and ignore sidebars around it.</p>
+			</div>
+			<div class="reply_content">A useful reply that is part of the captured discussion.</div>
+		</div>
+	</body></html>`
+
+	md := ExtractMarkdown(html)
+	if !strings.Contains(md, "# Thread Title") || !strings.Contains(md, "useful reply") {
+		t.Errorf("Should keep non-semantic main content, got:\n%s", md)
+	}
+	if strings.Contains(md, "Promoted product") || strings.Contains(md, "Settings") {
+		t.Errorf("Should skip page chrome around non-semantic main content, got:\n%s", md)
+	}
+}
+
+func TestExtractMarkdown_RemovesHiddenStyleContent(t *testing.T) {
+	html := `<html><body>
+		<main>
+			<p>Visible article text.</p>
+			<div style="display: none"><p>Hidden promo text.</p></div>
+			<div style="visibility:hidden"><p>Invisible tracking text.</p></div>
+		</main>
+	</body></html>`
+
+	md := ExtractMarkdown(html)
+	if !strings.Contains(md, "Visible article text") {
+		t.Errorf("Should keep visible text, got:\n%s", md)
+	}
+	if strings.Contains(md, "Hidden promo") || strings.Contains(md, "Invisible tracking") {
+		t.Errorf("Should skip hidden style content, got:\n%s", md)
+	}
+}
+
+func TestExtractMarkdown_KeepsOpacityZeroAnimatedContent(t *testing.T) {
+	html := `<html><body>
+		<main>
+			<h1>Animated Page</h1>
+			<div style="opacity: 0; transform: translateY(50px)">
+				<p>Content waiting for a scroll animation should still be readable.</p>
+			</div>
+		</main>
+	</body></html>`
+
+	md := ExtractMarkdown(html)
+	if !strings.Contains(md, "scroll animation should still be readable") {
+		t.Errorf("Should keep opacity-zero animated content, got:\n%s", md)
+	}
+}
+
+func TestExtractMarkdown_DemotesLayoutTables(t *testing.T) {
+	html := `<html><body>
+		<main>
+			<h1>Discussion</h1>
+			<table cellpadding="0" cellspacing="0" border="0">
+				<tr>
+					<td><img src="/avatar.png" alt="Alice"></td>
+					<td><a href="/member/alice">Alice</a></td>
+					<td><div class="reply_content">This table is only used for layout.</div></td>
+				</tr>
+			</table>
+		</main>
+	</body></html>`
+
+	md := ExtractMarkdown(html)
+	if !strings.Contains(md, "This table is only used for layout") {
+		t.Errorf("Should keep layout table text, got:\n%s", md)
+	}
+	if strings.Contains(md, "|") {
+		t.Errorf("Should not render layout table as Markdown table, got:\n%s", md)
+	}
+}
+
+func TestExtractMarkdown_KeepsSemanticTables(t *testing.T) {
+	html := `<html><body>
+		<main>
+			<table>
+				<thead><tr><th>Name</th><th>Score</th></tr></thead>
+				<tbody><tr><td>Alice</td><td>10</td></tr></tbody>
+			</table>
+		</main>
+	</body></html>`
+
+	md := ExtractMarkdown(html)
+	if !strings.Contains(md, "|") || !strings.Contains(md, "Alice") {
+		t.Errorf("Should keep semantic table markdown, got:\n%s", md)
+	}
+}
+
 func TestExtractMarkdown_RemovesInteractiveChrome(t *testing.T) {
 	html := `<html><body>
 		<form><input value="search"><button>Search</button></form>
