@@ -1368,7 +1368,9 @@ func (d *Deduplicator) CleanupOldHTML(retentionDays int) error {
 		return fmt.Errorf("retention days must be positive")
 	}
 
-	deletedCount, err := d.deletionQueue.ProcessDeletions(d.storage.baseDir, retentionDays)
+	deletedCount, err := d.deletionQueue.ProcessDeletionsWithProtection(d.storage.baseDir, retentionDays, func(record DeletionRecord) (bool, error) {
+		return d.db.HasActiveShareForHTMLPath(record.HTMLPath)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to process deletion queue: %w", err)
 	}

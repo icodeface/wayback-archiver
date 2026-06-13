@@ -26,7 +26,8 @@ var (
 	cssFontFaceRe = regexp.MustCompile(`@font-face\s*\{[^}]*\}`)
 
 	// Path patterns
-	archivePathRe = regexp.MustCompile(`/archive/resources/`)
+	archivePathRe      = regexp.MustCompile(`/archive/resources/`)
+	shareArchivePathRe = regexp.MustCompile(`/archive/[0-9]+/([^/]+)/`)
 
 	// Meta patterns
 	metaRefreshRe = regexp.MustCompile(`(?i)<meta[^>]*http-equiv=["']?refresh["']?[^>]*>`)

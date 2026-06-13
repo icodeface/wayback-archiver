@@ -232,6 +232,9 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 | `PUT` | `/api/archive/:id` | Update an existing archive snapshot |
 | `GET` | `/api/pages?limit=50&offset=0` | List archived pages with pagination |
 | `GET` | `/api/pages/:id` | Get page details |
+| `POST` | `/api/pages/:id/shares` | Create a public share link (authenticated) |
+| `GET` | `/api/pages/:id/shares` | List share records for a page (token plaintext is not returned) |
+| `DELETE` | `/api/shares/:id` | Revoke a public share |
 | `GET` | `/api/search?q=keyword&limit=50&offset=0` | Search pages by URL, title, or body text with pagination |
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
 | `GET` | `/api/logs` | List available log files |
@@ -239,6 +242,8 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 | `GET` | `/api/logs/:filename` | Get log file content (supports `?tail=N&grep=keyword`) |
 | `GET` | `/view/:id` | Replay an archived page |
 | `GET` | `/view/:id/md` | Get archived page content as Markdown (for AI/LLM consumption) |
+| `GET` | `/share/:token` | Public unauthenticated access to a specific shared snapshot |
+| `GET` | `/share/:token/md` | Public unauthenticated access to shared snapshot Markdown |
 | `GET` | `/timeline?url=URL` | Visual timeline page for a URL |
 | `GET` | `/logs` | Server logs viewer |
 
@@ -252,6 +257,10 @@ The server tracks background create progress with `snapshot_state` (`pending`, `
 
 Accepts the same body as POST. Returns immediately once the server has accepted the update request. If the content changed, resource re-processing and the final snapshot swap continue in the background; old HTML is queued for delayed deletion after a successful swap. Returns `{ status, page_id, action }` where `action` is `updated` or `unchanged`.
 The request body `url` must exactly match the existing page URL for `:id`; otherwise the server rejects the update with HTTP `400` to prevent cross-page snapshot corruption.
+
+### Public Sharing
+
+`POST /api/pages/:id/shares` creates an unguessable public token for the current snapshot and returns `{ token, snapshot_url, markdown_url }`. Public share routes do not require Basic Auth, but they only expose the HTML file and resource set fixed at share creation time. Later page updates do not change the shared snapshot. Revoked shares return `404` from `/share/:token` and `/share/:token/md`.
 
 ## Project Structure
 

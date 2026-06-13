@@ -51,6 +51,131 @@ func TestSQLiteFTSUpdatePageBodyText(t *testing.T) {
 	}
 }
 
+func TestSQLitePageShare_ScopesResourcesAndHTMLProtection(t *testing.T) {
+	db := newSQLiteTestDB(t)
+
+	now := time.Now().UTC()
+	pageID, err := db.CreatePage("https://share-scope.example.com/page", "Share Scope", "html/test/share.html", strings.Repeat("a", 64), now)
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	page, err := db.GetPageByID(fmt.Sprintf("%d", pageID))
+	if err != nil {
+		t.Fatalf("GetPageByID failed: %v", err)
+	}
+	if page == nil {
+		t.Fatal("expected page to exist")
+	}
+
+	sharedID, err := db.CreateResource("https://cdn.example.com/shared.css", strings.Repeat("b", 64), "css", "resources/aa/bb/shared.css", 12)
+	if err != nil {
+		t.Fatalf("CreateResource shared failed: %v", err)
+	}
+	unsharedID, err := db.CreateResource("https://cdn.example.com/unshared.css", strings.Repeat("c", 64), "css", "resources/cc/dd/unshared.css", 13)
+	if err != nil {
+		t.Fatalf("CreateResource unshared failed: %v", err)
+	}
+	if err := db.LinkPageResource(pageID, sharedID); err != nil {
+		t.Fatalf("LinkPageResource shared failed: %v", err)
+	}
+
+	tokenHash := strings.Repeat("f", 64)
+	share, err := db.CreatePageShare(tokenHash, page, []int64{sharedID}, nil, true)
+	if err != nil {
+		t.Fatalf("CreatePageShare failed: %v", err)
+	}
+	if share.TokenHash != tokenHash || !share.AllowMarkdown {
+		t.Fatalf("unexpected share: %+v", share)
+	}
+
+	active, err := db.GetActivePageShareByTokenHash(tokenHash)
+	if err != nil {
+		t.Fatalf("GetActivePageShareByTokenHash failed: %v", err)
+	}
+	if active == nil || active.HTMLPath != page.HTMLPath {
+		t.Fatalf("active share = %+v, want html path %q", active, page.HTMLPath)
+	}
+
+	resource, err := db.GetShareResourceByURL(tokenHash, "https://cdn.example.com/shared.css")
+	if err != nil {
+		t.Fatalf("GetShareResourceByURL shared failed: %v", err)
+	}
+	if resource == nil || resource.ID != sharedID {
+		t.Fatalf("shared resource = %+v, want %d", resource, sharedID)
+	}
+	resource, err = db.GetShareResourceByFilePath(tokenHash, "resources/cc/dd/unshared.css")
+	if err != nil {
+		t.Fatalf("GetShareResourceByFilePath unshared failed: %v", err)
+	}
+	if resource != nil {
+		t.Fatalf("unshared resource leaked through share: %+v", resource)
+	}
+
+	protected, err := db.HasActiveShareForHTMLPath(page.HTMLPath)
+	if err != nil {
+		t.Fatalf("HasActiveShareForHTMLPath failed: %v", err)
+	}
+	if !protected {
+		t.Fatal("active share should protect html path")
+	}
+
+	if err := db.RevokePageShare(share.ID); err != nil {
+		t.Fatalf("RevokePageShare failed: %v", err)
+	}
+	active, err = db.GetActivePageShareByTokenHash(tokenHash)
+	if err != nil {
+		t.Fatalf("GetActivePageShareByTokenHash after revoke failed: %v", err)
+	}
+	if active != nil {
+		t.Fatalf("revoked share should not be active: %+v", active)
+	}
+	protected, err = db.HasActiveShareForHTMLPath(page.HTMLPath)
+	if err != nil {
+		t.Fatalf("HasActiveShareForHTMLPath after revoke failed: %v", err)
+	}
+	if protected {
+		t.Fatal("revoked share should not protect html path")
+	}
+
+	_ = unsharedID
+}
+
+func TestSQLitePageShare_ExpiredShareIsInactive(t *testing.T) {
+	db := newSQLiteTestDB(t)
+
+	pageID, err := db.CreatePage("https://share-expiry.example.com/page", "Share Expiry", "html/test/expiry.html", strings.Repeat("a", 64), time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	page, err := db.GetPageByID(fmt.Sprintf("%d", pageID))
+	if err != nil {
+		t.Fatalf("GetPageByID failed: %v", err)
+	}
+	expiredAt := time.Now().Add(-time.Hour)
+	share, err := db.CreatePageShare(strings.Repeat("e", 64), page, nil, &expiredAt, false)
+	if err != nil {
+		t.Fatalf("CreatePageShare failed: %v", err)
+	}
+	if share.AllowMarkdown {
+		t.Fatalf("allow_markdown should be false: %+v", share)
+	}
+
+	active, err := db.GetActivePageShareByTokenHash(share.TokenHash)
+	if err != nil {
+		t.Fatalf("GetActivePageShareByTokenHash failed: %v", err)
+	}
+	if active != nil {
+		t.Fatalf("expired share should not be active: %+v", active)
+	}
+	protected, err := db.HasActiveShareForHTMLPath(page.HTMLPath)
+	if err != nil {
+		t.Fatalf("HasActiveShareForHTMLPath failed: %v", err)
+	}
+	if protected {
+		t.Fatal("expired share should not protect html path")
+	}
+}
+
 func TestSQLiteSearchPages_MatchesURLTitleAndBodyText(t *testing.T) {
 	db := newSQLiteTestDB(t)
 

@@ -69,3 +69,30 @@ CREATE TABLE IF NOT EXISTS page_resources (
 );
 
 CREATE INDEX IF NOT EXISTS idx_page_resources_page ON page_resources(page_id);
+
+-- 公开分享表（token_hash 存储 token 的哈希，不保存 token 明文）
+CREATE TABLE IF NOT EXISTS page_shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    page_id INTEGER REFERENCES pages(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    title TEXT,
+    html_path TEXT NOT NULL,
+    content_hash CHAR(64),
+    captured_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,
+    revoked_at DATETIME,
+    allow_markdown BOOLEAN NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_page_shares_page ON page_shares(page_id);
+CREATE INDEX IF NOT EXISTS idx_page_shares_html_path ON page_shares(html_path);
+
+CREATE TABLE IF NOT EXISTS page_share_resources (
+    token_hash TEXT NOT NULL REFERENCES page_shares(token_hash) ON DELETE CASCADE,
+    resource_id INTEGER NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    PRIMARY KEY (token_hash, resource_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_page_share_resources_resource ON page_share_resources(resource_id);

@@ -31,7 +31,8 @@ const (
 	sqliteMigrationVersionTimestampNormalization = 3
 	sqliteMigrationVersionTimestampFixedWidth    = 4
 	sqliteMigrationVersionResourceQuarantine     = 5
-	sqliteMigrationVersionCurrent                = sqliteMigrationVersionResourceQuarantine
+	sqliteMigrationVersionPageShares             = 6
+	sqliteMigrationVersionCurrent                = sqliteMigrationVersionPageShares
 )
 
 func formatSQLiteTimestamp(t time.Time) string {
@@ -155,11 +156,11 @@ func (db *SQLiteDB) ensureMigrations() error {
 		}
 
 		// ensureNormalizedTimestamps 现在直接产出最终的固定宽度 UTC 文本，
-		// 旧库首次升级时可直接推进到当前版本，避免同一轮启动里再做一次全表重写。
-		if err := db.setSQLiteUserVersion(sqliteMigrationVersionCurrent); err != nil {
+		// 可跳过 timestamp fixed-width 迁移，但仍要继续执行后续非时间戳迁移。
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionTimestampFixedWidth); err != nil {
 			return err
 		}
-		version = sqliteMigrationVersionCurrent
+		version = sqliteMigrationVersionTimestampFixedWidth
 	}
 
 	if version < sqliteMigrationVersionTimestampFixedWidth {
@@ -179,6 +180,17 @@ func (db *SQLiteDB) ensureMigrations() error {
 		}
 
 		if err := db.setSQLiteUserVersion(sqliteMigrationVersionResourceQuarantine); err != nil {
+			return err
+		}
+		version = sqliteMigrationVersionResourceQuarantine
+	}
+
+	if version < sqliteMigrationVersionPageShares {
+		if err := db.ensurePageShareTables(); err != nil {
+			return err
+		}
+
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionPageShares); err != nil {
 			return err
 		}
 	}
@@ -384,6 +396,34 @@ func (db *SQLiteDB) ensureSnapshotStateColumn() error {
 	}
 
 	return nil
+}
+
+func (db *SQLiteDB) ensurePageShareTables() error {
+	_, err := db.conn.Exec(`
+CREATE TABLE IF NOT EXISTS page_shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    page_id INTEGER REFERENCES pages(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    title TEXT,
+    html_path TEXT NOT NULL,
+    content_hash CHAR(64),
+    captured_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,
+    revoked_at DATETIME,
+    allow_markdown BOOLEAN NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_page_shares_page ON page_shares(page_id);
+CREATE INDEX IF NOT EXISTS idx_page_shares_html_path ON page_shares(html_path);
+CREATE TABLE IF NOT EXISTS page_share_resources (
+    token_hash TEXT NOT NULL REFERENCES page_shares(token_hash) ON DELETE CASCADE,
+    resource_id INTEGER NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    PRIMARY KEY (token_hash, resource_id)
+);
+CREATE INDEX IF NOT EXISTS idx_page_share_resources_resource ON page_share_resources(resource_id);
+`)
+	return err
 }
 
 func (db *SQLiteDB) Close() error {
@@ -1088,4 +1128,177 @@ func (db *SQLiteDB) DeletePage(id int64) error {
 	}
 
 	return tx.Commit()
+}
+
+func (db *SQLiteDB) CreatePageShare(tokenHash string, page *models.Page, resourceIDs []int64, expiresAt *time.Time, allowMarkdown bool) (*models.PageShare, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	createdAt := time.Now().UTC()
+	var expiresValue any
+	if expiresAt != nil {
+		expiresValue = formatSQLiteTimestamp(*expiresAt)
+	}
+
+	result, err := tx.Exec(
+		`INSERT INTO page_shares (token_hash, page_id, url, title, html_path, content_hash, captured_at, created_at, expires_at, allow_markdown)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tokenHash,
+		page.ID,
+		page.URL,
+		page.Title,
+		page.HTMLPath,
+		page.ContentHash,
+		formatSQLiteTimestamp(page.CapturedAt),
+		formatSQLiteTimestamp(createdAt),
+		expiresValue,
+		allowMarkdown,
+	)
+	if err != nil {
+		return nil, err
+	}
+	shareID, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, resourceID := range resourceIDs {
+		if _, err := tx.Exec(
+			"INSERT OR IGNORE INTO page_share_resources (token_hash, resource_id) VALUES (?, ?)",
+			tokenHash,
+			resourceID,
+		); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return &models.PageShare{
+		ID:            shareID,
+		TokenHash:     tokenHash,
+		PageID:        page.ID,
+		URL:           page.URL,
+		Title:         page.Title,
+		HTMLPath:      page.HTMLPath,
+		ContentHash:   page.ContentHash,
+		CapturedAt:    page.CapturedAt,
+		CreatedAt:     createdAt,
+		ExpiresAt:     expiresAt,
+		AllowMarkdown: allowMarkdown,
+	}, nil
+}
+
+func (db *SQLiteDB) GetActivePageShareByTokenHash(tokenHash string) (*models.PageShare, error) {
+	var share models.PageShare
+	err := scanShare(db.conn.QueryRow(
+		"SELECT "+shareSelectColumns+" FROM page_shares WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?) LIMIT 1",
+		tokenHash,
+		currentSQLiteTimestamp(),
+	), &share)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &share, nil
+}
+
+func (db *SQLiteDB) ListPageShares(pageID int64) ([]models.PageShare, error) {
+	rows, err := db.conn.Query(
+		"SELECT "+shareSelectColumns+" FROM page_shares WHERE page_id = ? ORDER BY created_at DESC, id DESC",
+		pageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	shares := []models.PageShare{}
+	for rows.Next() {
+		var share models.PageShare
+		if err := scanShare(rows, &share); err != nil {
+			return nil, err
+		}
+		shares = append(shares, share)
+	}
+	return shares, rows.Err()
+}
+
+func (db *SQLiteDB) RevokePageShare(id int64) error {
+	_, err := db.conn.Exec("UPDATE page_shares SET revoked_at = ? WHERE id = ?", currentSQLiteTimestamp(), id)
+	return err
+}
+
+func (db *SQLiteDB) GetShareResourceByURL(tokenHash, url string) (*models.Resource, error) {
+	return db.getShareResourceByQuery(`
+		SELECT `+resourceSelectColumns+`
+		FROM resources r
+		INNER JOIN page_share_resources psr ON r.id = psr.resource_id
+		WHERE psr.token_hash = ? AND r.url = ?
+		LIMIT 1
+	`, tokenHash, url)
+}
+
+func (db *SQLiteDB) GetShareResourceByURLPrefix(tokenHash, urlPrefix string) (*models.Resource, error) {
+	escapedPrefix := escapeLikePattern(urlPrefix)
+	return db.getShareResourceByQuery(`
+		SELECT `+resourceSelectColumns+`
+		FROM resources r
+		INNER JOIN page_share_resources psr ON r.id = psr.resource_id
+		WHERE psr.token_hash = ? AND (r.url LIKE ? ESCAPE '\' OR r.url LIKE ? ESCAPE '\')
+		ORDER BY r.last_seen DESC, r.id DESC
+		LIMIT 1
+	`, tokenHash, escapedPrefix+"#%", escapedPrefix+"%23%")
+}
+
+func (db *SQLiteDB) GetShareResourceByURLPath(tokenHash, urlPath string) (*models.Resource, error) {
+	escapedPath := escapeLikePattern(urlPath)
+	return db.getShareResourceByQuery(`
+		SELECT `+resourceSelectColumns+`
+		FROM resources r
+		INNER JOIN page_share_resources psr ON r.id = psr.resource_id
+		WHERE psr.token_hash = ? AND (r.url = ? OR r.url LIKE ? ESCAPE '\')
+		ORDER BY CASE WHEN r.url = ? THEN 0 ELSE 1 END, r.last_seen DESC, r.id DESC
+		LIMIT 1
+	`, tokenHash, urlPath, escapedPath+"?%", urlPath)
+}
+
+func (db *SQLiteDB) GetShareResourceByFilePath(tokenHash, filePath string) (*models.Resource, error) {
+	return db.getShareResourceByQuery(`
+		SELECT `+resourceSelectColumns+`
+		FROM resources r
+		INNER JOIN page_share_resources psr ON r.id = psr.resource_id
+		WHERE psr.token_hash = ? AND r.file_path = ?
+		LIMIT 1
+	`, tokenHash, filePath)
+}
+
+func (db *SQLiteDB) getShareResourceByQuery(query string, args ...any) (*models.Resource, error) {
+	var r models.Resource
+	err := scanResource(db.conn.QueryRow(query, args...), &r)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (db *SQLiteDB) HasActiveShareForHTMLPath(htmlPath string) (bool, error) {
+	var count int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(*) FROM page_shares WHERE html_path = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
+		htmlPath,
+		currentSQLiteTimestamp(),
+	).Scan(&count)
+	return count > 0, err
 }

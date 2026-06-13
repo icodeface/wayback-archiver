@@ -52,4 +52,15 @@ type Database interface {
 	LinkPageResource(pageID, resourceID int64) error
 	LinkPageResources(pageID int64, resourceIDs []int64) error
 	DeletePageResources(pageID int64) error
+
+	// 公开分享
+	CreatePageShare(tokenHash string, page *models.Page, resourceIDs []int64, expiresAt *time.Time, allowMarkdown bool) (*models.PageShare, error)
+	GetActivePageShareByTokenHash(tokenHash string) (*models.PageShare, error)
+	ListPageShares(pageID int64) ([]models.PageShare, error)
+	RevokePageShare(id int64) error
+	GetShareResourceByURL(tokenHash, url string) (*models.Resource, error)
+	GetShareResourceByURLPrefix(tokenHash, urlPrefix string) (*models.Resource, error)
+	GetShareResourceByURLPath(tokenHash, urlPath string) (*models.Resource, error)
+	GetShareResourceByFilePath(tokenHash, filePath string) (*models.Resource, error)
+	HasActiveShareForHTMLPath(htmlPath string) (bool, error)
 }

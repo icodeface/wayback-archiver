@@ -85,6 +85,9 @@ func (db *PostgresDB) ensurePostgresMigrations() error {
 		if err := db.ensureResourceQuarantineColumns(); err != nil {
 			return fmt.Errorf("failed to ensure resource quarantine columns: %w", err)
 		}
+		if err := db.ensurePageShareTables(); err != nil {
+			return fmt.Errorf("failed to ensure page share tables: %w", err)
+		}
 		searchTextTrigramReady, err := db.ensureSearchIndexes()
 		if err != nil {
 			return fmt.Errorf("failed to ensure search indexes: %w", err)
@@ -341,6 +344,34 @@ func (db *PostgresDB) ensureResourceQuarantineColumns() error {
 		return err
 	}
 	return nil
+}
+
+func (db *PostgresDB) ensurePageShareTables() error {
+	_, err := db.conn.Exec(`
+CREATE TABLE IF NOT EXISTS page_shares (
+    id BIGSERIAL PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    page_id BIGINT REFERENCES pages(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    title TEXT,
+    html_path TEXT NOT NULL,
+    content_hash CHAR(64),
+    captured_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMP WITH TIME ZONE,
+    revoked_at TIMESTAMP WITH TIME ZONE,
+    allow_markdown BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE INDEX IF NOT EXISTS idx_page_shares_page ON page_shares(page_id);
+CREATE INDEX IF NOT EXISTS idx_page_shares_html_path ON page_shares(html_path);
+CREATE TABLE IF NOT EXISTS page_share_resources (
+    token_hash TEXT NOT NULL REFERENCES page_shares(token_hash) ON DELETE CASCADE,
+    resource_id BIGINT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    PRIMARY KEY (token_hash, resource_id)
+);
+CREATE INDEX IF NOT EXISTS idx_page_share_resources_resource ON page_share_resources(resource_id);
+`)
+	return err
 }
 
 func (db *PostgresDB) Close() error {
@@ -1130,4 +1161,170 @@ func (db *PostgresDB) DeletePage(id int64) error {
 	}
 
 	return tx.Commit()
+}
+
+func (db *PostgresDB) CreatePageShare(tokenHash string, page *models.Page, resourceIDs []int64, expiresAt *time.Time, allowMarkdown bool) (*models.PageShare, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	createdAt := time.Now().UTC()
+	var shareID int64
+	err = tx.QueryRow(
+		`INSERT INTO page_shares (token_hash, page_id, url, title, html_path, content_hash, captured_at, created_at, expires_at, allow_markdown)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		 RETURNING id`,
+		tokenHash,
+		page.ID,
+		page.URL,
+		page.Title,
+		page.HTMLPath,
+		page.ContentHash,
+		page.CapturedAt.UTC(),
+		createdAt,
+		expiresAt,
+		allowMarkdown,
+	).Scan(&shareID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, resourceID := range resourceIDs {
+		if _, err := tx.Exec(
+			"INSERT INTO page_share_resources (token_hash, resource_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+			tokenHash,
+			resourceID,
+		); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return &models.PageShare{
+		ID:            shareID,
+		TokenHash:     tokenHash,
+		PageID:        page.ID,
+		URL:           page.URL,
+		Title:         page.Title,
+		HTMLPath:      page.HTMLPath,
+		ContentHash:   page.ContentHash,
+		CapturedAt:    page.CapturedAt,
+		CreatedAt:     createdAt,
+		ExpiresAt:     expiresAt,
+		AllowMarkdown: allowMarkdown,
+	}, nil
+}
+
+func (db *PostgresDB) GetActivePageShareByTokenHash(tokenHash string) (*models.PageShare, error) {
+	var share models.PageShare
+	err := scanShare(db.conn.QueryRow(
+		"SELECT "+shareSelectColumns+" FROM page_shares WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $2) LIMIT 1",
+		tokenHash,
+		time.Now().UTC(),
+	), &share)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &share, nil
+}
+
+func (db *PostgresDB) ListPageShares(pageID int64) ([]models.PageShare, error) {
+	rows, err := db.conn.Query(
+		"SELECT "+shareSelectColumns+" FROM page_shares WHERE page_id = $1 ORDER BY created_at DESC, id DESC",
+		pageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	shares := []models.PageShare{}
+	for rows.Next() {
+		var share models.PageShare
+		if err := scanShare(rows, &share); err != nil {
+			return nil, err
+		}
+		shares = append(shares, share)
+	}
+	return shares, rows.Err()
+}
+
+func (db *PostgresDB) RevokePageShare(id int64) error {
+	_, err := db.conn.Exec("UPDATE page_shares SET revoked_at = $1 WHERE id = $2", time.Now().UTC(), id)
+	return err
+}
+
+func (db *PostgresDB) GetShareResourceByURL(tokenHash, url string) (*models.Resource, error) {
+	return db.getShareResourceByQuery(`
+		SELECT `+resourceSelectColumns+`
+		FROM resources r
+		INNER JOIN page_share_resources psr ON r.id = psr.resource_id
+		WHERE psr.token_hash = $1 AND r.url = $2
+		LIMIT 1
+	`, tokenHash, url)
+}
+
+func (db *PostgresDB) GetShareResourceByURLPrefix(tokenHash, urlPrefix string) (*models.Resource, error) {
+	escapedPrefix := escapeLikePattern(urlPrefix)
+	return db.getShareResourceByQuery(`
+		SELECT `+resourceSelectColumns+`
+		FROM resources r
+		INNER JOIN page_share_resources psr ON r.id = psr.resource_id
+		WHERE psr.token_hash = $1 AND (r.url LIKE $2 ESCAPE '\' OR r.url LIKE $3 ESCAPE '\')
+		ORDER BY r.last_seen DESC, r.id DESC
+		LIMIT 1
+	`, tokenHash, escapedPrefix+"#%", escapedPrefix+"%23%")
+}
+
+func (db *PostgresDB) GetShareResourceByURLPath(tokenHash, urlPath string) (*models.Resource, error) {
+	escapedPath := escapeLikePattern(urlPath)
+	return db.getShareResourceByQuery(`
+		SELECT `+resourceSelectColumns+`
+		FROM resources r
+		INNER JOIN page_share_resources psr ON r.id = psr.resource_id
+		WHERE psr.token_hash = $1 AND (r.url = $2 OR r.url LIKE $3 ESCAPE '\')
+		ORDER BY CASE WHEN r.url = $2 THEN 0 ELSE 1 END, r.last_seen DESC, r.id DESC
+		LIMIT 1
+	`, tokenHash, urlPath, escapedPath+"?%")
+}
+
+func (db *PostgresDB) GetShareResourceByFilePath(tokenHash, filePath string) (*models.Resource, error) {
+	return db.getShareResourceByQuery(`
+		SELECT `+resourceSelectColumns+`
+		FROM resources r
+		INNER JOIN page_share_resources psr ON r.id = psr.resource_id
+		WHERE psr.token_hash = $1 AND r.file_path = $2
+		LIMIT 1
+	`, tokenHash, filePath)
+}
+
+func (db *PostgresDB) getShareResourceByQuery(query string, args ...any) (*models.Resource, error) {
+	var r models.Resource
+	err := scanResource(db.conn.QueryRow(query, args...), &r)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (db *PostgresDB) HasActiveShareForHTMLPath(htmlPath string) (bool, error) {
+	var count int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(*) FROM page_shares WHERE html_path = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $2)",
+		htmlPath,
+		time.Now().UTC(),
+	).Scan(&count)
+	return count > 0, err
 }
