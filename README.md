@@ -232,13 +232,13 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 | `PUT` | `/api/archive/:id` | Update an existing archive snapshot |
 | `GET` | `/api/pages?limit=50&offset=0` | List archived pages with pagination |
 | `GET` | `/api/pages/:id` | Get page details |
-| `GET` | `/api/pages/:id/content` | Get page content as Markdown (for AI/LLM consumption) |
 | `GET` | `/api/search?q=keyword&limit=50&offset=0` | Search pages by URL, title, or body text with pagination |
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
 | `GET` | `/api/logs` | List available log files |
 | `GET` | `/api/logs/latest` | Get latest log file content (supports `?tail=N&grep=keyword`) |
 | `GET` | `/api/logs/:filename` | Get log file content (supports `?tail=N&grep=keyword`) |
 | `GET` | `/view/:id` | Replay an archived page |
+| `GET` | `/view/:id/md` | Get archived page content as Markdown (for AI/LLM consumption) |
 | `GET` | `/timeline?url=URL` | Visual timeline page for a URL |
 | `GET` | `/logs` | Server logs viewer |
 

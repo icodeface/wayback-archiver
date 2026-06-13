@@ -281,6 +281,33 @@ func TestRoutes_HEAD_ViewPageInvalidIDReturnsNoBody(t *testing.T) {
 	}
 }
 
+func TestRoutes_HEAD_ViewPageMarkdownInvalidIDReturnsNoBody(t *testing.T) {
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodHead, "/view/not-a-number/md", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	if bodyLen := w.Body.Len(); bodyLen != 0 {
+		t.Fatalf("HEAD /view/not-a-number/md body length = %d, want 0", bodyLen)
+	}
+}
+
+func TestRoutes_APIPageContentRouteRemoved(t *testing.T) {
+	r := setupAuthRouter(&config.AuthConfig{Password: ""}, &config.ServerConfig{})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/pages/123/content", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected removed route to return 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func containsSubstring(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && stringContains(s, substr))
 }
