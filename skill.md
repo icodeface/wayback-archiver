@@ -137,6 +137,7 @@ curl "http://localhost:8080/view/$PAGE_ID/md"
 #### Create Public Share Link
 
 Creates an unauthenticated link for one fixed snapshot. The returned token is only shown once.
+The `/view/:id` snapshot header also has a Share button that creates and copies the public URL, then exposes Revoke for that share.
 
 ```bash
 curl -X POST "http://localhost:8080/api/pages/$PAGE_ID/shares" \

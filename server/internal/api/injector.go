@@ -39,7 +39,8 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		</div>`, prevLink, timelineLink, nextLink)
 	}
 
-	shareButton := fmt.Sprintf(`<button type="button" id="wayback-share-button" data-page-id="%d" style="color:white;text-decoration:none;padding:4px 12px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;cursor:pointer;font-family:inherit;">Share</button>`, page.ID)
+	shareControls := fmt.Sprintf(`<button type="button" data-wayback-share-action="snapshot" data-page-id="%d" style="color:white;text-decoration:none;padding:4px 12px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;cursor:pointer;font-family:inherit;">Share</button>
+		<button type="button" data-wayback-share-action="revoke" style="display:none;color:white;text-decoration:none;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;cursor:pointer;font-family:inherit;">Revoke</button>`, page.ID)
 
 	// 归档信息栏 HTML
 	archiveHeader := fmt.Sprintf(`
@@ -260,66 +261,137 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		document.body.removeChild(textarea);
 	}
 
-	function initShareButton() {
-		const button = document.getElementById('wayback-share-button');
-		if (!button) return;
+	let activeShare = null;
 
-		button.addEventListener('click', async function() {
-			const pageId = button.getAttribute('data-page-id');
+	function findShareControl(action) {
+		const header = document.getElementById('wayback-archive-header');
+		if (!header) return null;
+		return header.querySelector('[data-wayback-share-action="' + action + '"]');
+	}
+
+	function setShareControlBusy(button, busy) {
+		if (!button) return;
+		button.disabled = busy;
+		button.style.opacity = busy ? '0.65' : '';
+	}
+
+	function updateShareSecondaryControls() {
+		const revokeButton = findShareControl('revoke');
+		if (revokeButton) {
+			revokeButton.style.display = activeShare && activeShare.id ? '' : 'none';
+		}
+	}
+
+	async function createArchiveShare(pageId) {
+		const response = await fetch('/api/pages/' + encodeURIComponent(pageId) + '/shares', {
+			method: 'POST',
+			headers: {'Content-Type': 'application/json'},
+			credentials: 'same-origin',
+			body: '{}'
+		});
+		const data = await response.json().catch(function() { return {}; });
+		if (!response.ok) {
+			throw new Error(data.error || ('HTTP ' + response.status));
+		}
+		if (!data.snapshot_url) {
+			throw new Error('missing snapshot_url');
+		}
+		return data;
+	}
+
+	async function copyShareURL(path, promptMessage) {
+		const shareURL = absoluteArchiveURL(path);
+		try {
+			await copyArchiveText(shareURL);
+			return 'copied';
+		} catch (copyError) {
+			window.prompt(promptMessage, shareURL);
+			return 'prompted';
+		}
+	}
+
+	function stopShareEvent(event) {
+		event.preventDefault();
+		event.stopPropagation();
+	}
+
+	function initShareControls() {
+		const shareButton = findShareControl('snapshot');
+		const revokeButton = findShareControl('revoke');
+		if (!shareButton) return;
+
+		shareButton.addEventListener('click', async function(event) {
+			stopShareEvent(event);
+			const pageId = shareButton.getAttribute('data-page-id');
 			if (!pageId) return;
 
-			const originalText = button.textContent;
-			button.disabled = true;
-			button.style.opacity = '0.65';
-			button.textContent = 'Sharing';
+			setShareControlBusy(shareButton, true);
+			shareButton.textContent = activeShare ? 'Copying' : 'Sharing';
 
 			try {
-				const response = await fetch('/api/pages/' + encodeURIComponent(pageId) + '/shares', {
-					method: 'POST',
-					headers: {'Content-Type': 'application/json'},
-					credentials: 'same-origin',
-					body: '{}'
-				});
-				const data = await response.json().catch(function() { return {}; });
-				if (!response.ok) {
-					throw new Error(data.error || ('HTTP ' + response.status));
-				}
-				if (!data.snapshot_url) {
-					throw new Error('missing snapshot_url');
+				if (!activeShare) {
+					activeShare = await createArchiveShare(pageId);
+					updateShareSecondaryControls();
 				}
 
-				const shareURL = absoluteArchiveURL(data.snapshot_url);
-				try {
-					await copyArchiveText(shareURL);
-					button.textContent = 'Copied';
-				} catch (copyError) {
-					button.textContent = 'Created';
-					window.prompt('分享已创建，请复制链接', shareURL);
-				}
-
+				const copyResult = await copyShareURL(activeShare.snapshot_url, '分享已创建，请复制链接');
+				shareButton.textContent = copyResult === 'copied' ? 'Copied' : 'Created';
 				setTimeout(function() {
-					button.textContent = originalText;
+					shareButton.textContent = 'Share';
 				}, 1600);
 			} catch (error) {
 				alert('分享失败: ' + error.message);
-				button.textContent = originalText;
+				shareButton.textContent = 'Share';
 			} finally {
-				button.disabled = false;
-				button.style.opacity = '';
+				setShareControlBusy(shareButton, false);
 			}
 		});
+
+		if (revokeButton) {
+			revokeButton.addEventListener('click', async function(event) {
+				stopShareEvent(event);
+				if (!activeShare || !activeShare.id) return;
+				if (!confirm('确定要撤销这个公开分享吗？')) return;
+
+				setShareControlBusy(revokeButton, true);
+				const originalText = revokeButton.textContent;
+				revokeButton.textContent = 'Revoking';
+
+				try {
+					const response = await fetch('/api/shares/' + encodeURIComponent(activeShare.id), {
+						method: 'DELETE',
+						credentials: 'same-origin'
+					});
+					const data = await response.json().catch(function() { return {}; });
+					if (!response.ok) {
+						throw new Error(data.error || ('HTTP ' + response.status));
+					}
+					activeShare = null;
+					updateShareSecondaryControls();
+					shareButton.textContent = 'Share';
+					revokeButton.textContent = originalText;
+				} catch (error) {
+					alert('撤销失败: ' + error.message);
+					revokeButton.textContent = originalText;
+				} finally {
+					setShareControlBusy(revokeButton, false);
+				}
+			});
+		}
+
+		updateShareSecondaryControls();
 	}
 
 	// 页面加载完成后执行
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', function() {
-			initShareButton();
+			initShareControls();
 			localizeArchiveTimes();
 			fixPositionedElements();
 			forceEnableInteraction();
 		});
 	} else {
-		initShareButton();
+		initShareControls();
 		localizeArchiveTimes();
 		fixPositionedElements();
 		forceEnableInteraction();
@@ -336,7 +408,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 
 })();
 </script>
-	`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), archiveTimeElement(page.CapturedAt, "full"), navHTML, shareButton, nonce)
+	`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), archiveTimeElement(page.CapturedAt, "full"), navHTML, shareControls, nonce)
 
 	// 在 <body> 标签后注入
 	if bodyTagRe.MatchString(html) {

@@ -61,12 +61,18 @@ func TestInjectArchiveHeader_IncludesShareButtonInSnapshotHeader(t *testing.T) {
 	got := injectArchiveHeader(`<html><body><main>hello</main></body></html>`, page, nil, nil, 1, "nonce")
 
 	for _, want := range []string{
-		`id="wayback-share-button"`,
+		`data-wayback-share-action="snapshot"`,
+		`data-wayback-share-action="revoke"`,
 		`data-page-id="42"`,
+		`Revoke`,
 		`<script nonce="nonce">`,
-		`function initShareButton()`,
-		`button.addEventListener('click'`,
+		`let activeShare = null`,
+		`function initShareControls()`,
+		`function updateShareSecondaryControls()`,
+		`shareButton.addEventListener('click'`,
+		`revokeButton.addEventListener('click'`,
 		`fetch('/api/pages/' + encodeURIComponent(pageId) + '/shares'`,
+		`fetch('/api/shares/' + encodeURIComponent(activeShare.id)`,
 		`credentials: 'same-origin'`,
 		`navigator.clipboard.writeText`,
 	} {
@@ -77,6 +83,10 @@ func TestInjectArchiveHeader_IncludesShareButtonInSnapshotHeader(t *testing.T) {
 
 	if strings.Contains(got, `onclick=`) {
 		t.Fatalf("share button should not use inline event handlers: %s", got)
+	}
+
+	if strings.Contains(got, `Copy MD`) || strings.Contains(got, `data-wayback-share-action="markdown"`) {
+		t.Fatalf("snapshot header should not include markdown copy controls: %s", got)
 	}
 }
 
