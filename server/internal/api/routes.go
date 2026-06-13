@@ -108,6 +108,12 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 	webFS, _ := fs.Sub(web.StaticFiles, ".")
 	registerGETAndHEAD(r, "/robots.txt", serveEmbeddedFile(webFS, "robots.txt"))
 
+	// 公开分享入口（必须在 Basic Auth 之前；分享 token 负责访问控制）
+	registerGETAndHEAD(r, "/share/:token", handler.ViewSharedPage)
+	registerGETAndHEAD(r, "/share/:token/md", handler.ViewSharedPageMarkdown)
+	registerGETAndHEAD(r, "/share/:token/archive/:timestamp/*resource_path", handler.ProxySharedResource)
+	registerGETAndHEAD(r, "/share/:token/resources/*filepath", handler.ServeSharedLocalResource)
+
 	// Basic Auth 中间件（如果启用）
 	if authCfg.Enabled() {
 		accounts := gin.Accounts{
@@ -155,7 +161,10 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 		registerGETAndHEAD(api, "/pages", handler.ListPages)
 		registerGETAndHEAD(api, "/pages/timeline", handler.GetPageTimeline)
 		registerGETAndHEAD(api, "/pages/:id", handler.GetPage)
+		api.POST("/pages/:id/shares", handler.CreatePageShare)
+		registerGETAndHEAD(api, "/pages/:id/shares", handler.ListPageShares)
 		api.DELETE("/pages/:id", handler.DeletePage)
+		api.DELETE("/shares/:id", handler.RevokePageShare)
 		registerGETAndHEAD(api, "/search", handler.SearchPages)
 		registerGETAndHEAD(api, "/logs", handler.ListLogs)
 		registerGETAndHEAD(api, "/logs/latest", handler.GetLatestLog)

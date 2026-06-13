@@ -64,6 +64,8 @@ func TestPostgresErrorHelpers(t *testing.T) {
 		{name: "duplicate database", err: &pq.Error{Code: "42P04"}, check: isDuplicateDatabaseError, want: true},
 		{name: "optional extension insufficient privilege", err: &pq.Error{Code: "42501"}, check: isOptionalTrigramExtensionError, want: true},
 		{name: "optional extension missing control file", err: &pq.Error{Code: "58P01"}, check: isOptionalTrigramExtensionError, want: true},
+		{name: "optional index insufficient privilege", err: &pq.Error{Code: "42501"}, check: isOptionalPostgresIndexError, want: true},
+		{name: "optional index unrelated error", err: &pq.Error{Code: "42601"}, check: isOptionalPostgresIndexError, want: false},
 		{name: "wrapped missing database", err: fmt.Errorf("wrapped: %w", &pq.Error{Code: "3D000"}), check: isMissingDatabaseError, want: true},
 		{name: "unrelated error", err: errors.New("boom"), check: isMissingDatabaseError, want: false},
 	}
@@ -233,7 +235,8 @@ func TestGetPagesByURL(t *testing.T) {
 	defer db.Close()
 
 	now := time.Now()
-	testURL := "http://test-get-pages-by-url.example.com"
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	testURL := "http://test-get-pages-by-url.example.com/" + suffix
 
 	// Create 3 snapshots with different content hashes
 	hash1 := "1111111111111111111111111111111111111111111111111111111111111111"
@@ -782,7 +785,8 @@ func TestGetSnapshotNeighbors(t *testing.T) {
 	defer db.Close()
 
 	now := time.Now()
-	testURL := "http://test-snapshot-neighbors.example.com"
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	testURL := "http://test-snapshot-neighbors.example.com/" + suffix
 
 	hash1 := "aaaa111111111111111111111111111111111111111111111111111111111111"
 	hash2 := "aaaa222222222222222222222222222222222222222222222222222222222222"

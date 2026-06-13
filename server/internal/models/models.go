@@ -32,6 +32,40 @@ type Resource struct {
 	QuarantineReason string    `json:"quarantine_reason,omitempty"`
 }
 
+type PageShare struct {
+	ID            int64      `json:"id"`
+	TokenHash     string     `json:"-"`
+	PageID        int64      `json:"page_id"`
+	URL           string     `json:"url"`
+	Title         string     `json:"title"`
+	HTMLPath      string     `json:"html_path"`
+	ContentHash   string     `json:"content_hash"`
+	CapturedAt    time.Time  `json:"captured_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
+	AllowMarkdown bool       `json:"allow_markdown"`
+}
+
+type CreateShareRequest struct {
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	AllowMarkdown *bool      `json:"allow_markdown,omitempty"`
+}
+
+type ShareResponse struct {
+	Status      string     `json:"status"`
+	ID          int64      `json:"id"`
+	Token       string     `json:"token,omitempty"`
+	PageID      int64      `json:"page_id"`
+	URL         string     `json:"url"`
+	Title       string     `json:"title"`
+	CapturedAt  time.Time  `json:"captured_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	SnapshotURL string     `json:"snapshot_url"`
+	MarkdownURL string     `json:"markdown_url,omitempty"`
+}
+
 type CaptureRequest struct {
 	URL     string            `json:"url" binding:"required"`
 	Title   string            `json:"title"`

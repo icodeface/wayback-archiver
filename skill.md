@@ -134,6 +134,16 @@ Returns the page body as clean Markdown (strips scripts, nav, footer, etc.). Ide
 curl "http://localhost:8080/view/$PAGE_ID/md"
 ```
 
+#### Create Public Share Link
+
+Creates an unauthenticated link for one fixed snapshot. The returned token is only shown once.
+
+```bash
+curl -X POST "http://localhost:8080/api/pages/$PAGE_ID/shares" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
 #### Get Timeline for URL
 
 ```bash

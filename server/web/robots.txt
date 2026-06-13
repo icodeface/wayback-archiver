@@ -36,3 +36,4 @@ Disallow: /
 
 User-agent: *
 Allow: /
+Disallow: /share/

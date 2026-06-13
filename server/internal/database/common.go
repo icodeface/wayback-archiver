@@ -14,12 +14,18 @@ const pageSearchSelectColumns = pageSelectColumns + ", COALESCE(body_text, '')"
 
 const resourceSelectColumns = "id, url, content_hash, resource_type, file_path, file_size, first_seen, last_seen, is_quarantined, quarantine_reason"
 
+const shareSelectColumns = "id, token_hash, page_id, url, title, html_path, content_hash, captured_at, created_at, expires_at, revoked_at, allow_markdown"
+
 // pageScanner 定义可以扫描数据库行的接口
 type pageScanner interface {
 	Scan(dest ...any) error
 }
 
 type resourceScanner interface {
+	Scan(dest ...any) error
+}
+
+type shareScanner interface {
 	Scan(dest ...any) error
 }
 
@@ -44,6 +50,23 @@ func scanResource(scanner resourceScanner, resource *models.Resource) error {
 		&resource.LastSeen,
 		&resource.IsQuarantined,
 		&resource.QuarantineReason,
+	)
+}
+
+func scanShare(scanner shareScanner, share *models.PageShare) error {
+	return scanner.Scan(
+		&share.ID,
+		&share.TokenHash,
+		&share.PageID,
+		&share.URL,
+		&share.Title,
+		&share.HTMLPath,
+		&share.ContentHash,
+		&share.CapturedAt,
+		&share.CreatedAt,
+		&share.ExpiresAt,
+		&share.RevokedAt,
+		&share.AllowMarkdown,
 	)
 }
 

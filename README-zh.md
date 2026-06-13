@@ -199,6 +199,9 @@ export https_proxy=http://127.0.0.1:7897
 | `PUT` | `/api/archive/:id` | 更新已有归档快照 |
 | `GET` | `/api/pages?limit=50&offset=0` | 分页列出归档页面 |
 | `GET` | `/api/pages/:id` | 获取页面详情 |
+| `POST` | `/api/pages/:id/shares` | 创建公开分享链接（需要鉴权） |
+| `GET` | `/api/pages/:id/shares` | 列出页面的分享记录（不返回 token 明文） |
+| `DELETE` | `/api/shares/:id` | 撤销公开分享 |
 | `GET` | `/api/search?q=keyword&limit=50&offset=0` | 按 URL、标题或正文分页搜索 |
 | `GET` | `/api/pages/timeline?url=URL` | 获取同一 URL 的所有快照（时间线视图） |
 | `GET` | `/api/logs` | 列出可用日志文件 |
@@ -206,6 +209,8 @@ export https_proxy=http://127.0.0.1:7897
 | `GET` | `/api/logs/:filename` | 获取日志文件内容（支持 `?tail=N&grep=关键词`） |
 | `GET` | `/view/:id` | 还原归档页面 |
 | `GET` | `/view/:id/md` | 获取归档页面正文的 Markdown 格式（方便 AI/LLM 读取） |
+| `GET` | `/share/:token` | 无鉴权访问特定公开快照 |
+| `GET` | `/share/:token/md` | 无鉴权访问公开快照 Markdown |
 | `GET` | `/timeline?url=URL` | URL 时间线可视化页面 |
 | `GET` | `/logs` | 服务器日志查看器 |
 
@@ -219,6 +224,10 @@ export https_proxy=http://127.0.0.1:7897
 
 请求体与 POST 相同。接口会在接受更新请求后立即返回；若内容有变化，资源重新处理和最终快照替换会在后台继续执行。替换成功后，旧 HTML 进入延迟删除队列。返回 `{ status, page_id, action }`，`action` 为 `updated` 或 `unchanged`。
 请求体中的 `url` 必须与 `:id` 对应的现有页面 URL 完全一致；否则服务端会返回 HTTP `400`，避免把一个页面的快照写进另一个页面记录中。
+
+### 公开分享
+
+`POST /api/pages/:id/shares` 会为当前快照创建不可枚举公开 token，返回 `{ token, snapshot_url, markdown_url }`。公开入口不需要 Basic Auth，但只暴露该分享创建时固定的 HTML 文件和资源集合；后续页面更新不会改变已创建分享指向的特定快照。撤销分享后 `/share/:token` 和 `/share/:token/md` 返回 `404`。
 
 ## 项目结构
 

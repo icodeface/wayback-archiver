@@ -12,9 +12,9 @@ import (
 
 // DeletionRecord 记录待删除的 HTML 文件信息
 type DeletionRecord struct {
-	HTMLPath  string    `json:"html_path"`  // 相对路径，如 "html/2026/03/14/120000_abc123.html"
-	Timestamp time.Time `json:"timestamp"`  // 记录时间
-	PageID    int64     `json:"page_id"`    // 关联的页面 ID（用于日志）
+	HTMLPath  string    `json:"html_path"` // 相对路径，如 "html/2026/03/14/120000_abc123.html"
+	Timestamp time.Time `json:"timestamp"` // 记录时间
+	PageID    int64     `json:"page_id"`   // 关联的页面 ID（用于日志）
 }
 
 // DeletionQueue 管理待删除的 HTML 文件队列
@@ -22,6 +22,8 @@ type DeletionQueue struct {
 	queueFile string
 	mu        sync.Mutex
 }
+
+type DeletionProtectFunc func(record DeletionRecord) (bool, error)
 
 // NewDeletionQueue 创建删除队列管理器
 func NewDeletionQueue(dataDir string) *DeletionQueue {
@@ -61,6 +63,10 @@ func (q *DeletionQueue) Add(htmlPath string, pageID int64) error {
 // 记录按时间顺序追加，遇到第一个未过期的记录即可停止，剩余部分直接保留
 // 返回删除的文件数量和错误
 func (q *DeletionQueue) ProcessDeletions(baseDir string, retentionDays int) (int, error) {
+	return q.ProcessDeletionsWithProtection(baseDir, retentionDays, nil)
+}
+
+func (q *DeletionQueue) ProcessDeletionsWithProtection(baseDir string, retentionDays int, protect DeletionProtectFunc) (int, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -75,23 +81,35 @@ func (q *DeletionQueue) ProcessDeletions(baseDir string, retentionDays int) (int
 
 	cutoffTime := time.Now().AddDate(0, 0, -retentionDays)
 	deletedCount := 0
-	firstRemaining := -1
+	remaining := make([]DeletionRecord, 0, len(records))
 
 	for i, record := range records {
 		if !record.Timestamp.Before(cutoffTime) {
 			// 记录按时间有序，后续全部未过期，直接截断
-			firstRemaining = i
+			remaining = append(remaining, records[i:]...)
 			break
+		}
+
+		if protect != nil {
+			protected, err := protect(record)
+			if err != nil {
+				fmt.Printf("Failed to check deletion protection for %s: %v\n", record.HTMLPath, err)
+				remaining = append(remaining, records[i:]...)
+				break
+			}
+			if protected {
+				fmt.Printf("Skipped shared HTML: %s (page_id: %d)\n", record.HTMLPath, record.PageID)
+				remaining = append(remaining, record)
+				continue
+			}
 		}
 
 		fullPath := filepath.Join(baseDir, record.HTMLPath)
 		if err := os.Remove(fullPath); err != nil {
 			if !os.IsNotExist(err) {
 				// 删除失败（权限等问题），保留这条记录
-				if firstRemaining == -1 {
-					firstRemaining = i
-				}
 				fmt.Printf("Failed to delete %s: %v\n", record.HTMLPath, err)
+				remaining = append(remaining, records[i:]...)
 				break // 后续记录也保留
 			}
 			// 文件不存在，视为已删除
@@ -100,12 +118,6 @@ func (q *DeletionQueue) ProcessDeletions(baseDir string, retentionDays int) (int
 			fmt.Printf("Deleted superseded HTML: %s (page_id: %d, age: %v)\n",
 				record.HTMLPath, record.PageID, time.Since(record.Timestamp))
 		}
-	}
-
-	// 保留未处理的记录
-	var remaining []DeletionRecord
-	if firstRemaining >= 0 {
-		remaining = records[firstRemaining:]
 	}
 
 	if err := q.writeRecords(remaining); err != nil {

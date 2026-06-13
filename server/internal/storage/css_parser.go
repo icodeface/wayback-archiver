@@ -56,7 +56,14 @@ func (p *CSSParser) ExtractResources(cssContent string) []string {
 
 // RewriteCSS rewrites resource URLs in CSS content to point to local paths
 func (p *CSSParser) RewriteCSS(cssContent string, urlMapping map[string]string) string {
+	return p.RewriteCSSWithPrefix(cssContent, urlMapping, "/archive/")
+}
+
+func (p *CSSParser) RewriteCSSWithPrefix(cssContent string, urlMapping map[string]string, urlPrefix string) string {
 	result := cssContent
+	if urlPrefix == "" {
+		urlPrefix = "/archive/"
+	}
 
 	// Rewrite @import URLs
 	result = p.importPattern.ReplaceAllStringFunc(result, func(match string) string {
@@ -64,7 +71,7 @@ func (p *CSSParser) RewriteCSS(cssContent string, urlMapping map[string]string) 
 		if len(submatch) > 1 {
 			originalURL := strings.TrimSpace(submatch[1])
 			if localPath, ok := urlMapping[originalURL]; ok {
-				localURL := "/archive/" + localPath
+				localURL := urlPrefix + localPath
 				// Preserve the original format
 				if strings.Contains(match, "url(") {
 					return strings.Replace(match, originalURL, localURL, 1)
@@ -81,7 +88,7 @@ func (p *CSSParser) RewriteCSS(cssContent string, urlMapping map[string]string) 
 		if len(submatch) > 1 {
 			originalURL := strings.TrimSpace(submatch[1])
 			if localPath, ok := urlMapping[originalURL]; ok {
-				localURL := "/archive/" + localPath
+				localURL := urlPrefix + localPath
 				// Preserve quotes if present
 				if strings.Contains(match, `"`) {
 					return `url("` + localURL + `")`

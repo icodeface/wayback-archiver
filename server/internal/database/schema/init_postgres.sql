@@ -55,3 +55,41 @@ CREATE TABLE IF NOT EXISTS page_resources (
 );
 
 CREATE INDEX IF NOT EXISTS idx_page_resources_page ON page_resources(page_id);
+
+-- 公开分享表（token_hash 存储 token 的哈希，不保存 token 明文）
+CREATE TABLE IF NOT EXISTS page_shares (
+    id BIGSERIAL PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    page_id BIGINT REFERENCES pages(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    title TEXT,
+    html_path TEXT NOT NULL,
+    content_hash CHAR(64),
+    captured_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMP WITH TIME ZONE,
+    revoked_at TIMESTAMP WITH TIME ZONE,
+    allow_markdown BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS page_share_resources (
+    token_hash TEXT NOT NULL REFERENCES page_shares(token_hash) ON DELETE CASCADE,
+    resource_id BIGINT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    PRIMARY KEY (token_hash, resource_id)
+);
+
+DO $$
+BEGIN
+    IF to_regclass('public.idx_page_shares_page') IS NULL THEN
+        EXECUTE 'CREATE INDEX idx_page_shares_page ON page_shares(page_id)';
+    END IF;
+    IF to_regclass('public.idx_page_shares_html_path') IS NULL THEN
+        EXECUTE 'CREATE INDEX idx_page_shares_html_path ON page_shares(html_path)';
+    END IF;
+    IF to_regclass('public.idx_page_share_resources_resource') IS NULL THEN
+        EXECUTE 'CREATE INDEX idx_page_share_resources_resource ON page_share_resources(resource_id)';
+    END IF;
+EXCEPTION
+    WHEN insufficient_privilege THEN
+        RAISE NOTICE 'Skipping optional page share indexes because current user does not own page_shares';
+END $$;
