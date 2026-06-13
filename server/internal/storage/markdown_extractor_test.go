@@ -169,6 +169,41 @@ func TestExtractMarkdown_SkipFooter(t *testing.T) {
 	}
 }
 
+func TestExtractMarkdown_PrefersSemanticArticle(t *testing.T) {
+	html := `<html><body>
+		<header>Top navigation</header>
+		<main>
+			<aside>Related links</aside>
+			<article>
+				<h1>Article Title</h1>
+				<p>This is the saved article body.</p>
+			</article>
+		</main>
+	</body></html>`
+	md := ExtractMarkdown(html)
+	if !strings.Contains(md, "# Article Title") || !strings.Contains(md, "saved article body") {
+		t.Errorf("Should keep article content, got:\n%s", md)
+	}
+	if strings.Contains(md, "Top navigation") || strings.Contains(md, "Related links") {
+		t.Errorf("Should skip page chrome around article, got:\n%s", md)
+	}
+}
+
+func TestExtractMarkdown_RemovesInteractiveChrome(t *testing.T) {
+	html := `<html><body>
+		<form><input value="search"><button>Search</button></form>
+		<template><p>Hidden template text</p></template>
+		<p>Readable fallback body.</p>
+	</body></html>`
+	md := ExtractMarkdown(html)
+	if !strings.Contains(md, "Readable fallback body") {
+		t.Errorf("Should keep readable body, got:\n%s", md)
+	}
+	if strings.Contains(md, "Search") || strings.Contains(md, "Hidden template text") {
+		t.Errorf("Should skip interactive chrome, got:\n%s", md)
+	}
+}
+
 func TestExtractMarkdown_EmptyHTML(t *testing.T) {
 	md := ExtractMarkdown("")
 	if md != "\n" {
