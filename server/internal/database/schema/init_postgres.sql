@@ -72,13 +72,24 @@ CREATE TABLE IF NOT EXISTS page_shares (
     allow_markdown BOOLEAN NOT NULL DEFAULT TRUE
 );
 
-CREATE INDEX IF NOT EXISTS idx_page_shares_page ON page_shares(page_id);
-CREATE INDEX IF NOT EXISTS idx_page_shares_html_path ON page_shares(html_path);
-
 CREATE TABLE IF NOT EXISTS page_share_resources (
     token_hash TEXT NOT NULL REFERENCES page_shares(token_hash) ON DELETE CASCADE,
     resource_id BIGINT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
     PRIMARY KEY (token_hash, resource_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_page_share_resources_resource ON page_share_resources(resource_id);
+DO $$
+BEGIN
+    IF to_regclass('public.idx_page_shares_page') IS NULL THEN
+        EXECUTE 'CREATE INDEX idx_page_shares_page ON page_shares(page_id)';
+    END IF;
+    IF to_regclass('public.idx_page_shares_html_path') IS NULL THEN
+        EXECUTE 'CREATE INDEX idx_page_shares_html_path ON page_shares(html_path)';
+    END IF;
+    IF to_regclass('public.idx_page_share_resources_resource') IS NULL THEN
+        EXECUTE 'CREATE INDEX idx_page_share_resources_resource ON page_share_resources(resource_id)';
+    END IF;
+EXCEPTION
+    WHEN insufficient_privilege THEN
+        RAISE NOTICE 'Skipping optional page share indexes because current user does not own page_shares';
+END $$;

@@ -241,6 +241,20 @@ func isOptionalTrigramExtensionError(err error) bool {
 	}
 }
 
+func isOptionalPostgresIndexError(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+
+	switch pqErr.Code {
+	case "42501":
+		return true
+	default:
+		return false
+	}
+}
+
 func (db *PostgresDB) ensureSchema() error {
 	if err := db.ensureTrigramExtension(); err != nil {
 		return err
@@ -283,6 +297,28 @@ func (db *PostgresDB) hasPostgresExtension(name string) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = $1)`, name).Scan(&exists)
 	return exists, err
+}
+
+func (db *PostgresDB) postgresRelationExists(qualifiedName string) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(`SELECT to_regclass($1) IS NOT NULL`, qualifiedName).Scan(&exists)
+	return exists, err
+}
+
+func (db *PostgresDB) ensureOptionalIndex(indexName, createSQL string) error {
+	exists, err := db.postgresRelationExists("public." + indexName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	_, err = db.conn.Exec(createSQL)
+	if err == nil || isOptionalPostgresIndexError(err) {
+		return nil
+	}
+	return err
 }
 
 func (db *PostgresDB) dropLegacySearchTrigramIndexes() error {
@@ -347,7 +383,7 @@ func (db *PostgresDB) ensureResourceQuarantineColumns() error {
 }
 
 func (db *PostgresDB) ensurePageShareTables() error {
-	_, err := db.conn.Exec(`
+	if _, err := db.conn.Exec(`
 CREATE TABLE IF NOT EXISTS page_shares (
     id BIGSERIAL PRIMARY KEY,
     token_hash TEXT NOT NULL UNIQUE,
@@ -362,16 +398,25 @@ CREATE TABLE IF NOT EXISTS page_shares (
     revoked_at TIMESTAMP WITH TIME ZONE,
     allow_markdown BOOLEAN NOT NULL DEFAULT TRUE
 );
-CREATE INDEX IF NOT EXISTS idx_page_shares_page ON page_shares(page_id);
-CREATE INDEX IF NOT EXISTS idx_page_shares_html_path ON page_shares(html_path);
 CREATE TABLE IF NOT EXISTS page_share_resources (
     token_hash TEXT NOT NULL REFERENCES page_shares(token_hash) ON DELETE CASCADE,
     resource_id BIGINT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
     PRIMARY KEY (token_hash, resource_id)
 );
-CREATE INDEX IF NOT EXISTS idx_page_share_resources_resource ON page_share_resources(resource_id);
-`)
-	return err
+`); err != nil {
+		return err
+	}
+
+	if err := db.ensureOptionalIndex("idx_page_shares_page", `CREATE INDEX idx_page_shares_page ON page_shares(page_id)`); err != nil {
+		return err
+	}
+	if err := db.ensureOptionalIndex("idx_page_shares_html_path", `CREATE INDEX idx_page_shares_html_path ON page_shares(html_path)`); err != nil {
+		return err
+	}
+	if err := db.ensureOptionalIndex("idx_page_share_resources_resource", `CREATE INDEX idx_page_share_resources_resource ON page_share_resources(resource_id)`); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (db *PostgresDB) Close() error {

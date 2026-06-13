@@ -161,6 +161,9 @@ func TestPublicShare_ViewMarkdownAndResources(t *testing.T) {
 	if got := w.Header().Get("X-Robots-Tag"); got != "noindex, nofollow" {
 		t.Fatalf("X-Robots-Tag = %q", got)
 	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("shared page Cache-Control = %q, want no-store", got)
+	}
 
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, share.MarkdownURL, nil)
@@ -170,6 +173,9 @@ func TestPublicShare_ViewMarkdownAndResources(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "# Shared Title") {
 		t.Fatalf("unexpected markdown: %s", w.Body.String())
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("shared markdown Cache-Control = %q, want no-store", got)
 	}
 
 	cssURL := "/share/" + share.Token + "/archive/20260410120000mp_/https://cdn.example.com/app.css"
@@ -182,12 +188,18 @@ func TestPublicShare_ViewMarkdownAndResources(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `/share/`+share.Token+`/resources/cc/dd/logo.img`) {
 		t.Fatalf("CSS subresource was not rewritten to share resource path: %s", w.Body.String())
 	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("shared css Cache-Control = %q, want no-store", got)
+	}
 
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/share/"+share.Token+"/resources/cc/dd/logo.img", nil)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK || w.Body.String() != "shared-image" {
 		t.Fatalf("shared local resource status = %d body = %q", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("shared local resource Cache-Control = %q, want no-store", got)
 	}
 
 	w = httptest.NewRecorder()

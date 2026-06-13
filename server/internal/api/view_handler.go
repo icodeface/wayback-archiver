@@ -257,6 +257,10 @@ func (h *Handler) serveRewrittenCSS(c *gin.Context, pageID int64, resource *mode
 }
 
 func (h *Handler) serveRewrittenCSSWithResolver(c *gin.Context, resource *models.Resource, urlPrefix string, resolveFilePath func(string) (string, bool)) {
+	h.serveRewrittenCSSWithResolverAndCache(c, resource, urlPrefix, "public, max-age=31536000", resolveFilePath)
+}
+
+func (h *Handler) serveRewrittenCSSWithResolverAndCache(c *gin.Context, resource *models.Resource, urlPrefix, cacheControl string, resolveFilePath func(string) (string, bool)) {
 	filePath := filepath.Join(h.dataDir, resource.FilePath)
 	cssContent, err := os.ReadFile(filePath)
 	if err != nil {
@@ -268,7 +272,7 @@ func (h *Handler) serveRewrittenCSSWithResolver(c *gin.Context, resource *models
 	rewritten := rewriteCSSForPageWithPrefix(h.cssParser(), string(cssContent), resource.URL, urlPrefix, resolveFilePath)
 
 	c.Header("Content-Type", "text/css; charset=utf-8")
-	c.Header("Cache-Control", "public, max-age=31536000")
+	c.Header("Cache-Control", cacheControl)
 	c.Data(http.StatusOK, "text/css; charset=utf-8", []byte(rewritten))
 }
 
@@ -691,6 +695,10 @@ func (h *Handler) ServeLocalResource(c *gin.Context) {
 
 // serveFileStreaming 流式提供文件，避免将整个文件加载到内存
 func serveFileStreaming(c *gin.Context, filePath string) {
+	serveFileStreamingWithCacheControl(c, filePath, "public, max-age=31536000")
+}
+
+func serveFileStreamingWithCacheControl(c *gin.Context, filePath, cacheControl string) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		c.String(http.StatusNotFound, "Resource not found")
@@ -706,7 +714,7 @@ func serveFileStreaming(c *gin.Context, filePath string) {
 
 	contentType := detectContentTypeByPath(filePath)
 	c.Header("Content-Type", contentType)
-	c.Header("Cache-Control", "public, max-age=31536000")
+	c.Header("Cache-Control", cacheControl)
 	http.ServeContent(c.Writer, c.Request, filepath.Base(filePath), stat.ModTime(), f)
 }
 

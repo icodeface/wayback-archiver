@@ -81,30 +81,26 @@ func (q *DeletionQueue) ProcessDeletionsWithProtection(baseDir string, retention
 
 	cutoffTime := time.Now().AddDate(0, 0, -retentionDays)
 	deletedCount := 0
-	firstRemaining := -1
+	remaining := make([]DeletionRecord, 0, len(records))
 
 	for i, record := range records {
 		if !record.Timestamp.Before(cutoffTime) {
 			// 记录按时间有序，后续全部未过期，直接截断
-			firstRemaining = i
+			remaining = append(remaining, records[i:]...)
 			break
 		}
 
 		if protect != nil {
 			protected, err := protect(record)
 			if err != nil {
-				if firstRemaining == -1 {
-					firstRemaining = i
-				}
 				fmt.Printf("Failed to check deletion protection for %s: %v\n", record.HTMLPath, err)
+				remaining = append(remaining, records[i:]...)
 				break
 			}
 			if protected {
-				if firstRemaining == -1 {
-					firstRemaining = i
-				}
 				fmt.Printf("Skipped shared HTML: %s (page_id: %d)\n", record.HTMLPath, record.PageID)
-				break
+				remaining = append(remaining, record)
+				continue
 			}
 		}
 
@@ -112,10 +108,8 @@ func (q *DeletionQueue) ProcessDeletionsWithProtection(baseDir string, retention
 		if err := os.Remove(fullPath); err != nil {
 			if !os.IsNotExist(err) {
 				// 删除失败（权限等问题），保留这条记录
-				if firstRemaining == -1 {
-					firstRemaining = i
-				}
 				fmt.Printf("Failed to delete %s: %v\n", record.HTMLPath, err)
+				remaining = append(remaining, records[i:]...)
 				break // 后续记录也保留
 			}
 			// 文件不存在，视为已删除
@@ -124,12 +118,6 @@ func (q *DeletionQueue) ProcessDeletionsWithProtection(baseDir string, retention
 			fmt.Printf("Deleted superseded HTML: %s (page_id: %d, age: %v)\n",
 				record.HTMLPath, record.PageID, time.Since(record.Timestamp))
 		}
-	}
-
-	// 保留未处理的记录
-	var remaining []DeletionRecord
-	if firstRemaining >= 0 {
-		remaining = records[firstRemaining:]
 	}
 
 	if err := q.writeRecords(remaining); err != nil {

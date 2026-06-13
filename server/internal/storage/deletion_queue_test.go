@@ -178,6 +178,50 @@ func TestDeletionQueue_ProcessDeletions_MixedExpiry(t *testing.T) {
 	}
 }
 
+func TestDeletionQueue_ProcessDeletions_ProtectedExpiredFileDoesNotBlockLaterDeletes(t *testing.T) {
+	q, dir := newTestQueue(t)
+	baseDir := filepath.Join(dir, "data")
+
+	createHTMLFile(t, baseDir, "html/shared.html")
+	createHTMLFile(t, baseDir, "html/old.html")
+	createHTMLFile(t, baseDir, "html/recent.html")
+
+	f, _ := os.Create(q.queueFile)
+	enc := json.NewEncoder(f)
+	enc.Encode(DeletionRecord{HTMLPath: "html/shared.html", Timestamp: time.Now().AddDate(0, 0, -12), PageID: 1})
+	enc.Encode(DeletionRecord{HTMLPath: "html/old.html", Timestamp: time.Now().AddDate(0, 0, -10), PageID: 2})
+	enc.Encode(DeletionRecord{HTMLPath: "html/recent.html", Timestamp: time.Now().AddDate(0, 0, -2), PageID: 3})
+	f.Close()
+
+	deleted, err := q.ProcessDeletionsWithProtection(baseDir, 7, func(record DeletionRecord) (bool, error) {
+		return record.HTMLPath == "html/shared.html", nil
+	})
+	if err != nil {
+		t.Fatalf("ProcessDeletionsWithProtection: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1", deleted)
+	}
+
+	if _, err := os.Stat(filepath.Join(baseDir, "html/shared.html")); err != nil {
+		t.Fatalf("shared.html should remain: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, "html/old.html")); !os.IsNotExist(err) {
+		t.Fatal("old.html should have been deleted")
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, "html/recent.html")); err != nil {
+		t.Fatalf("recent.html should remain: %v", err)
+	}
+
+	records := readQueueFile(t, q.queueFile)
+	if len(records) != 2 {
+		t.Fatalf("queue should have 2 records, got %d", len(records))
+	}
+	if records[0].HTMLPath != "html/shared.html" || records[1].HTMLPath != "html/recent.html" {
+		t.Fatalf("remaining records = %+v, want shared then recent", records)
+	}
+}
+
 func TestDeletionQueue_ProcessDeletions_FileAlreadyGone(t *testing.T) {
 	q, dir := newTestQueue(t)
 	baseDir := filepath.Join(dir, "data")

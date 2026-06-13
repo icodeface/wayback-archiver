@@ -166,6 +166,9 @@ func (h *Handler) RevokePageShare(c *gin.Context) {
 }
 
 func (h *Handler) getActiveShare(c *gin.Context) (*models.PageShare, string, bool) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Robots-Tag", "noindex, nofollow")
+
 	token := c.Param("token")
 	if token == "" {
 		c.String(http.StatusNotFound, "Share not found")
@@ -182,7 +185,6 @@ func (h *Handler) getActiveShare(c *gin.Context) (*models.PageShare, string, boo
 		return nil, "", false
 	}
 
-	c.Header("X-Robots-Tag", "noindex, nofollow")
 	return share, token, true
 }
 
@@ -270,7 +272,7 @@ func (h *Handler) ProxySharedResource(c *gin.Context) {
 	}
 
 	if resource.ResourceType == "css" {
-		h.serveRewrittenCSSWithResolver(c, resource, "/share/"+url.PathEscape(c.Param("token"))+"/", func(resourceURL string) (string, bool) {
+		h.serveRewrittenCSSWithResolverAndCache(c, resource, "/share/"+url.PathEscape(c.Param("token"))+"/", "no-store", func(resourceURL string) (string, bool) {
 			cssResource, findErr := h.findResourceForShare(resourceURL, share.TokenHash)
 			if findErr != nil {
 				log.Printf("[Share] Failed to resolve CSS sub-resource %s: %v", resourceURL, findErr)
@@ -320,13 +322,13 @@ func (h *Handler) serveSharedLocalResource(c *gin.Context, share *models.PageSha
 		c.String(http.StatusForbidden, "Invalid resource path")
 		return
 	}
-	serveFileStreaming(c, safePath)
+	serveFileStreamingWithCacheControl(c, safePath, "no-store")
 }
 
 func (h *Handler) serveResourceFile(c *gin.Context, resource *models.Resource) {
 	filePath := filepath.Join(h.dataDir, resource.FilePath)
 	c.Header("Content-Type", detectContentType(resource))
-	c.Header("Cache-Control", "public, max-age=31536000")
+	c.Header("Cache-Control", "no-store")
 
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -351,7 +353,7 @@ func (h *Handler) serveSharedArchivedHTMLResource(c *gin.Context, resource *mode
 	sanitized := sanitizeArchivedHTML(string(htmlContent))
 	sanitized = rewriteHTMLForShare(sanitized, token)
 	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.Header("Cache-Control", "public, max-age=31536000")
+	c.Header("Cache-Control", "no-store")
 	c.Header("Content-Security-Policy", "default-src 'self'; script-src 'none'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'self'; object-src 'none';")
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(sanitized))
 }
