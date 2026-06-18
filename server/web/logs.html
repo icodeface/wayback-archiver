@@ -155,11 +155,25 @@
         </div>
     </div>
     <script>
+        const LOG_CHUNK_LIMIT = 128 * 1024;
+        const TOP_LOAD_THRESHOLD = 48;
+
         let currentFile = null;
         let autoScroll = true;
         let filterText = '';
         let refreshTimer = null;
         let userScrolling = false;
+        let logRequestSeq = 0;
+        let loadingBefore = false;
+        let loadingAfter = false;
+        let logLines = [];
+        let logState = {
+            startOffset: 0,
+            endOffset: 0,
+            fileSize: 0,
+            hasMoreBefore: false,
+            hasMoreAfter: false
+        };
 
         async function loadFileList() {
             try {
@@ -204,25 +218,67 @@
         }
 
         async function selectFile(filename) {
+            stopAutoRefresh();
             currentFile = filename;
+            logRequestSeq++;
+            resetLogState();
             document.querySelectorAll('.file-item').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.file-item').forEach(el => {
                 if (el.getAttribute('data-filename') === filename) {
                     el.classList.add('active');
                 }
             });
-            await loadLogContent();
+            await loadInitialLog();
             if (autoScroll) startAutoRefresh();
         }
 
-        async function loadLogContent() {
+        function resetLogState() {
+            loadingBefore = false;
+            loadingAfter = false;
+            logLines = [];
+            logState = {
+                startOffset: 0,
+                endOffset: 0,
+                fileSize: 0,
+                hasMoreBefore: false,
+                hasMoreAfter: false
+            };
+        }
+
+        async function fetchLogRange(params = {}) {
+            const query = new URLSearchParams();
+            query.set('limit', String(LOG_CHUNK_LIMIT));
+            if (params.before !== undefined) query.set('before', String(params.before));
+            if (params.after !== undefined) query.set('after', String(params.after));
+
+            const res = await fetch(`/api/logs/${encodeURIComponent(currentFile)}?${query.toString()}`);
+            if (!res.ok) throw new Error(`load log failed: ${res.status}`);
+            return res.json();
+        }
+
+        async function loadInitialLog() {
             if (!currentFile) return;
+            const requestSeq = logRequestSeq;
+            const viewer = document.getElementById('logViewer');
+            viewer.innerHTML = '<div class="empty-state">Loading...</div>';
+
             try {
-                const res = await fetch(`/api/logs/${encodeURIComponent(currentFile)}?tail=2000`);
-                const data = await res.json();
-                renderLog(data.content || '');
+                const data = await fetchLogRange();
+                if (requestSeq !== logRequestSeq) return;
+
+                logState.startOffset = Number(data.start_offset || 0);
+                logState.endOffset = Number(data.end_offset || 0);
+                logState.fileSize = Number(data.file_size || 0);
+                logState.hasMoreBefore = Boolean(data.has_more_before);
+                logState.hasMoreAfter = Boolean(data.has_more_after);
+                logLines = parseLogLines(data.content || '');
+
+                renderLoadedLines();
+                scrollToBottom();
             } catch (e) {
-                document.getElementById('logViewer').innerHTML = '<div class="empty-state">Failed to load log</div>';
+                if (requestSeq === logRequestSeq) {
+                    viewer.innerHTML = '<div class="empty-state">Failed to load log</div>';
+                }
             }
         }
 
@@ -238,27 +294,180 @@
             return '';
         }
 
-        function renderLog(content) {
-            const viewer = document.getElementById('logViewer');
+        function parseLogLines(content) {
+            if (!content) return [];
             const lines = content.split('\n');
-            const filtered = filterText
-                ? lines.filter(l => l.toLowerCase().includes(filterText.toLowerCase()))
-                : lines;
+            if (lines.length > 0 && lines[lines.length - 1] === '') {
+                lines.pop();
+            }
+            return lines;
+        }
 
-            viewer.innerHTML = filtered.map(line => {
-                let html = escapeHtml(line);
-                if (filterText) {
-                    const re = new RegExp('(' + escapeRegex(filterText) + ')', 'gi');
-                    html = html.replace(re, '<span class="highlight">$1</span>');
+        function lineMatchesFilter(line) {
+            return !filterText || line.toLowerCase().includes(filterText.toLowerCase());
+        }
+
+        function createLogLine(line) {
+            const row = document.createElement('div');
+            row.className = 'log-line';
+            const cls = classifyLine(line);
+            if (cls) row.classList.add(cls);
+
+            if (!filterText) {
+                row.textContent = line;
+                return row;
+            }
+
+            appendHighlightedText(row, line, filterText);
+            return row;
+        }
+
+        function appendHighlightedText(row, line, term) {
+            const lowerLine = line.toLowerCase();
+            const lowerTerm = term.toLowerCase();
+            let pos = 0;
+
+            while (true) {
+                const idx = lowerLine.indexOf(lowerTerm, pos);
+                if (idx === -1) break;
+                if (idx > pos) {
+                    row.appendChild(document.createTextNode(line.slice(pos, idx)));
                 }
-                const cls = classifyLine(line);
-                return `<div class="log-line${cls ? ' ' + cls : ''}">${html}</div>`;
-            }).join('');
 
-            if (autoScroll) {
-                userScrolling = true;
-                viewer.scrollTop = viewer.scrollHeight;
+                const mark = document.createElement('span');
+                mark.className = 'highlight';
+                mark.textContent = line.slice(idx, idx + term.length);
+                row.appendChild(mark);
+                pos = idx + term.length;
+            }
+
+            if (pos < line.length) {
+                row.appendChild(document.createTextNode(line.slice(pos)));
+            }
+        }
+
+        function createLogFragment(lines) {
+            const fragment = document.createDocumentFragment();
+            let count = 0;
+            lines.forEach(line => {
+                if (!lineMatchesFilter(line)) return;
+                fragment.appendChild(createLogLine(line));
+                count++;
+            });
+            return { fragment, count };
+        }
+
+        function hasOnlyEmptyState(viewer) {
+            return viewer.children.length === 1 && viewer.firstElementChild.classList.contains('empty-state');
+        }
+
+        function renderLoadedLines() {
+            const viewer = document.getElementById('logViewer');
+            const { fragment, count } = createLogFragment(logLines);
+            viewer.innerHTML = '';
+            if (count === 0) {
+                const message = filterText ? 'No matching log lines in loaded range' : 'No logs';
+                viewer.innerHTML = `<div class="empty-state">${message}</div>`;
+                return;
+            }
+            viewer.appendChild(fragment);
+        }
+
+        function prependLogLines(lines) {
+            if (lines.length === 0) return;
+            logLines = lines.concat(logLines);
+
+            const viewer = document.getElementById('logViewer');
+            const { fragment, count } = createLogFragment(lines);
+            if (count === 0) return;
+
+            if (hasOnlyEmptyState(viewer)) {
+                viewer.innerHTML = '';
+                viewer.appendChild(fragment);
+                return;
+            }
+
+            const oldHeight = viewer.scrollHeight;
+            const oldTop = viewer.scrollTop;
+            viewer.prepend(fragment);
+            setProgrammaticScroll(() => {
+                viewer.scrollTop = oldTop + (viewer.scrollHeight - oldHeight);
+            });
+        }
+
+        function appendLogLines(lines) {
+            if (lines.length === 0) return;
+            logLines.push(...lines);
+
+            const viewer = document.getElementById('logViewer');
+            const { fragment, count } = createLogFragment(lines);
+            if (count === 0) return;
+
+            if (hasOnlyEmptyState(viewer)) {
+                viewer.innerHTML = '';
+            }
+            viewer.appendChild(fragment);
+            if (autoScroll) scrollToBottom();
+        }
+
+        function setProgrammaticScroll(fn) {
+            userScrolling = true;
+            fn();
+            requestAnimationFrame(() => {
                 userScrolling = false;
+            });
+        }
+
+        function scrollToBottom() {
+            const viewer = document.getElementById('logViewer');
+            setProgrammaticScroll(() => {
+                viewer.scrollTop = viewer.scrollHeight;
+            });
+        }
+
+        async function loadOlderLogs() {
+            if (!currentFile || loadingBefore || !logState.hasMoreBefore) return;
+
+            const requestSeq = logRequestSeq;
+            loadingBefore = true;
+            try {
+                const data = await fetchLogRange({ before: logState.startOffset });
+                if (requestSeq !== logRequestSeq) return;
+
+                logState.startOffset = Number(data.start_offset || 0);
+                logState.fileSize = Number(data.file_size || logState.fileSize);
+                logState.hasMoreBefore = Boolean(data.has_more_before);
+                prependLogLines(parseLogLines(data.content || ''));
+            } catch (e) {
+                // Keep the current view stable; a later scroll/refresh can retry.
+            } finally {
+                if (requestSeq === logRequestSeq) loadingBefore = false;
+            }
+        }
+
+        async function loadNewLogs() {
+            if (!currentFile || loadingAfter) return;
+
+            const requestSeq = logRequestSeq;
+            loadingAfter = true;
+            try {
+                const data = await fetchLogRange({ after: logState.endOffset });
+                if (requestSeq !== logRequestSeq) return;
+
+                const nextEnd = Number(data.end_offset || 0);
+                if (nextEnd < logState.endOffset) {
+                    await loadInitialLog();
+                    return;
+                }
+
+                logState.endOffset = nextEnd;
+                logState.fileSize = Number(data.file_size || logState.fileSize);
+                logState.hasMoreAfter = Boolean(data.has_more_after);
+                appendLogLines(parseLogLines(data.content || ''));
+            } catch (e) {
+                // Auto refresh is best-effort; keep the existing log visible.
+            } finally {
+                if (requestSeq === logRequestSeq) loadingAfter = false;
             }
         }
 
@@ -267,10 +476,7 @@
             const btn = document.getElementById('autoScrollBtn');
             btn.classList.toggle('active', autoScroll);
             if (autoScroll) {
-                const viewer = document.getElementById('logViewer');
-                userScrolling = true;
-                viewer.scrollTop = viewer.scrollHeight;
-                userScrolling = false;
+                scrollToBottom();
                 startAutoRefresh();
             } else {
                 stopAutoRefresh();
@@ -279,16 +485,18 @@
 
         function startAutoRefresh() {
             stopAutoRefresh();
-            refreshTimer = setInterval(() => loadLogContent(), 3000);
+            refreshTimer = setInterval(() => loadNewLogs(), 3000);
         }
 
         function stopAutoRefresh() {
             if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
         }
 
-        function refreshLog() {
-            loadFileList();
-            loadLogContent();
+        async function refreshLog() {
+            await loadFileList();
+            if (currentFile) {
+                await loadNewLogs();
+            }
         }
 
         // Detect user scroll: disable auto-scroll when scrolling up, re-enable when at bottom
@@ -296,6 +504,9 @@
             if (userScrolling) return; // ignore programmatic scrolls
             const viewer = document.getElementById('logViewer');
             const atBottom = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 30;
+            if (viewer.scrollTop < TOP_LOAD_THRESHOLD) {
+                loadOlderLogs();
+            }
             if (atBottom && !autoScroll) {
                 autoScroll = true;
                 document.getElementById('autoScrollBtn').classList.add('active');
@@ -308,24 +519,17 @@
         });
 
         document.getElementById('filterInput').addEventListener('input', (e) => {
+            const viewer = document.getElementById('logViewer');
+            const wasAtBottom = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 30;
             filterText = e.target.value;
-            loadLogContent();
+            renderLoadedLines();
+            if (wasAtBottom) scrollToBottom();
         });
 
         function formatSize(bytes) {
             if (bytes < 1024) return bytes + ' B';
             if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
             return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-        }
-
-        function escapeHtml(text) {
-            const d = document.createElement('div');
-            d.textContent = text;
-            return d.innerHTML;
-        }
-
-        function escapeRegex(str) {
-            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         }
 
         loadFileList();
