@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -23,16 +24,22 @@ const (
 	maxLogSize    = 10 * 1024 * 1024 // 10MB per file
 )
 
+const (
+	defaultLogRangeLimit = 256 * 1024
+	maxLogRangeLimit     = 1024 * 1024
+	maxReadSize          = 50 * 1024 * 1024
+)
+
 // Logger manages log file rotation and cleanup.
 type Logger struct {
-	dir      string
-	mu       sync.Mutex
-	file     *os.File
-	curDate  string
-	curSeq   int
-	curSize  atomic.Int64
-	stopCh   chan struct{}
-	writer   io.Writer
+	dir     string
+	mu      sync.Mutex
+	file    *os.File
+	curDate string
+	curSeq  int
+	curSize atomic.Int64
+	stopCh  chan struct{}
+	writer  io.Writer
 }
 
 // Setup initializes the logging system: creates log dir, opens today's
@@ -245,6 +252,15 @@ type LogFileInfo struct {
 	Date string `json:"date"`
 }
 
+type LogRangeResult struct {
+	Content       string `json:"content"`
+	StartOffset   int64  `json:"start_offset"`
+	EndOffset     int64  `json:"end_offset"`
+	FileSize      int64  `json:"file_size"`
+	HasMoreBefore bool   `json:"has_more_before"`
+	HasMoreAfter  bool   `json:"has_more_after"`
+}
+
 func (l *Logger) ListLogFiles() ([]LogFileInfo, error) {
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
@@ -283,29 +299,9 @@ func (l *Logger) ListLogFiles() ([]LogFileInfo, error) {
 
 // ReadLogFile reads the last N lines of a log file.
 func (l *Logger) ReadLogFile(filename string, tail int) (string, error) {
-	// Sanitize filename to prevent path traversal
-	if strings.Contains(filename, "/") || strings.Contains(filename, "\\") || strings.Contains(filename, "..") {
-		return "", fmt.Errorf("invalid filename")
-	}
-	if !strings.HasPrefix(filename, filePrefix) || !strings.HasSuffix(filename, fileSuffix) {
-		return "", fmt.Errorf("invalid log filename")
-	}
-
-	path := filepath.Join(l.dir, filename)
-
-	// Check for symlink to prevent symlink attacks
-	info, err := os.Lstat(path)
+	path, _, err := l.checkedLogFile(filename)
 	if err != nil {
 		return "", err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("symlink not allowed")
-	}
-
-	// Limit file size to prevent OOM attacks (now per-file limit is 10MB, so this is extra safety)
-	const maxReadSize = 50 * 1024 * 1024 // 50MB
-	if info.Size() > maxReadSize {
-		return "", fmt.Errorf("log file too large")
 	}
 
 	data, err := os.ReadFile(path)
@@ -326,4 +322,149 @@ func (l *Logger) ReadLogFile(filename string, tail int) (string, error) {
 		lines = lines[len(lines)-tail:]
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+// ReadLogRange reads a bounded byte range for progressive log viewing.
+// If after is set, it reads forward from that byte offset.
+// Otherwise it reads backward before the provided offset, or from EOF when before is nil.
+func (l *Logger) ReadLogRange(filename string, before, after *int64, limit int64) (*LogRangeResult, error) {
+	if before != nil && after != nil {
+		return nil, fmt.Errorf("before and after cannot be used together")
+	}
+	if before != nil && *before < 0 {
+		return nil, fmt.Errorf("invalid before")
+	}
+	if after != nil && *after < 0 {
+		return nil, fmt.Errorf("invalid after")
+	}
+	if limit <= 0 {
+		limit = defaultLogRangeLimit
+	}
+	if limit > maxLogRangeLimit {
+		limit = maxLogRangeLimit
+	}
+
+	path, info, err := l.checkedLogFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	size := info.Size()
+	start, end := rangeBounds(size, before, after, limit)
+	if end <= start {
+		return &LogRangeResult{
+			Content:       "",
+			StartOffset:   start,
+			EndOffset:     end,
+			FileSize:      size,
+			HasMoreBefore: start > 0,
+			HasMoreAfter:  end < size,
+		}, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	data := make([]byte, end-start)
+	n, err := f.ReadAt(data, start)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	data = data[:n]
+	end = start + int64(n)
+
+	// Backward chunks should begin at a line boundary when possible, so prepending
+	// older logs does not duplicate or display chopped lines between chunks.
+	if after == nil && start > 0 && len(data) > 0 {
+		lineBoundary, err := isLineBoundary(f, start)
+		if err != nil {
+			return nil, err
+		}
+		if !lineBoundary {
+			if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
+				drop := idx + 1
+				if drop < len(data) {
+					data = data[drop:]
+					start += int64(drop)
+				}
+			}
+		}
+	}
+
+	return &LogRangeResult{
+		Content:       string(data),
+		StartOffset:   start,
+		EndOffset:     end,
+		FileSize:      size,
+		HasMoreBefore: start > 0,
+		HasMoreAfter:  end < size,
+	}, nil
+}
+
+func (l *Logger) checkedLogFile(filename string) (string, os.FileInfo, error) {
+	// Sanitize filename to prevent path traversal.
+	if strings.Contains(filename, "/") || strings.Contains(filename, "\\") || strings.Contains(filename, "..") {
+		return "", nil, fmt.Errorf("invalid filename")
+	}
+	if !strings.HasPrefix(filename, filePrefix) || !strings.HasSuffix(filename, fileSuffix) {
+		return "", nil, fmt.Errorf("invalid log filename")
+	}
+
+	path := filepath.Join(l.dir, filename)
+
+	// Check for symlink to prevent symlink attacks.
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", nil, fmt.Errorf("symlink not allowed")
+	}
+
+	// Per-file rotation is 10MB; keep a larger guard for unexpected files.
+	if info.Size() > maxReadSize {
+		return "", nil, fmt.Errorf("log file too large")
+	}
+
+	return path, info, nil
+}
+
+func rangeBounds(size int64, before, after *int64, limit int64) (int64, int64) {
+	if after != nil {
+		start := *after
+		if start > size {
+			start = size
+		}
+		end := start + limit
+		if end > size {
+			end = size
+		}
+		return start, end
+	}
+
+	end := size
+	if before != nil && *before < end {
+		end = *before
+	}
+	start := end - limit
+	if start < 0 {
+		start = 0
+	}
+	return start, end
+}
+
+func isLineBoundary(f *os.File, offset int64) (bool, error) {
+	if offset <= 0 {
+		return true, nil
+	}
+
+	var prev [1]byte
+	_, err := f.ReadAt(prev[:], offset-1)
+	if err != nil {
+		return false, err
+	}
+	return prev[0] == '\n', nil
 }

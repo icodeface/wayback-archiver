@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -273,6 +274,109 @@ func TestRepeatedSizeRotationNoEmptyFiles(t *testing.T) {
 	}
 }
 
+func TestReadLogRangeBackwardChunks(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	logger, err := Setup(tmpDir)
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	defer logger.Close()
+
+	content := "line-1\nline-2\nline-3\nline-4\n"
+	if _, err := logger.writer.Write([]byte(content)); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	filename := filepath.Base(logger.file.Name())
+	latest, err := logger.ReadLogRange(filename, nil, nil, 14)
+	if err != nil {
+		t.Fatalf("ReadLogRange latest failed: %v", err)
+	}
+	if latest.Content != "line-3\nline-4\n" {
+		t.Fatalf("unexpected latest content: %q", latest.Content)
+	}
+	if latest.StartOffset != 14 || latest.EndOffset != int64(len(content)) {
+		t.Fatalf("unexpected latest offsets: start=%d end=%d", latest.StartOffset, latest.EndOffset)
+	}
+	if !latest.HasMoreBefore || latest.HasMoreAfter {
+		t.Fatalf("unexpected latest more flags: before=%v after=%v", latest.HasMoreBefore, latest.HasMoreAfter)
+	}
+
+	before := latest.StartOffset
+	older, err := logger.ReadLogRange(filename, &before, nil, 14)
+	if err != nil {
+		t.Fatalf("ReadLogRange older failed: %v", err)
+	}
+	if older.Content+latest.Content != content {
+		t.Fatalf("chunks did not reconstruct content: %q + %q", older.Content, latest.Content)
+	}
+	if older.StartOffset != 0 || older.EndOffset != before {
+		t.Fatalf("unexpected older offsets: start=%d end=%d", older.StartOffset, older.EndOffset)
+	}
+	if older.HasMoreBefore || !older.HasMoreAfter {
+		t.Fatalf("unexpected older more flags: before=%v after=%v", older.HasMoreBefore, older.HasMoreAfter)
+	}
+}
+
+func TestReadLogRangeAfterOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	logger, err := Setup(tmpDir)
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	defer logger.Close()
+
+	content := "line-1\nline-2\nline-3\n"
+	if _, err := logger.writer.Write([]byte(content)); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	filename := filepath.Base(logger.file.Name())
+	after := int64(len("line-1\n"))
+	result, err := logger.ReadLogRange(filename, nil, &after, int64(len("line-2\n")))
+	if err != nil {
+		t.Fatalf("ReadLogRange after failed: %v", err)
+	}
+	if result.Content != "line-2\n" {
+		t.Fatalf("unexpected content after offset: %q", result.Content)
+	}
+	if result.StartOffset != after || result.EndOffset != after+int64(len("line-2\n")) {
+		t.Fatalf("unexpected offsets: start=%d end=%d", result.StartOffset, result.EndOffset)
+	}
+	if !result.HasMoreBefore || !result.HasMoreAfter {
+		t.Fatalf("unexpected more flags: before=%v after=%v", result.HasMoreBefore, result.HasMoreAfter)
+	}
+}
+
+func TestReadLogRangeSkipsPartialFirstLineWhenPossible(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	logger, err := Setup(tmpDir)
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	defer logger.Close()
+
+	content := "aaa\nbbb\nccc\n"
+	if _, err := logger.writer.Write([]byte(content)); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	filename := filepath.Base(logger.file.Name())
+	result, err := logger.ReadLogRange(filename, nil, nil, 7)
+	if err != nil {
+		t.Fatalf("ReadLogRange failed: %v", err)
+	}
+	if result.Content != "ccc\n" {
+		t.Fatalf("expected partial first line to be skipped, got %q", result.Content)
+	}
+	if result.StartOffset != int64(len("aaa\nbbb\n")) {
+		t.Fatalf("unexpected start offset: %d", result.StartOffset)
+	}
+}
+
 // TestNoDeadlock_ConcurrentLogAndRotate 模拟午夜死锁场景：
 // rotate() 持有 l.mu 并调用 log.SetOutput()，与此同时 log.Printf 通过
 // sizeTrackingWriter.Write 尝试获取 l.mu → 使用 atomic 前会死锁。
@@ -327,4 +431,3 @@ func TestNoDeadlock_ConcurrentLogAndRotate(t *testing.T) {
 		t.Fatal("DEADLOCK detected: concurrent log.Printf and rotate() blocked for 5 seconds")
 	}
 }
-

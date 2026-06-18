@@ -238,8 +238,8 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 | `GET` | `/api/search?q=keyword&limit=50&offset=0` | Search pages by URL, title, or body text with pagination |
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
 | `GET` | `/api/logs` | List available log files |
-| `GET` | `/api/logs/latest` | Get latest log file content (supports `?tail=N&grep=keyword`) |
-| `GET` | `/api/logs/:filename` | Get log file content (supports `?tail=N&grep=keyword`) |
+| `GET` | `/api/logs/latest` | Get latest log file content (supports `?tail=N&grep=keyword`, or progressive reads with `?limit=bytes&before=offset` / `?limit=bytes&after=offset`) |
+| `GET` | `/api/logs/:filename` | Get log file content (supports `?tail=N&grep=keyword`, or progressive reads with `?limit=bytes&before=offset` / `?limit=bytes&after=offset`) |
 | `GET` | `/view/:id` | Replay an archived page |
 | `GET` | `/view/:id/md` | Get archived page content as Markdown (for AI/LLM consumption) |
 | `GET` | `/share/:token` | Public unauthenticated access to a specific shared snapshot |
