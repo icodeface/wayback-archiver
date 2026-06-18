@@ -163,3 +163,17 @@ func TestGetLogRange_BeforeAndAfterReturnsBadRequest(t *testing.T) {
 		t.Fatalf("expected 400 for before and after, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestGetLatestLogRange_OffsetRequiresExplicitFilename(t *testing.T) {
+	handler, cleanup := setupLogTestHandler(t)
+	defer cleanup()
+
+	router := setupLogRouter(handler)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/logs/latest?after=10&limit=1024", nil)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for latest offset range, got %d: %s", w.Code, w.Body.String())
+	}
+}

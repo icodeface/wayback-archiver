@@ -180,6 +180,10 @@ func (h *Handler) GetLatestLog(c *gin.Context) {
 	latest := files[0].Name
 
 	if isLogRangeRequest(c) {
+		if c.Query("before") != "" || c.Query("after") != "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "before/after offsets require an explicit log filename"})
+			return
+		}
 		h.getLogRange(c, latest)
 		return
 	}

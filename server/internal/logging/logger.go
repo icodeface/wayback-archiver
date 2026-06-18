@@ -25,7 +25,7 @@ const (
 )
 
 const (
-	defaultLogRangeLimit = 256 * 1024
+	defaultLogRangeLimit = 128 * 1024
 	maxLogRangeLimit     = 1024 * 1024
 	maxReadSize          = 50 * 1024 * 1024
 )
@@ -376,9 +376,21 @@ func (l *Logger) ReadLogRange(filename string, before, after *int64, limit int64
 	data = data[:n]
 	end = start + int64(n)
 
-	// Backward chunks should begin at a line boundary when possible, so prepending
-	// older logs does not duplicate or display chopped lines between chunks.
-	if after == nil && start > 0 && len(data) > 0 {
+	if after != nil {
+		// Forward chunks should end at a line boundary when possible, so polling
+		// newly appended logs does not split ordinary log lines across requests.
+		if end < size {
+			if idx := bytes.LastIndexByte(data, '\n'); idx >= 0 {
+				keep := idx + 1
+				if keep > 0 {
+					data = data[:keep]
+					end = start + int64(keep)
+				}
+			}
+		}
+	} else if start > 0 && len(data) > 0 {
+		// Backward chunks should begin at a line boundary when possible, so prepending
+		// older logs does not duplicate or display chopped lines between chunks.
 		lineBoundary, err := isLineBoundary(f, start)
 		if err != nil {
 			return nil, err

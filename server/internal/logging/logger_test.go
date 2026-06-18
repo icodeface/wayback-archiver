@@ -350,6 +350,37 @@ func TestReadLogRangeAfterOffset(t *testing.T) {
 	}
 }
 
+func TestReadLogRangeAfterStopsAtLineBoundary(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	logger, err := Setup(tmpDir)
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	defer logger.Close()
+
+	content := "line-1\nline-2\nline-3\n"
+	if _, err := logger.writer.Write([]byte(content)); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	filename := filepath.Base(logger.file.Name())
+	after := int64(len("line-1\n"))
+	result, err := logger.ReadLogRange(filename, nil, &after, int64(len("line-2\nlin")))
+	if err != nil {
+		t.Fatalf("ReadLogRange after failed: %v", err)
+	}
+	if result.Content != "line-2\n" {
+		t.Fatalf("expected forward chunk to stop at line boundary, got %q", result.Content)
+	}
+	if result.StartOffset != after || result.EndOffset != after+int64(len("line-2\n")) {
+		t.Fatalf("unexpected offsets: start=%d end=%d", result.StartOffset, result.EndOffset)
+	}
+	if !result.HasMoreBefore || !result.HasMoreAfter {
+		t.Fatalf("unexpected more flags: before=%v after=%v", result.HasMoreBefore, result.HasMoreAfter)
+	}
+}
+
 func TestReadLogRangeSkipsPartialFirstLineWhenPossible(t *testing.T) {
 	tmpDir := t.TempDir()
 
