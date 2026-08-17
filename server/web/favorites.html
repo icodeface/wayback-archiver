@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>收藏夹 // WAYBACK ARCHIVER</title>
+    <title>FAVORITES // WAYBACK ARCHIVER</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -234,11 +234,12 @@
 
         .page-actions {
             display: flex;
+            align-items: center;
             gap: 8px;
             flex-shrink: 0;
         }
 
-        .timeline-btn, .delete-btn, .unfavorite-btn {
+        .timeline-btn, .delete-btn {
             padding: 6px 12px;
             background: var(--color-surface);
             border: 1px solid var(--color-border);
@@ -249,6 +250,28 @@
             transition: all 0.2s;
         }
 
+        .favorite-btn {
+            width: 32px;
+            height: 28px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            color: var(--color-accent);
+            font-size: 0.875rem;
+            line-height: 1;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .favorite-btn:hover {
+            border-color: var(--color-accent);
+            color: var(--color-accent);
+        }
+
         .timeline-btn:hover {
             border-color: var(--color-cyan);
             color: var(--color-cyan);
@@ -257,11 +280,6 @@
         .delete-btn:hover {
             border-color: var(--color-warning);
             color: var(--color-warning);
-        }
-
-        .unfavorite-btn:hover {
-            border-color: var(--color-accent);
-            color: var(--color-accent);
         }
 
         .page-url {
@@ -363,21 +381,21 @@
         <header>
             <div>
                 <div class="title-group">
-                    <h1>收藏夹</h1>
+                    <h1>FAVORITES</h1>
                 </div>
                 <div class="subtitle">FAVORITE PAGES</div>
             </div>
             <div class="nav-links">
-                <a href="/" class="nav-link">返回首页</a>
-                <a href="/timeline" class="nav-link">时间线</a>
-                <a href="/logs" class="nav-link">日志</a>
+                <a href="/" class="nav-link">BACK TO ARCHIVES</a>
+                <a href="/timeline" class="nav-link">TIMELINE</a>
+                <a href="/logs" class="nav-link">LOGS</a>
             </div>
         </header>
 
         <div class="search-section">
             <div class="search-wrapper">
                 <span class="search-icon">⌕</span>
-                <input type="text" id="searchInput" placeholder="搜索收藏的页面...">
+                <input type="text" id="searchInput" placeholder="Search favorite pages...">
             </div>
         </div>
 
@@ -468,7 +486,7 @@
                 if (!isAbortError(error) && isCurrentRequest(request.seq)) {
                     console.error('Load error:', error);
                     document.getElementById('pageList').innerHTML =
-                        '<li class="empty"><div class="empty-icon">✗</div>加载失败</li>';
+                        '<li class="empty"><div class="empty-icon">✗</div>Failed to load</li>';
                 }
             } finally {
                 finishArchiveRequest(request.seq, request.controller);
@@ -512,7 +530,7 @@
                 if (!isAbortError(error) && isCurrentRequest(request.seq)) {
                     console.error('Search error:', error);
                     document.getElementById('pageList').innerHTML =
-                        '<li class="empty"><div class="empty-icon">✗</div>搜索失败</li>';
+                        '<li class="empty"><div class="empty-icon">✗</div>Search failed</li>';
                 }
             } finally {
                 finishArchiveRequest(request.seq, request.controller);
@@ -550,7 +568,7 @@
 
         function formatDate(dateString) {
             const date = new Date(dateString);
-            return date.toLocaleString('zh-CN', {
+            return date.toLocaleString('en-US', {
                 year: 'numeric',
                 month: 'short',
                 day: 'numeric',
@@ -559,7 +577,7 @@
             });
         }
 
-        // 只允许 http/https 外链，避免归档的 javascript: / data: URL 被点击执行
+        // Only allow http/https links so archived javascript: / data: URLs cannot execute.
         function normalizeExternalURL(rawURL) {
             try {
                 const parsed = new URL(rawURL, window.location.href);
@@ -594,7 +612,7 @@
             const pageList = document.getElementById('pageList');
 
             if (pages.length === 0) {
-                pageList.innerHTML = '<li class="empty"><div class="empty-icon">[ ]</div>暂无收藏</li>';
+                pageList.innerHTML = '<li class="empty"><div class="empty-icon">[ ]</div>No favorite pages</li>';
                 return;
             }
 
@@ -635,8 +653,11 @@
                 });
 
                 const unfavoriteBtn = document.createElement('button');
-                unfavoriteBtn.className = 'unfavorite-btn';
-                unfavoriteBtn.textContent = '取消收藏';
+                unfavoriteBtn.className = 'favorite-btn unfavorite-btn';
+                unfavoriteBtn.type = 'button';
+                unfavoriteBtn.textContent = '★';
+                unfavoriteBtn.setAttribute('aria-label', 'Remove from favorites');
+                unfavoriteBtn.setAttribute('title', 'Remove from favorites');
                 unfavoriteBtn.addEventListener('click', (e) => removeFavorite(e, page.id));
 
                 const deleteBtn = document.createElement('button');
@@ -698,17 +719,17 @@
                     loadCurrentMode(currentPage);
                 } else {
                     const error = await response.json();
-                    alert('取消收藏失败: ' + (error.error || '未知错误'));
+                    alert('Failed to remove favorite: ' + (error.error || 'Unknown error'));
                 }
             } catch (error) {
-                alert('取消收藏失败: ' + error.message);
+                alert('Failed to remove favorite: ' + error.message);
             }
         }
 
         async function deletePage(event, pageId) {
             event.stopPropagation();
 
-            if (!confirm('确定要删除这个页面记录吗？此操作无法撤销。')) {
+            if (!confirm('Delete this page record? This action cannot be undone.')) {
                 return;
             }
 
@@ -721,10 +742,10 @@
                     loadCurrentMode(currentPage);
                 } else {
                     const error = await response.json();
-                    alert('删除失败: ' + (error.error || '未知错误'));
+                    alert('Failed to delete page: ' + (error.error || 'Unknown error'));
                 }
             } catch (error) {
-                alert('删除失败: ' + error.message);
+                alert('Failed to delete page: ' + error.message);
             }
         }
 

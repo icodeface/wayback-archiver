@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -403,8 +403,14 @@
             background: transparent;
             border: 1px solid var(--color-border);
             color: var(--color-text-dim);
-            padding: 4px 12px;
+            width: 32px;
+            height: 28px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             font-size: 0.875rem;
+            line-height: 1;
             font-family: var(--font-mono);
             cursor: pointer;
             transition: all 0.2s ease;
@@ -877,7 +883,7 @@
 
         function formatDate(dateString) {
             const date = new Date(dateString);
-            return date.toLocaleString('zh-CN', {
+            return date.toLocaleString('en-US', {
                 year: 'numeric',
                 month: 'short',
                 day: 'numeric',
@@ -994,7 +1000,7 @@
         async function deletePage(event, pageId) {
             event.stopPropagation();
 
-            if (!confirm('确定要删除这个页面记录吗？此操作无法撤销。')) {
+            if (!confirm('Delete this page record? This action cannot be undone.')) {
                 return;
             }
 
@@ -1008,10 +1014,10 @@
                     loadCurrentMode(currentPage);
                 } else {
                     const error = await response.json();
-                    alert('删除失败: ' + (error.error || '未知错误'));
+                    alert('Failed to delete page: ' + (error.error || 'Unknown error'));
                 }
             } catch (error) {
-                alert('删除失败: ' + error.message);
+                alert('Failed to delete page: ' + error.message);
             }
         }
 
@@ -1024,7 +1030,7 @@
 
             const isFavorited = btn.classList.contains('favorited');
             const method = isFavorited ? 'DELETE' : 'POST';
-            const action = isFavorited ? '取消收藏' : '添加收藏';
+            const action = isFavorited ? 'Remove from favorites' : 'Add to favorites';
 
             try {
                 const response = await fetch(`/api/favorites/${pageId}`, {
@@ -1035,10 +1041,10 @@
                     updateFavoriteButton(btn, !isFavorited);
                 } else {
                     const error = await response.json();
-                    alert(`${action}失败: ` + (error.error || '未知错误'));
+                    alert(`${action} failed: ` + (error.error || 'Unknown error'));
                 }
             } catch (error) {
-                alert(`${action}失败: ` + error.message);
+                alert(`${action} failed: ` + error.message);
             }
         }
 
@@ -1052,11 +1058,11 @@
                 return;
             }
 
-            // 防抖 300ms，避免频繁请求
+            // Debounce for 300ms to avoid sending frequent requests.
             searchTimer = setTimeout(() => searchPages(keyword), 300);
         });
 
-        // 过滤器变化时重新加载
+        // Reload when a filter changes.
         function onFilterChange() {
             loadCurrentMode(1);
         }

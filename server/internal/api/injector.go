@@ -30,7 +30,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 			nextLink = `<span style="padding:4px 10px;font-size:12px;opacity:0.3;">▶</span>`
 		}
 
-		timelineLink := fmt.Sprintf(`<a href="/timeline?url=%s" style="color:white;text-decoration:none;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:3px;font-size:12px;background:rgba(255,255,255,0.1);" title="查看所有快照">%d snapshots</a>`,
+		timelineLink := fmt.Sprintf(`<a href="/timeline?url=%s" style="color:white;text-decoration:none;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:3px;font-size:12px;background:rgba(255,255,255,0.1);" title="View all snapshots">%d snapshots</a>`,
 			url.QueryEscape(page.URL), snapshotTotal)
 
 		navHTML = fmt.Sprintf(`
@@ -41,6 +41,16 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 
 	shareControls := fmt.Sprintf(`<button type="button" data-wayback-share-action="snapshot" data-page-id="%d" style="color:white;text-decoration:none;padding:4px 12px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;cursor:pointer;font-family:inherit;">Share</button>
 		<button type="button" data-wayback-share-action="revoke" style="display:none;color:white;text-decoration:none;padding:4px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;cursor:pointer;font-family:inherit;">Revoke</button>`, page.ID)
+	isFavorite := page.IsFavorite != nil && *page.IsFavorite
+	favoriteClass := ""
+	favoriteColor := "white"
+	favoriteLabel := "Add to favorites"
+	if isFavorite {
+		favoriteClass = " favorited"
+		favoriteColor = "#00ff88"
+		favoriteLabel = "Remove from favorites"
+	}
+	favoriteControls := fmt.Sprintf(`<button type="button" data-wayback-favorite-action="toggle" data-page-id="%d" aria-label="%s" title="%s" class="wayback-favorite%s" style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:28px;padding:0;border:1px solid rgba(255,255,255,0.3);border-radius:4px;color:%s;background:rgba(255,255,255,0.1);font-size:17px;line-height:1;white-space:nowrap;cursor:pointer;font-family:inherit;">★</button>`, page.ID, favoriteLabel, favoriteLabel, favoriteClass, favoriteColor)
 
 	// 归档信息栏 HTML
 	archiveHeader := fmt.Sprintf(`
@@ -69,6 +79,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		<span style="font-size:11px;opacity:0.7;white-space:nowrap;">%s</span>
 	</div>
 	<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+		%s
 		%s
 		%s
 		<a href="/" style="color:white;text-decoration:none;padding:4px 12px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:12px;background:rgba(255,255,255,0.1);white-space:nowrap;">← Archives</a>
@@ -315,6 +326,37 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 		event.stopPropagation();
 	}
 
+	function initFavoriteControl() {
+		const button = document.querySelector('[data-wayback-favorite-action="toggle"]');
+		if (!button) return;
+		button.addEventListener('click', async function(event) {
+			stopShareEvent(event);
+			if (button.disabled) return;
+			const pageId = button.getAttribute('data-page-id');
+			if (!pageId) return;
+
+			const isFavorite = button.classList.contains('favorited');
+			button.disabled = true;
+			try {
+				const response = await fetch('/api/favorites/' + encodeURIComponent(pageId), {
+					method: isFavorite ? 'DELETE' : 'POST',
+					credentials: 'same-origin'
+				});
+				const data = await response.json().catch(function() { return {}; });
+				if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status));
+				const nextState = !isFavorite;
+				button.classList.toggle('favorited', nextState);
+				button.style.color = nextState ? '#00ff88' : 'white';
+				button.setAttribute('aria-label', nextState ? 'Remove from favorites' : 'Add to favorites');
+				button.setAttribute('title', nextState ? 'Remove from favorites' : 'Add to favorites');
+			} catch (error) {
+				alert((isFavorite ? 'Remove from favorites' : 'Add to favorites') + ' failed: ' + error.message);
+			} finally {
+				button.disabled = false;
+			}
+		});
+	}
+
 	function initShareControls() {
 		const shareButton = findShareControl('snapshot');
 		const revokeButton = findShareControl('revoke');
@@ -334,13 +376,13 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 					updateShareSecondaryControls();
 				}
 
-				const copyResult = await copyShareURL(activeShare.snapshot_url, '分享已创建，请复制链接');
+				const copyResult = await copyShareURL(activeShare.snapshot_url, 'Share created. Copy the link.');
 				shareButton.textContent = copyResult === 'copied' ? 'Copied' : 'Created';
 				setTimeout(function() {
 					shareButton.textContent = 'Share';
 				}, 1600);
 			} catch (error) {
-				alert('分享失败: ' + error.message);
+				alert('Share failed: ' + error.message);
 				shareButton.textContent = 'Share';
 			} finally {
 				setShareControlBusy(shareButton, false);
@@ -351,7 +393,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 			revokeButton.addEventListener('click', async function(event) {
 				stopShareEvent(event);
 				if (!activeShare || !activeShare.id) return;
-				if (!confirm('确定要撤销这个公开分享吗？')) return;
+				if (!confirm('Revoke this public share?')) return;
 
 				setShareControlBusy(revokeButton, true);
 				const originalText = revokeButton.textContent;
@@ -371,7 +413,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 					shareButton.textContent = 'Share';
 					revokeButton.textContent = originalText;
 				} catch (error) {
-					alert('撤销失败: ' + error.message);
+					alert('Revoke failed: ' + error.message);
 					revokeButton.textContent = originalText;
 				} finally {
 					setShareControlBusy(revokeButton, false);
@@ -385,12 +427,14 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 	// 页面加载完成后执行
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', function() {
+			initFavoriteControl();
 			initShareControls();
 			localizeArchiveTimes();
 			fixPositionedElements();
 			forceEnableInteraction();
 		});
 	} else {
+		initFavoriteControl();
 		initShareControls();
 		localizeArchiveTimes();
 		fixPositionedElements();
@@ -408,7 +452,7 @@ func injectArchiveHeader(html string, page *models.Page, prev *models.Page, next
 
 })();
 </script>
-	`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), archiveTimeElement(page.CapturedAt, "full"), navHTML, shareControls, nonce)
+	`, escapeHTML(page.URL), escapeHTML(page.URL), escapeHTML(page.URL), archiveTimeElement(page.CapturedAt, "full"), navHTML, shareControls, favoriteControls, nonce)
 
 	// 在 <body> 标签后注入
 	if bodyTagRe.MatchString(html) {

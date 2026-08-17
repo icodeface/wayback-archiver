@@ -94,6 +94,15 @@ func (h *Handler) ViewPage(c *gin.Context) {
 		return
 	}
 
+	// 详情页顶部栏也需要显示当前快照的收藏状态。
+	isFavorite, err := h.db.IsFavorite(page.ID)
+	if err != nil {
+		log.Printf("Failed to load favorite state for page %d: %v", page.ID, err)
+		c.String(http.StatusInternalServerError, "Database error")
+		return
+	}
+	page.IsFavorite = &isFavorite
+
 	// 获取快照邻居信息（用于导航）
 	prev, next, snapshotTotal, _ := h.db.GetSnapshotNeighbors(page.URL, page.ID)
 
