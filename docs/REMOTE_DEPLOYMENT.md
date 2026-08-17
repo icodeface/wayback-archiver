@@ -5,7 +5,7 @@ Quick guide to deploy Wayback Archiver on a remote server.
 ## Prerequisites
 
 - Linux server with public IP or domain
-- Go 1.21+ and GCC (for building from source)
+- Go 1.25+ and GCC (for building from source)
 - **PostgreSQL 12+** (recommended for remote deployment with multiple users)
 
 ## 1. Database Setup

@@ -80,7 +80,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
 
       - name: Install toolchain
