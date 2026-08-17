@@ -231,12 +231,12 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 | `GET` | `/api/version` | Server version and build info |
 | `POST` | `/api/archive` | Create a page archive |
 | `PUT` | `/api/archive/:id` | Update an existing archive snapshot |
-| `GET` | `/api/pages?limit=50&offset=0` | List archived pages with pagination; each page includes `is_favorite` |
-| `GET` | `/api/pages/:id` | Get page details, including `is_favorite` |
+| `GET` | `/api/pages?limit=50&offset=0` | List archived pages with pagination |
+| `GET` | `/api/pages/:id` | Get page details |
 | `POST` | `/api/pages/:id/shares` | Create a public share link (authenticated) |
 | `GET` | `/api/pages/:id/shares` | List share records for a page (token plaintext is not returned) |
 | `DELETE` | `/api/shares/:id` | Revoke a public share |
-| `GET` | `/api/search?q=keyword&limit=50&offset=0` | Search pages by URL, title, or body text with pagination; each page includes `is_favorite` |
+| `GET` | `/api/search?q=keyword&limit=50&offset=0` | Search pages by URL, title, or body text with pagination |
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
 | `GET` | `/api/favorites?limit=50&offset=0` | List favorited pages, newest favorite first |
 | `GET` | `/api/favorites/search?q=keyword&limit=50&offset=0` | Search within favorites by URL, title, or body text |

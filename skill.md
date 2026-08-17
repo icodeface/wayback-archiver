@@ -108,8 +108,6 @@ When `AUTH_PASSWORD` is set, use HTTP Basic Auth:
 curl "http://localhost:8080/api/pages?limit=100&offset=0"
 ```
 
-Each page returned by the list, search, and detail APIs includes `is_favorite`.
-
 #### Search Pages
 
 ```bash
