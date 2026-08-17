@@ -4,9 +4,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
+	"wayback/internal/models"
 )
 
 // AddFavorite 添加收藏
@@ -70,39 +70,33 @@ func (h *Handler) IsFavorite(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"is_favorite": isFavorite})
 }
 
-// IsFavoriteBatch 批量检查收藏状态
-func (h *Handler) IsFavoriteBatch(c *gin.Context) {
-	idsParam := c.Query("ids")
-	if idsParam == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing ids parameter"})
-		return
+// attachFavoriteStates adds favorite state to a page-list response with one
+// database query. The field remains optional for detail and timeline responses.
+func (h *Handler) attachFavoriteStates(pages []models.Page) error {
+	if len(pages) == 0 {
+		return nil
 	}
 
-	// 解析 ID 列表
-	idStrs := strings.Split(idsParam, ",")
-	if len(idStrs) > 100 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "too many ids (max 100)"})
-		return
+	pageIDs := make([]int64, len(pages))
+	for i := range pages {
+		pageIDs[i] = pages[i].ID
 	}
-
-	pageIDs := make([]int64, 0, len(idStrs))
-	for _, idStr := range idStrs {
-		id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id format"})
-			return
-		}
-		pageIDs = append(pageIDs, id)
-	}
-
-	result, err := h.db.IsFavoriteBatch(pageIDs)
+	states, err := h.db.IsFavoriteBatch(pageIDs)
 	if err != nil {
-		log.Printf("Failed to check batch favorite status: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check favorite status"})
-		return
+		return err
 	}
+	for i := range pages {
+		isFavorite := states[pages[i].ID]
+		pages[i].IsFavorite = &isFavorite
+	}
+	return nil
+}
 
-	c.JSON(http.StatusOK, result)
+func markFavoritePages(pages []models.Page) {
+	for i := range pages {
+		isFavorite := true
+		pages[i].IsFavorite = &isFavorite
+	}
 }
 
 // ListFavorites 列出收藏的页面
@@ -118,6 +112,7 @@ func (h *Handler) ListFavorites(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list favorites"})
 		return
 	}
+	markFavoritePages(pages)
 
 	total, err := h.db.GetFavoritesCount()
 	if err != nil {
@@ -157,6 +152,7 @@ func (h *Handler) SearchFavorites(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "search failed"})
 		return
 	}
+	markFavoritePages(pages)
 
 	total, err := h.db.GetSearchFavoritesCount(keyword)
 	if err != nil {

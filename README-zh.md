@@ -198,12 +198,12 @@ export https_proxy=http://127.0.0.1:7897
 | `GET` | `/api/version` | 服务器版本和构建信息 |
 | `POST` | `/api/archive` | 创建页面归档 |
 | `PUT` | `/api/archive/:id` | 更新已有归档快照 |
-| `GET` | `/api/pages?limit=50&offset=0` | 分页列出归档页面 |
-| `GET` | `/api/pages/:id` | 获取页面详情 |
+| `GET` | `/api/pages?limit=50&offset=0` | 分页列出归档页面，每个页面包含 `is_favorite` |
+| `GET` | `/api/pages/:id` | 获取页面详情，包含 `is_favorite` |
 | `POST` | `/api/pages/:id/shares` | 创建公开分享链接（需要鉴权） |
 | `GET` | `/api/pages/:id/shares` | 列出页面的分享记录（不返回 token 明文） |
 | `DELETE` | `/api/shares/:id` | 撤销公开分享 |
-| `GET` | `/api/search?q=keyword&limit=50&offset=0` | 按 URL、标题或正文分页搜索 |
+| `GET` | `/api/search?q=keyword&limit=50&offset=0` | 按 URL、标题或正文分页搜索，每个页面包含 `is_favorite` |
 | `GET` | `/api/pages/timeline?url=URL` | 获取同一 URL 的所有快照（时间线视图） |
 | `GET` | `/api/favorites?limit=50&offset=0` | 列出收藏页面，按收藏时间倒序 |
 | `GET` | `/api/favorites/search?q=keyword&limit=50&offset=0` | 在收藏中按 URL、标题或正文搜索 |

@@ -92,6 +92,11 @@ func (h *Handler) ListPages(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if err := h.attachFavoriteStates(pages); err != nil {
+		log.Printf("Failed to attach favorite states: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load favorite states"})
+		return
+	}
 
 	// 获取总数
 	total, err := h.db.GetTotalPagesCount(from, to, domain)
@@ -124,6 +129,13 @@ func (h *Handler) GetPage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "page not found"})
 		return
 	}
+	isFavorite, err := h.db.IsFavorite(pageID)
+	if err != nil {
+		log.Printf("Failed to load favorite state for page %d: %v", pageID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load favorite state"})
+		return
+	}
+	page.IsFavorite = &isFavorite
 	c.JSON(http.StatusOK, page)
 }
 
@@ -150,6 +162,11 @@ func (h *Handler) SearchPages(c *gin.Context) {
 	pages, err := h.db.SearchPages(keyword, limit, offset, from, to, domain)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.attachFavoriteStates(pages); err != nil {
+		log.Printf("Failed to attach favorite states: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load favorite states"})
 		return
 	}
 

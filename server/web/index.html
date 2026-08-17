@@ -934,6 +934,7 @@
                 favoriteBtn.type = 'button';
                 favoriteBtn.setAttribute('data-page-id', String(page.id));
                 favoriteBtn.textContent = '★';
+                updateFavoriteButton(favoriteBtn, page.is_favorite === true);
                 favoriteBtn.addEventListener('click', (event) => toggleFavorite(event, page.id, favoriteBtn));
 
                 const deleteBtn = document.createElement('button');
@@ -983,7 +984,6 @@
             });
 
             pageList.appendChild(fragment);
-            applyFavoriteStates();
         }
 
         function openTimeline(event, pageUrl) {
@@ -1012,32 +1012,6 @@
                 }
             } catch (error) {
                 alert('删除失败: ' + error.message);
-            }
-        }
-
-        // 批量查询当前页面的收藏状态（一次请求）
-        async function applyFavoriteStates() {
-            const buttons = Array.from(document.querySelectorAll('.favorite-btn'));
-            if (buttons.length === 0) return;
-
-            try {
-                // 收集所有页面 ID
-                const pageIds = buttons.map(btn => btn.dataset.pageId);
-
-                // 一次请求批量查询
-                const response = await fetch(`/api/favorites/batch-status?ids=${pageIds.join(',')}`);
-                if (!response.ok) return;
-
-                const result = await response.json();
-
-                // 更新按钮状态
-                buttons.forEach(btn => {
-                    const pageId = btn.dataset.pageId;
-                    const isFavorite = result[pageId] === true;
-                    updateFavoriteButton(btn, isFavorite);
-                });
-            } catch (error) {
-                console.error('Failed to load favorite states:', error);
             }
         }
 

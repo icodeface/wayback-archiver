@@ -442,6 +442,11 @@
                     signal: request.controller.signal
                 });
 
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+
                 if (!isCurrentRequest(request.seq)) {
                     return;
                 }
@@ -450,7 +455,13 @@
                 const pages = data.pages || [];
                 const total = data.total || 0;
 
-                totalPages = Math.ceil(total / ITEMS_PER_PAGE);
+                const computedTotalPages = Math.ceil(total / ITEMS_PER_PAGE);
+                if (total > 0 && page > computedTotalPages) {
+                    loadCurrentMode(computedTotalPages);
+                    return;
+                }
+
+                totalPages = computedTotalPages;
                 renderPages(pages);
                 updatePagination();
             } catch (error) {
@@ -475,6 +486,11 @@
                     { signal: request.controller.signal }
                 );
 
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+
                 if (!isCurrentRequest(request.seq)) {
                     return;
                 }
@@ -483,7 +499,13 @@
                 const pages = data.pages || [];
                 const total = data.total || 0;
 
-                totalPages = Math.ceil(total / ITEMS_PER_PAGE);
+                const computedTotalPages = Math.ceil(total / ITEMS_PER_PAGE);
+                if (total > 0 && page > computedTotalPages) {
+                    loadCurrentMode(computedTotalPages);
+                    return;
+                }
+
+                totalPages = computedTotalPages;
                 renderPages(pages);
                 updatePagination();
             } catch (error) {

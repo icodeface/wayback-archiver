@@ -17,6 +17,7 @@ type Page struct {
 	SearchSnippet    string    `json:"search_snippet,omitempty"`
 	HighlightedURL   string    `json:"highlighted_url,omitempty"`
 	HighlightedTitle string    `json:"highlighted_title,omitempty"`
+	IsFavorite       *bool     `json:"is_favorite,omitempty"`
 }
 
 type Resource struct {
