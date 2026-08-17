@@ -37,6 +37,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go 服务器 ──▶ SQLite/Pos
 - **SPA 感知** — 检测单页应用导航，按路由重置捕获状态
 - **防刷新保护** — 归档页面被冻结：定时器、WebSocket 和导航 API 均被拦截
 - **Web UI** — 响应式界面，支持全文搜索（页面内容、URL、标题）、按时间范围和域名筛选和还原归档页面
+- **收藏** — 在列表中给页面加星标，并在独立的 `/favorites` 页面查看和搜索收藏
 - **RESTful API** — 提供完整的归档和查询接口
 
 ## 环境要求
@@ -204,6 +205,11 @@ export https_proxy=http://127.0.0.1:7897
 | `DELETE` | `/api/shares/:id` | 撤销公开分享 |
 | `GET` | `/api/search?q=keyword&limit=50&offset=0` | 按 URL、标题或正文分页搜索 |
 | `GET` | `/api/pages/timeline?url=URL` | 获取同一 URL 的所有快照（时间线视图） |
+| `GET` | `/api/favorites?limit=50&offset=0` | 列出收藏页面，按收藏时间倒序 |
+| `GET` | `/api/favorites/search?q=keyword&limit=50&offset=0` | 在收藏中按 URL、标题或正文搜索 |
+| `GET` | `/api/favorites/:id/status` | 查询页面是否已收藏 |
+| `POST` | `/api/favorites/:id` | 添加收藏（幂等；页面不存在返回 `404`） |
+| `DELETE` | `/api/favorites/:id` | 取消收藏（幂等） |
 | `GET` | `/api/logs` | 列出可用日志文件 |
 | `GET` | `/api/logs/latest` | 获取最新日志文件内容（支持 `?tail=N&grep=关键词`，也支持 `?limit=字节数` 读取最新文件尾部） |
 | `GET` | `/api/logs/:filename` | 获取日志文件内容（支持 `?tail=N&grep=关键词`，也支持 `?limit=字节数&before=offset` / `?limit=字节数&after=offset` 渐进读取；默认分块大小为 128 KiB） |

@@ -37,6 +37,7 @@ Chrome + Tampermonkey ──HTTP POST──▶ Go Server ──▶ SQLite/Postgr
 - **SPA-aware** — detects SPA navigation, resets capture state per route
 - **Anti-refresh protection** — archived pages are frozen: timers, WebSockets, and navigation APIs are neutralized
 - **Web UI** — responsive interface to browse, full-text search (page content, URL, and title), filter by date range and domain, and replay archived pages
+- **Favorites** — star pages from the list and review them on a dedicated `/favorites` page with its own search
 - **RESTful API** — programmatic access to all archiving and query operations
 
 ## Prerequisites
@@ -237,6 +238,11 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 | `DELETE` | `/api/shares/:id` | Revoke a public share |
 | `GET` | `/api/search?q=keyword&limit=50&offset=0` | Search pages by URL, title, or body text with pagination |
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
+| `GET` | `/api/favorites?limit=50&offset=0` | List favorited pages, newest favorite first |
+| `GET` | `/api/favorites/search?q=keyword&limit=50&offset=0` | Search within favorites by URL, title, or body text |
+| `GET` | `/api/favorites/:id/status` | Check whether a page is favorited |
+| `POST` | `/api/favorites/:id` | Add a page to favorites (idempotent; `404` if the page does not exist) |
+| `DELETE` | `/api/favorites/:id` | Remove a page from favorites (idempotent) |
 | `GET` | `/api/logs` | List available log files |
 | `GET` | `/api/logs/latest` | Get latest log file content (supports `?tail=N&grep=keyword`, or initial progressive read with `?limit=bytes`) |
 | `GET` | `/api/logs/:filename` | Get log file content (supports `?tail=N&grep=keyword`, or progressive reads with `?limit=bytes&before=offset` / `?limit=bytes&after=offset`; default chunk size is 128 KiB) |

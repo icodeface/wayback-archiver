@@ -1416,7 +1416,7 @@ func (db *PostgresDB) ListFavorites(limit, offset int) ([]models.Page, error) {
 		SELECT ` + pageSelectColumns + `
 		FROM pages p
 		INNER JOIN favorites f ON p.id = f.page_id
-		ORDER BY f.created_at DESC
+		ORDER BY f.created_at DESC, p.id DESC
 		LIMIT $1 OFFSET $2
 	`
 	rows, err := db.conn.Query(query, limit, offset)
@@ -1425,7 +1425,7 @@ func (db *PostgresDB) ListFavorites(limit, offset int) ([]models.Page, error) {
 	}
 	defer rows.Close()
 
-	var pages []models.Page
+	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
 		if err := scanPage(rows, &p); err != nil {
@@ -1443,39 +1443,35 @@ func (db *PostgresDB) GetFavoritesCount() (int, error) {
 	return count, err
 }
 
+// postgresFavoritesSearchWhere 构造收藏搜索的 WHERE 子句。
+// 与 buildSearchWhere 一致：转义 LIKE 通配符并声明 ESCAPE，避免用户输入的
+// % / _ 被当作通配符，同时复用可命中 trigram 索引的搜索表达式。
+func postgresFavoritesSearchWhere(keyword string) (string, []interface{}) {
+	where := " WHERE " + postgresSearchTextExpression + " ILIKE $1 ESCAPE '\\'"
+	return where, []interface{}{"%" + escapeLikePattern(keyword) + "%"}
+}
+
 // SearchFavorites 在收藏中搜索
 func (db *PostgresDB) SearchFavorites(keyword string, limit, offset int) ([]models.Page, error) {
-	var rows *sql.Rows
-	var err error
-
-	if db.searchTextTrigramReady {
-		query := `
-			SELECT ` + pageSelectColumns + `
-			FROM pages p
-			INNER JOIN favorites f ON p.id = f.page_id
-			WHERE ` + postgresSearchTextExpression + ` ILIKE $1
-			ORDER BY f.created_at DESC
-			LIMIT $2 OFFSET $3
-		`
-		rows, err = db.conn.Query(query, "%"+keyword+"%", limit, offset)
-	} else {
-		query := `
-			SELECT ` + pageSelectColumns + `
-			FROM pages p
-			INNER JOIN favorites f ON p.id = f.page_id
-			WHERE p.url ILIKE $1 OR p.title ILIKE $1 OR p.body_text ILIKE $1
-			ORDER BY f.created_at DESC
-			LIMIT $2 OFFSET $3
-		`
-		rows, err = db.conn.Query(query, "%"+keyword+"%", limit, offset)
+	if strings.TrimSpace(keyword) == "" {
+		return []models.Page{}, nil
 	}
 
+	where, args := postgresFavoritesSearchWhere(keyword)
+	query := `SELECT ` + pageSelectColumns + `
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id` + where + `
+		ORDER BY f.created_at DESC, p.id DESC
+		LIMIT $2 OFFSET $3`
+	args = append(args, limit, offset)
+
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var pages []models.Page
+	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
 		if err := scanPage(rows, &p); err != nil {
@@ -1488,26 +1484,16 @@ func (db *PostgresDB) SearchFavorites(keyword string, limit, offset int) ([]mode
 
 // GetSearchFavoritesCount 获取收藏搜索结果总数
 func (db *PostgresDB) GetSearchFavoritesCount(keyword string) (int, error) {
-	var count int
-	var err error
-
-	if db.searchTextTrigramReady {
-		query := `
-			SELECT COUNT(*)
-			FROM pages p
-			INNER JOIN favorites f ON p.id = f.page_id
-			WHERE ` + postgresSearchTextExpression + ` ILIKE $1
-		`
-		err = db.conn.QueryRow(query, "%"+keyword+"%").Scan(&count)
-	} else {
-		query := `
-			SELECT COUNT(*)
-			FROM pages p
-			INNER JOIN favorites f ON p.id = f.page_id
-			WHERE p.url ILIKE $1 OR p.title ILIKE $1 OR p.body_text ILIKE $1
-		`
-		err = db.conn.QueryRow(query, "%"+keyword+"%").Scan(&count)
+	if strings.TrimSpace(keyword) == "" {
+		return 0, nil
 	}
 
+	where, args := postgresFavoritesSearchWhere(keyword)
+	query := `SELECT COUNT(*)
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id` + where
+
+	var count int
+	err := db.conn.QueryRow(query, args...).Scan(&count)
 	return count, err
 }

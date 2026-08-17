@@ -3,6 +3,7 @@ package api
 import (
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -11,6 +12,18 @@ import (
 func (h *Handler) AddFavorite(c *gin.Context) {
 	pageID, ok := parsePageIDParam(c)
 	if !ok {
+		return
+	}
+
+	// 先确认页面存在，否则外键约束错误会被当成 500 返回
+	page, err := h.db.GetPageByID(strconv.FormatInt(pageID, 10))
+	if err != nil {
+		log.Printf("Failed to load page %d: %v", pageID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load page"})
+		return
+	}
+	if page == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "page not found"})
 		return
 	}
 
@@ -65,7 +78,8 @@ func (h *Handler) ListFavorites(c *gin.Context) {
 
 	pages, err := h.db.ListFavorites(limit, offset)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("Failed to list favorites: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list favorites"})
 		return
 	}
 

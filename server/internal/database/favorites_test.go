@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -207,7 +208,7 @@ func TestFavoritesPagination(t *testing.T) {
 	// 创建多个页面并添加收藏
 	for i := 0; i < 15; i++ {
 		pageID, err := db.CreatePage(
-			"https://example.com/test"+string(rune(i)),
+			fmt.Sprintf("https://example.com/test%d", i),
 			"Test Page",
 			"html/test.html",
 			"testhash",
@@ -335,10 +336,15 @@ func TestFavoritesSearchSQLInjection(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 
-	db.AddFavorite(pageID)
-	db.UpdatePageBodyText(pageID, "test content")
+	if err := db.AddFavorite(pageID); err != nil {
+		t.Fatalf("AddFavorite failed: %v", err)
+	}
+	if err := db.UpdatePageBodyText(pageID, "test content"); err != nil {
+		t.Fatalf("UpdatePageBodyText failed: %v", err)
+	}
 
-	// 测试 SQL 注入攻击字符串
+	// 这些输入都不匹配 "test content"，正确参数化后应返回 0 条，
+	// 且不得报错、不得删表。
 	testCases := []string{
 		"test'OR'1'='1",
 		"test\" OR \"1\"=\"1",
@@ -348,15 +354,264 @@ func TestFavoritesSearchSQLInjection(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		// 这些查询不应该导致错误或返回异常结果
 		results, err := db.SearchFavorites(tc, 10, 0)
 		if err != nil {
-			t.Logf("Query '%s' returned error (expected, sanitization working): %v", tc, err)
+			t.Errorf("Query %q should not error: %v", tc, err)
+			continue
 		}
-		// 结果应该是空或正常的搜索结果
-		if len(results) > 1 {
-			t.Errorf("Query '%s' returned unexpected results: %d items", tc, len(results))
+		if len(results) != 0 {
+			t.Errorf("Query %q should match nothing, got %d items", tc, len(results))
 		}
+	}
+
+	// favorites 表必须仍然存在且数据完好（DROP TABLE 注入未生效）
+	count, err := db.GetFavoritesCount()
+	if err != nil {
+		t.Fatalf("favorites table should still be intact: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Expected favorites count 1 after injection attempts, got %d", count)
+	}
+
+	// 正常关键字仍能命中，确认搜索没有被破坏
+	results, err := db.SearchFavorites("test content", 10, 0)
+	if err != nil {
+		t.Fatalf("SearchFavorites failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for legitimate keyword, got %d", len(results))
+	}
+}
+
+// LIKE 通配符必须被转义，否则 "%" 会匹配所有收藏
+func TestFavoritesSearchEscapesLikeWildcards(t *testing.T) {
+	tmpDB := createTempDB(t)
+	defer os.Remove(tmpDB)
+
+	db, err := NewSQLite(tmpDB)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	pageID, err := db.CreatePage(
+		"https://example.com/plain",
+		"Plain Title",
+		"html/plain.html",
+		"hash-plain",
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	if err := db.AddFavorite(pageID); err != nil {
+		t.Fatalf("AddFavorite failed: %v", err)
+	}
+
+	for _, keyword := range []string{"%", "_", "%%"} {
+		results, err := db.SearchFavorites(keyword, 10, 0)
+		if err != nil {
+			t.Errorf("SearchFavorites(%q) failed: %v", keyword, err)
+			continue
+		}
+		if len(results) != 0 {
+			t.Errorf("Wildcard %q should be treated literally, got %d results", keyword, len(results))
+		}
+	}
+}
+
+// 中文关键字必须能搜到（FTS5 默认分词器做不到，因此使用 LIKE）
+func TestFavoritesSearchChinese(t *testing.T) {
+	tmpDB := createTempDB(t)
+	defer os.Remove(tmpDB)
+
+	db, err := NewSQLite(tmpDB)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	pageID, err := db.CreatePage(
+		"https://example.com/cn",
+		"归档工具说明",
+		"html/cn.html",
+		"hash-cn",
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	if err := db.AddFavorite(pageID); err != nil {
+		t.Fatalf("AddFavorite failed: %v", err)
+	}
+	if err := db.UpdatePageBodyText(pageID, "这是一个网页归档工具的测试内容"); err != nil {
+		t.Fatalf("UpdatePageBodyText failed: %v", err)
+	}
+
+	for _, keyword := range []string{"归档", "工具", "测试内容"} {
+		results, err := db.SearchFavorites(keyword, 10, 0)
+		if err != nil {
+			t.Fatalf("SearchFavorites(%q) failed: %v", keyword, err)
+		}
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for %q, got %d", keyword, len(results))
+		}
+
+		count, err := db.GetSearchFavoritesCount(keyword)
+		if err != nil {
+			t.Fatalf("GetSearchFavoritesCount(%q) failed: %v", keyword, err)
+		}
+		if count != 1 {
+			t.Errorf("Expected count 1 for %q, got %d", keyword, count)
+		}
+	}
+}
+
+// 搜索必须按 URL 匹配（FTS5 不索引 url 列）
+func TestFavoritesSearchByURL(t *testing.T) {
+	tmpDB := createTempDB(t)
+	defer os.Remove(tmpDB)
+
+	db, err := NewSQLite(tmpDB)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	pageID, err := db.CreatePage(
+		"https://github.com/icodeface/wayback-archiver",
+		"Untitled",
+		"html/url.html",
+		"hash-url",
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	if err := db.AddFavorite(pageID); err != nil {
+		t.Fatalf("AddFavorite failed: %v", err)
+	}
+
+	results, err := db.SearchFavorites("icodeface", 10, 0)
+	if err != nil {
+		t.Fatalf("SearchFavorites failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result matching URL, got %d", len(results))
+	}
+}
+
+// 只有被收藏的页面才应出现在收藏搜索结果里
+func TestFavoritesSearchExcludesNonFavorites(t *testing.T) {
+	tmpDB := createTempDB(t)
+	defer os.Remove(tmpDB)
+
+	db, err := NewSQLite(tmpDB)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	favID, err := db.CreatePage("https://example.com/a", "Shared Keyword A", "html/a.html", "hash-a", time.Now())
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	if _, err := db.CreatePage("https://example.com/b", "Shared Keyword B", "html/b.html", "hash-b", time.Now()); err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+
+	if err := db.AddFavorite(favID); err != nil {
+		t.Fatalf("AddFavorite failed: %v", err)
+	}
+
+	results, err := db.SearchFavorites("Shared Keyword", 10, 0)
+	if err != nil {
+		t.Fatalf("SearchFavorites failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Expected only the favorited page, got %d", len(results))
+	}
+	if results[0].ID != favID {
+		t.Errorf("Expected page %d, got %d", favID, results[0].ID)
+	}
+
+	count, err := db.GetSearchFavoritesCount("Shared Keyword")
+	if err != nil {
+		t.Fatalf("GetSearchFavoritesCount failed: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Expected count 1, got %d", count)
+	}
+}
+
+// 分页不得因时间戳相同而重复或漏掉记录
+func TestFavoritesPaginationNoOverlap(t *testing.T) {
+	tmpDB := createTempDB(t)
+	defer os.Remove(tmpDB)
+
+	db, err := NewSQLite(tmpDB)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	const total = 25
+	for i := 0; i < total; i++ {
+		pageID, err := db.CreatePage(
+			fmt.Sprintf("https://example.com/p%d", i),
+			fmt.Sprintf("Page %d", i),
+			fmt.Sprintf("html/p%d.html", i),
+			fmt.Sprintf("hash%d", i),
+			time.Now(),
+		)
+		if err != nil {
+			t.Fatalf("Failed to create page: %v", err)
+		}
+		// 不 sleep，制造时间戳碰撞
+		if err := db.AddFavorite(pageID); err != nil {
+			t.Fatalf("AddFavorite failed: %v", err)
+		}
+	}
+
+	seen := map[int64]bool{}
+	for offset := 0; offset < total; offset += 10 {
+		pages, err := db.ListFavorites(10, offset)
+		if err != nil {
+			t.Fatalf("ListFavorites(offset=%d) failed: %v", offset, err)
+		}
+		for _, p := range pages {
+			if seen[p.ID] {
+				t.Errorf("Page %d returned on more than one page of results", p.ID)
+			}
+			seen[p.ID] = true
+		}
+	}
+
+	if len(seen) != total {
+		t.Errorf("Expected %d distinct favorites across pages, got %d", total, len(seen))
+	}
+}
+
+// ListFavorites 无数据时应返回空切片而非 nil（JSON 输出 [] 而不是 null）
+func TestFavoritesListEmptyNotNil(t *testing.T) {
+	tmpDB := createTempDB(t)
+	defer os.Remove(tmpDB)
+
+	db, err := NewSQLite(tmpDB)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	pages, err := db.ListFavorites(10, 0)
+	if err != nil {
+		t.Fatalf("ListFavorites failed: %v", err)
+	}
+	if pages == nil {
+		t.Error("Expected empty slice, got nil")
+	}
+	if len(pages) != 0 {
+		t.Errorf("Expected 0 favorites, got %d", len(pages))
 	}
 }
 

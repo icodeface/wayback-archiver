@@ -935,7 +935,6 @@
                 favoriteBtn.setAttribute('data-page-id', String(page.id));
                 favoriteBtn.textContent = '★';
                 favoriteBtn.addEventListener('click', (event) => toggleFavorite(event, page.id, favoriteBtn));
-                checkFavoriteStatus(page.id, favoriteBtn);
 
                 const deleteBtn = document.createElement('button');
                 deleteBtn.className = 'delete-btn';
@@ -984,6 +983,7 @@
             });
 
             pageList.appendChild(fragment);
+            applyFavoriteStates();
         }
 
         function openTimeline(event, pageUrl) {
@@ -1015,26 +1015,26 @@
             }
         }
 
-        async function checkFavoriteStatus(pageId, btn) {
+        // 一次拉取全部收藏 ID，避免每个列表项单独请求 /status（N+1）
+        async function applyFavoriteStates() {
+            const buttons = Array.from(document.querySelectorAll('.favorite-btn'));
+            if (buttons.length === 0) return;
+
             try {
-                const response = await fetch(`/api/favorites/${pageId}/status`);
-                if (response.ok) {
-                    const data = await response.json();
-                    updateFavoriteButton(btn, data.is_favorite);
-                }
+                const response = await fetch('/api/favorites?limit=1000');
+                if (!response.ok) return;
+                const data = await response.json();
+                const favorited = new Set((data.pages || []).map(p => String(p.id)));
+                buttons.forEach(btn => {
+                    updateFavoriteButton(btn, favorited.has(btn.dataset.pageId));
+                });
             } catch (error) {
-                console.error('Failed to check favorite status:', error);
+                console.error('Failed to load favorite states:', error);
             }
         }
 
         function updateFavoriteButton(btn, isFavorite) {
-            if (isFavorite) {
-                btn.classList.add('favorited');
-                btn.style.color = 'var(--color-accent)';
-            } else {
-                btn.classList.remove('favorited');
-                btn.style.color = '';
-            }
+            btn.classList.toggle('favorited', isFavorite);
         }
 
         async function toggleFavorite(event, pageId, btn) {

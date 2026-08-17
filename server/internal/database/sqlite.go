@@ -44,29 +44,6 @@ func currentSQLiteTimestamp() string {
 	return formatSQLiteTimestamp(time.Now())
 }
 
-// sanitizeFTS5Query 清理 FTS5 查询输入，防止 SQL 注入
-// FTS5 有特殊的查询语法，需要转义特殊字符
-func sanitizeFTS5Query(query string) string {
-	// FTS5 特殊字符: " * ( ) AND OR NOT
-	// 将查询拆分为词，分别用双引号包裹，这样特殊字符会被当作字面量
-	words := strings.Fields(query)
-	if len(words) == 0 {
-		return ""
-	}
-
-	// 对每个词转义双引号并用双引号包裹
-	sanitized := make([]string, 0, len(words))
-	for _, word := range words {
-		// 转义词中的双引号
-		escaped := strings.ReplaceAll(word, `"`, `""`)
-		// 用双引号包裹
-		sanitized = append(sanitized, `"`+escaped+`"`)
-	}
-
-	// 用空格连接所有词
-	return strings.Join(sanitized, " ")
-}
-
 // NewSQLite 创建 SQLite 数据库连接
 func NewSQLite(dbPath string) (Database, error) {
 	// 确保数据库目录存在
@@ -1352,7 +1329,12 @@ func (db *SQLiteDB) HasActiveShareForHTMLPath(htmlPath string) (bool, error) {
 
 // AddFavorite 添加收藏
 func (db *SQLiteDB) AddFavorite(pageID int64) error {
-	_, err := db.conn.Exec("INSERT OR IGNORE INTO favorites (page_id) VALUES (?)", pageID)
+	// 显式写入统一格式的时间戳（纳秒精度），避免 CURRENT_TIMESTAMP 的秒级精度
+	// 导致同秒内收藏的排序不稳定，也保证与其他时间列的文本排序一致。
+	_, err := db.conn.Exec(
+		"INSERT OR IGNORE INTO favorites (page_id, created_at) VALUES (?, ?)",
+		pageID, currentSQLiteTimestamp(),
+	)
 	return err
 }
 
@@ -1375,7 +1357,7 @@ func (db *SQLiteDB) ListFavorites(limit, offset int) ([]models.Page, error) {
 		SELECT ` + pageSelectColumns + `
 		FROM pages p
 		INNER JOIN favorites f ON p.id = f.page_id
-		ORDER BY f.created_at DESC
+		ORDER BY f.created_at DESC, p.id DESC
 		LIMIT ? OFFSET ?
 	`
 	rows, err := db.conn.Query(query, limit, offset)
@@ -1384,7 +1366,7 @@ func (db *SQLiteDB) ListFavorites(limit, offset int) ([]models.Page, error) {
 	}
 	defer rows.Close()
 
-	var pages []models.Page
+	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
 		if err := scanPage(rows, &p); err != nil {
@@ -1402,29 +1384,40 @@ func (db *SQLiteDB) GetFavoritesCount() (int, error) {
 	return count, err
 }
 
+// buildSQLiteFavoritesSearchWhere 构造收藏搜索的 WHERE 子句。
+// 与 buildSQLiteSearchWhere 保持一致的 LIKE 语义：FTS5 默认 tokenizer 不做中文
+// 分词，且不索引 url 列，用它会导致收藏搜索和全局搜索结果不一致。
+func buildSQLiteFavoritesSearchWhere(keyword string) (string, []interface{}) {
+	where := ` WHERE (` +
+		`LOWER(COALESCE(p.url, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
+		`LOWER(COALESCE(p.title, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
+		`LOWER(COALESCE(p.body_text, '')) LIKE LOWER(?) ESCAPE '\'` +
+		`)`
+	pattern := "%" + escapeLikePattern(keyword) + "%"
+	return where, []interface{}{pattern, pattern, pattern}
+}
+
 // SearchFavorites 在收藏中搜索
 func (db *SQLiteDB) SearchFavorites(keyword string, limit, offset int) ([]models.Page, error) {
-	// 清理 FTS5 查询输入，防止 SQL 注入
-	sanitizedKeyword := sanitizeFTS5Query(keyword)
-	if sanitizedKeyword == "" {
+	if strings.TrimSpace(keyword) == "" {
 		return []models.Page{}, nil
 	}
 
-	query := `
-		SELECT ` + pageSelectColumns + `
+	where, args := buildSQLiteFavoritesSearchWhere(keyword)
+	query := `SELECT ` + pageSelectColumns + `
 		FROM pages p
-		INNER JOIN favorites f ON p.id = f.page_id
-		WHERE p.id IN (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ?)
-		ORDER BY f.created_at DESC
-		LIMIT ? OFFSET ?
-	`
-	rows, err := db.conn.Query(query, sanitizedKeyword, limit, offset)
+		INNER JOIN favorites f ON p.id = f.page_id` + where + `
+		ORDER BY f.created_at DESC, p.id DESC
+		LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var pages []models.Page
+	pages := []models.Page{}
 	for rows.Next() {
 		var p models.Page
 		if err := scanPage(rows, &p); err != nil {
@@ -1437,20 +1430,17 @@ func (db *SQLiteDB) SearchFavorites(keyword string, limit, offset int) ([]models
 
 // GetSearchFavoritesCount 获取收藏搜索结果总数
 func (db *SQLiteDB) GetSearchFavoritesCount(keyword string) (int, error) {
-	// 清理 FTS5 查询输入，防止 SQL 注入
-	sanitizedKeyword := sanitizeFTS5Query(keyword)
-	if sanitizedKeyword == "" {
+	if strings.TrimSpace(keyword) == "" {
 		return 0, nil
 	}
 
-	var count int
-	query := `
-		SELECT COUNT(*)
+	where, args := buildSQLiteFavoritesSearchWhere(keyword)
+	query := `SELECT COUNT(*)
 		FROM pages p
-		INNER JOIN favorites f ON p.id = f.page_id
-		WHERE p.id IN (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ?)
-	`
-	err := db.conn.QueryRow(query, sanitizedKeyword).Scan(&count)
+		INNER JOIN favorites f ON p.id = f.page_id` + where
+
+	var count int
+	err := db.conn.QueryRow(query, args...).Scan(&count)
 	return count, err
 }
 

@@ -120,6 +120,21 @@ curl "http://localhost:8080/api/search?q=$KEYWORD"
 curl "http://localhost:8080/api/pages?from=2026-03-01&to=2026-03-12"
 ```
 
+#### Favorites
+
+```bash
+# List favorites (newest favorite first)
+curl "http://localhost:8080/api/favorites?limit=100&offset=0"
+
+# Search within favorites
+curl "http://localhost:8080/api/favorites/search?q=$KEYWORD"
+
+# Check / add / remove (add and remove are idempotent)
+curl "http://localhost:8080/api/favorites/$PAGE_ID/status"
+curl -X POST "http://localhost:8080/api/favorites/$PAGE_ID"
+curl -X DELETE "http://localhost:8080/api/favorites/$PAGE_ID"
+```
+
 #### Get Page Details
 
 ```bash

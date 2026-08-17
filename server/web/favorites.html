@@ -537,6 +537,37 @@
             });
         }
 
+        // 只允许 http/https 外链，避免归档的 javascript: / data: URL 被点击执行
+        function normalizeExternalURL(rawURL) {
+            try {
+                const parsed = new URL(rawURL, window.location.href);
+                if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                    return null;
+                }
+                return parsed.toString();
+            } catch {
+                return null;
+            }
+        }
+
+        function createSafeExternalLink(rawURL, className) {
+            const link = document.createElement('a');
+            link.className = className;
+            link.textContent = rawURL || '';
+
+            const safeURL = normalizeExternalURL(rawURL);
+            if (safeURL) {
+                link.href = safeURL;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+            } else {
+                link.href = '#';
+                link.addEventListener('click', (event) => event.preventDefault());
+            }
+
+            return link;
+        }
+
         function renderPages(pages) {
             const pageList = document.getElementById('pageList');
 
@@ -591,12 +622,7 @@
                 deleteBtn.textContent = 'Delete';
                 deleteBtn.addEventListener('click', (e) => deletePage(e, page.id));
 
-                const urlLink = document.createElement('a');
-                urlLink.className = 'page-url';
-                urlLink.href = page.url;
-                urlLink.textContent = page.url;
-                urlLink.target = '_blank';
-                urlLink.rel = 'noopener noreferrer';
+                const urlLink = createSafeExternalLink(page.url, 'page-url');
                 urlLink.addEventListener('click', (e) => e.stopPropagation());
 
                 const meta = document.createElement('div');
