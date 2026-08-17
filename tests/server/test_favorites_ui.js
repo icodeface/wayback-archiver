@@ -68,7 +68,7 @@ async function testIndexToggle(browser, pageId) {
     );
     check('点击后按钮变为已收藏', true);
 
-    const afterClick = await api(`/api/favorites/${pageId}/status`);
+    const afterClick = await api(`/api/pages/${pageId}`);
     check('服务端状态已写入', afterClick.body.is_favorite === true, JSON.stringify(afterClick.body));
 
     // 刷新后应从服务端回显已收藏状态
@@ -89,7 +89,7 @@ async function testIndexToggle(browser, pageId) {
       { timeout: 5000 },
       sel,
     );
-    const removed = await api(`/api/favorites/${pageId}/status`);
+    const removed = await api(`/api/pages/${pageId}`);
     check('再次点击取消收藏', removed.body.is_favorite === false, JSON.stringify(removed.body));
 
     // 点击星标不应打开归档页面（事件冒泡被阻止）

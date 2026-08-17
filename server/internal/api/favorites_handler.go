@@ -53,25 +53,8 @@ func (h *Handler) RemoveFavorite(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "success"})
 }
 
-// IsFavorite 检查是否已收藏
-func (h *Handler) IsFavorite(c *gin.Context) {
-	pageID, ok := parsePageIDParam(c)
-	if !ok {
-		return
-	}
-
-	isFavorite, err := h.db.IsFavorite(pageID)
-	if err != nil {
-		log.Printf("Failed to check favorite status for page %d: %v", pageID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check favorite status"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"is_favorite": isFavorite})
-}
-
 // attachFavoriteStates adds favorite state to a page-list response with one
-// database query. The field remains optional for detail and timeline responses.
+// database query.
 func (h *Handler) attachFavoriteStates(pages []models.Page) error {
 	if len(pages) == 0 {
 		return nil

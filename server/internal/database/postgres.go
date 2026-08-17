@@ -1418,9 +1418,7 @@ func (db *PostgresDB) IsFavoriteBatch(pageIDs []int64) (map[int64]bool, error) {
 	}
 
 	// 构建 ANY 查询
-	args := make([]interface{}, len(pageIDs))
-	for i, id := range pageIDs {
-		args[i] = id
+	for _, id := range pageIDs {
 		result[id] = false // 初始化为 false
 	}
 

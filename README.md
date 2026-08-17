@@ -240,7 +240,6 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 | `GET` | `/api/pages/timeline?url=URL` | Get all snapshots of a URL (timeline view) |
 | `GET` | `/api/favorites?limit=50&offset=0` | List favorited pages, newest favorite first |
 | `GET` | `/api/favorites/search?q=keyword&limit=50&offset=0` | Search within favorites by URL, title, or body text |
-| `GET` | `/api/favorites/:id/status` | Check whether a page is favorited |
 | `POST` | `/api/favorites/:id` | Add a page to favorites (idempotent; `404` if the page does not exist) |
 | `DELETE` | `/api/favorites/:id` | Remove a page from favorites (idempotent) |
 | `GET` | `/api/logs` | List available log files |

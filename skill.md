@@ -129,8 +129,7 @@ curl "http://localhost:8080/api/favorites?limit=100&offset=0"
 # Search within favorites
 curl "http://localhost:8080/api/favorites/search?q=$KEYWORD"
 
-# Check / add / remove (add and remove are idempotent)
-curl "http://localhost:8080/api/favorites/$PAGE_ID/status"
+# Add / remove (both are idempotent)
 curl -X POST "http://localhost:8080/api/favorites/$PAGE_ID"
 curl -X DELETE "http://localhost:8080/api/favorites/$PAGE_ID"
 ```

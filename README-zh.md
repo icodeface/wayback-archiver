@@ -207,7 +207,6 @@ export https_proxy=http://127.0.0.1:7897
 | `GET` | `/api/pages/timeline?url=URL` | 获取同一 URL 的所有快照（时间线视图） |
 | `GET` | `/api/favorites?limit=50&offset=0` | 列出收藏页面，按收藏时间倒序 |
 | `GET` | `/api/favorites/search?q=keyword&limit=50&offset=0` | 在收藏中按 URL、标题或正文搜索 |
-| `GET` | `/api/favorites/:id/status` | 查询页面是否已收藏 |
 | `POST` | `/api/favorites/:id` | 添加收藏（幂等；页面不存在返回 `404`） |
 | `DELETE` | `/api/favorites/:id` | 取消收藏（幂等） |
 | `GET` | `/api/logs` | 列出可用日志文件 |
