@@ -44,6 +44,29 @@ func currentSQLiteTimestamp() string {
 	return formatSQLiteTimestamp(time.Now())
 }
 
+// sanitizeFTS5Query 清理 FTS5 查询输入，防止 SQL 注入
+// FTS5 有特殊的查询语法，需要转义特殊字符
+func sanitizeFTS5Query(query string) string {
+	// FTS5 特殊字符: " * ( ) AND OR NOT
+	// 将查询拆分为词，分别用双引号包裹，这样特殊字符会被当作字面量
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return ""
+	}
+
+	// 对每个词转义双引号并用双引号包裹
+	sanitized := make([]string, 0, len(words))
+	for _, word := range words {
+		// 转义词中的双引号
+		escaped := strings.ReplaceAll(word, `"`, `""`)
+		// 用双引号包裹
+		sanitized = append(sanitized, `"`+escaped+`"`)
+	}
+
+	// 用空格连接所有词
+	return strings.Join(sanitized, " ")
+}
+
 // NewSQLite 创建 SQLite 数据库连接
 func NewSQLite(dbPath string) (Database, error) {
 	// 确保数据库目录存在
@@ -1381,6 +1404,12 @@ func (db *SQLiteDB) GetFavoritesCount() (int, error) {
 
 // SearchFavorites 在收藏中搜索
 func (db *SQLiteDB) SearchFavorites(keyword string, limit, offset int) ([]models.Page, error) {
+	// 清理 FTS5 查询输入，防止 SQL 注入
+	sanitizedKeyword := sanitizeFTS5Query(keyword)
+	if sanitizedKeyword == "" {
+		return []models.Page{}, nil
+	}
+
 	query := `
 		SELECT ` + pageSelectColumns + `
 		FROM pages p
@@ -1389,7 +1418,7 @@ func (db *SQLiteDB) SearchFavorites(keyword string, limit, offset int) ([]models
 		ORDER BY f.created_at DESC
 		LIMIT ? OFFSET ?
 	`
-	rows, err := db.conn.Query(query, keyword, limit, offset)
+	rows, err := db.conn.Query(query, sanitizedKeyword, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -1408,6 +1437,12 @@ func (db *SQLiteDB) SearchFavorites(keyword string, limit, offset int) ([]models
 
 // GetSearchFavoritesCount 获取收藏搜索结果总数
 func (db *SQLiteDB) GetSearchFavoritesCount(keyword string) (int, error) {
+	// 清理 FTS5 查询输入，防止 SQL 注入
+	sanitizedKeyword := sanitizeFTS5Query(keyword)
+	if sanitizedKeyword == "" {
+		return 0, nil
+	}
+
 	var count int
 	query := `
 		SELECT COUNT(*)
@@ -1415,7 +1450,7 @@ func (db *SQLiteDB) GetSearchFavoritesCount(keyword string) (int, error) {
 		INNER JOIN favorites f ON p.id = f.page_id
 		WHERE p.id IN (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ?)
 	`
-	err := db.conn.QueryRow(query, keyword).Scan(&count)
+	err := db.conn.QueryRow(query, sanitizedKeyword).Scan(&count)
 	return count, err
 }
 

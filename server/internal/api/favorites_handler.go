@@ -16,7 +16,7 @@ func (h *Handler) AddFavorite(c *gin.Context) {
 
 	if err := h.db.AddFavorite(pageID); err != nil {
 		log.Printf("Failed to add favorite for page %d: %v", pageID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add favorite"})
 		return
 	}
 
@@ -32,7 +32,7 @@ func (h *Handler) RemoveFavorite(c *gin.Context) {
 
 	if err := h.db.RemoveFavorite(pageID); err != nil {
 		log.Printf("Failed to remove favorite for page %d: %v", pageID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove favorite"})
 		return
 	}
 
@@ -49,7 +49,7 @@ func (h *Handler) IsFavorite(c *gin.Context) {
 	isFavorite, err := h.db.IsFavorite(pageID)
 	if err != nil {
 		log.Printf("Failed to check favorite status for page %d: %v", pageID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check favorite status"})
 		return
 	}
 
@@ -91,6 +91,12 @@ func (h *Handler) SearchFavorites(c *gin.Context) {
 		return
 	}
 
+	// 限制搜索关键字最大长度
+	if len(keyword) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "query too long (max 200 characters)"})
+		return
+	}
+
 	limit, offset, ok := parsePaginationParams(c)
 	if !ok {
 		return
@@ -98,7 +104,7 @@ func (h *Handler) SearchFavorites(c *gin.Context) {
 
 	pages, err := h.db.SearchFavorites(keyword, limit, offset)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "search failed"})
 		return
 	}
 
