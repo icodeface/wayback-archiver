@@ -170,6 +170,7 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 		registerGETAndHEAD(api, "/search", handler.SearchPages)
 		registerGETAndHEAD(api, "/favorites", handler.ListFavorites)
 		registerGETAndHEAD(api, "/favorites/search", handler.SearchFavorites)
+		registerGETAndHEAD(api, "/favorites/batch-status", handler.IsFavoriteBatch)
 		registerGETAndHEAD(api, "/favorites/:id/status", handler.IsFavorite)
 		api.POST("/favorites/:id", handler.AddFavorite)
 		api.DELETE("/favorites/:id", handler.RemoveFavorite)

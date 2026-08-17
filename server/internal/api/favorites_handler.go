@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -67,6 +68,41 @@ func (h *Handler) IsFavorite(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"is_favorite": isFavorite})
+}
+
+// IsFavoriteBatch 批量检查收藏状态
+func (h *Handler) IsFavoriteBatch(c *gin.Context) {
+	idsParam := c.Query("ids")
+	if idsParam == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing ids parameter"})
+		return
+	}
+
+	// 解析 ID 列表
+	idStrs := strings.Split(idsParam, ",")
+	if len(idStrs) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too many ids (max 100)"})
+		return
+	}
+
+	pageIDs := make([]int64, 0, len(idStrs))
+	for _, idStr := range idStrs {
+		id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id format"})
+			return
+		}
+		pageIDs = append(pageIDs, id)
+	}
+
+	result, err := h.db.IsFavoriteBatch(pageIDs)
+	if err != nil {
+		log.Printf("Failed to check batch favorite status: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check favorite status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // ListFavorites 列出收藏的页面

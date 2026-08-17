@@ -1015,18 +1015,26 @@
             }
         }
 
-        // 一次拉取全部收藏 ID，避免每个列表项单独请求 /status（N+1）
+        // 批量查询当前页面的收藏状态（一次请求）
         async function applyFavoriteStates() {
             const buttons = Array.from(document.querySelectorAll('.favorite-btn'));
             if (buttons.length === 0) return;
 
             try {
-                const response = await fetch('/api/favorites?limit=1000');
+                // 收集所有页面 ID
+                const pageIds = buttons.map(btn => btn.dataset.pageId);
+
+                // 一次请求批量查询
+                const response = await fetch(`/api/favorites/batch-status?ids=${pageIds.join(',')}`);
                 if (!response.ok) return;
-                const data = await response.json();
-                const favorited = new Set((data.pages || []).map(p => String(p.id)));
+
+                const result = await response.json();
+
+                // 更新按钮状态
                 buttons.forEach(btn => {
-                    updateFavoriteButton(btn, favorited.has(btn.dataset.pageId));
+                    const pageId = btn.dataset.pageId;
+                    const isFavorite = result[pageId] === true;
+                    updateFavoriteButton(btn, isFavorite);
                 });
             } catch (error) {
                 console.error('Failed to load favorite states:', error);

@@ -68,6 +68,7 @@ type Database interface {
 	AddFavorite(pageID int64) error
 	RemoveFavorite(pageID int64) error
 	IsFavorite(pageID int64) (bool, error)
+	IsFavoriteBatch(pageIDs []int64) (map[int64]bool, error)
 	ListFavorites(limit, offset int) ([]models.Page, error)
 	GetFavoritesCount() (int, error)
 	SearchFavorites(keyword string, limit, offset int) ([]models.Page, error)

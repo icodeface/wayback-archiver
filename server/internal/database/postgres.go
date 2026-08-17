@@ -1410,6 +1410,37 @@ func (db *PostgresDB) IsFavorite(pageID int64) (bool, error) {
 	return count > 0, err
 }
 
+// IsFavoriteBatch 批量检查收藏状态
+func (db *PostgresDB) IsFavoriteBatch(pageIDs []int64) (map[int64]bool, error) {
+	result := make(map[int64]bool)
+	if len(pageIDs) == 0 {
+		return result, nil
+	}
+
+	// 构建 ANY 查询
+	args := make([]interface{}, len(pageIDs))
+	for i, id := range pageIDs {
+		args[i] = id
+		result[id] = false // 初始化为 false
+	}
+
+	rows, err := db.conn.Query("SELECT page_id FROM favorites WHERE page_id = ANY($1)", pq.Array(pageIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var pageID int64
+		if err := rows.Scan(&pageID); err != nil {
+			return nil, err
+		}
+		result[pageID] = true
+	}
+
+	return result, rows.Err()
+}
+
 // ListFavorites 列出收藏的页面
 func (db *PostgresDB) ListFavorites(limit, offset int) ([]models.Page, error) {
 	query := `

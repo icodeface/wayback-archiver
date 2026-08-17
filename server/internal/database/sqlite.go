@@ -1351,6 +1351,43 @@ func (db *SQLiteDB) IsFavorite(pageID int64) (bool, error) {
 	return count > 0, err
 }
 
+// IsFavoriteBatch 批量检查收藏状态
+func (db *SQLiteDB) IsFavoriteBatch(pageIDs []int64) (map[int64]bool, error) {
+	result := make(map[int64]bool)
+	if len(pageIDs) == 0 {
+		return result, nil
+	}
+
+	// 构建 IN 查询
+	query := "SELECT page_id FROM favorites WHERE page_id IN ("
+	args := make([]interface{}, len(pageIDs))
+	for i, id := range pageIDs {
+		if i > 0 {
+			query += ","
+		}
+		query += "?"
+		args[i] = id
+		result[id] = false // 初始化为 false
+	}
+	query += ")"
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var pageID int64
+		if err := rows.Scan(&pageID); err != nil {
+			return nil, err
+		}
+		result[pageID] = true
+	}
+
+	return result, rows.Err()
+}
+
 // ListFavorites 列出收藏的页面
 func (db *SQLiteDB) ListFavorites(limit, offset int) ([]models.Page, error) {
 	query := `
