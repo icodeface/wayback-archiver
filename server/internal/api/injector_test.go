@@ -90,6 +90,31 @@ func TestInjectArchiveHeader_IncludesShareButtonInSnapshotHeader(t *testing.T) {
 	}
 }
 
+func TestInjectArchiveHeader_IncludesFavoriteControlAndState(t *testing.T) {
+	isFavorite := true
+	page := &models.Page{
+		ID:         42,
+		URL:        "https://example.com/page",
+		CapturedAt: time.Date(2026, 4, 15, 12, 34, 56, 0, time.UTC),
+		IsFavorite: &isFavorite,
+	}
+
+	got := injectArchiveHeader(`<html><body><main>hello</main></body></html>`, page, nil, nil, 1, "nonce")
+
+	for _, want := range []string{
+		`data-wayback-favorite-action="toggle"`,
+		`data-page-id="42"`,
+		`class="wayback-favorite favorited"`,
+		`aria-label="Remove from favorites"`,
+		`function initFavoriteControl()`,
+		`fetch('/api/favorites/' + encodeURIComponent(pageId)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing favorite header marker %q in %s", want, got)
+		}
+	}
+}
+
 func TestInjectArchiveHeader_DoesNotIncludeCollapsedFixedLayoutRepair(t *testing.T) {
 	page := &models.Page{
 		ID:         1,

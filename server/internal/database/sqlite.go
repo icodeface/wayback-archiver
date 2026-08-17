@@ -32,7 +32,8 @@ const (
 	sqliteMigrationVersionTimestampFixedWidth    = 4
 	sqliteMigrationVersionResourceQuarantine     = 5
 	sqliteMigrationVersionPageShares             = 6
-	sqliteMigrationVersionCurrent                = sqliteMigrationVersionPageShares
+	sqliteMigrationVersionFavorites              = 7
+	sqliteMigrationVersionCurrent                = sqliteMigrationVersionFavorites
 )
 
 func formatSQLiteTimestamp(t time.Time) string {
@@ -191,6 +192,17 @@ func (db *SQLiteDB) ensureMigrations() error {
 		}
 
 		if err := db.setSQLiteUserVersion(sqliteMigrationVersionPageShares); err != nil {
+			return err
+		}
+		version = sqliteMigrationVersionPageShares
+	}
+
+	if version < sqliteMigrationVersionFavorites {
+		if err := db.ensureFavoritesTable(); err != nil {
+			return err
+		}
+
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionFavorites); err != nil {
 			return err
 		}
 	}
@@ -422,6 +434,18 @@ CREATE TABLE IF NOT EXISTS page_share_resources (
     PRIMARY KEY (token_hash, resource_id)
 );
 CREATE INDEX IF NOT EXISTS idx_page_share_resources_resource ON page_share_resources(resource_id);
+`)
+	return err
+}
+
+func (db *SQLiteDB) ensureFavoritesTable() error {
+	_, err := db.conn.Exec(`
+CREATE TABLE IF NOT EXISTS favorites (
+    page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (page_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorites_created_at ON favorites(created_at DESC);
 `)
 	return err
 }
@@ -1302,3 +1326,158 @@ func (db *SQLiteDB) HasActiveShareForHTMLPath(htmlPath string) (bool, error) {
 	).Scan(&count)
 	return count > 0, err
 }
+
+// AddFavorite 添加收藏
+func (db *SQLiteDB) AddFavorite(pageID int64) error {
+	// 显式写入统一格式的时间戳（纳秒精度），避免 CURRENT_TIMESTAMP 的秒级精度
+	// 导致同秒内收藏的排序不稳定，也保证与其他时间列的文本排序一致。
+	_, err := db.conn.Exec(
+		"INSERT OR IGNORE INTO favorites (page_id, created_at) VALUES (?, ?)",
+		pageID, currentSQLiteTimestamp(),
+	)
+	return err
+}
+
+// RemoveFavorite 取消收藏
+func (db *SQLiteDB) RemoveFavorite(pageID int64) error {
+	_, err := db.conn.Exec("DELETE FROM favorites WHERE page_id = ?", pageID)
+	return err
+}
+
+// IsFavorite 检查是否已收藏
+func (db *SQLiteDB) IsFavorite(pageID int64) (bool, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM favorites WHERE page_id = ?", pageID).Scan(&count)
+	return count > 0, err
+}
+
+// IsFavoriteBatch 批量检查收藏状态
+func (db *SQLiteDB) IsFavoriteBatch(pageIDs []int64) (map[int64]bool, error) {
+	result := make(map[int64]bool)
+	if len(pageIDs) == 0 {
+		return result, nil
+	}
+
+	// 构建 IN 查询
+	query := "SELECT page_id FROM favorites WHERE page_id IN ("
+	args := make([]interface{}, len(pageIDs))
+	for i, id := range pageIDs {
+		if i > 0 {
+			query += ","
+		}
+		query += "?"
+		args[i] = id
+		result[id] = false // 初始化为 false
+	}
+	query += ")"
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var pageID int64
+		if err := rows.Scan(&pageID); err != nil {
+			return nil, err
+		}
+		result[pageID] = true
+	}
+
+	return result, rows.Err()
+}
+
+// ListFavorites 列出收藏的页面
+func (db *SQLiteDB) ListFavorites(limit, offset int) ([]models.Page, error) {
+	query := `
+		SELECT ` + pageSelectColumns + `
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id
+		ORDER BY f.created_at DESC, p.id DESC
+		LIMIT ? OFFSET ?
+	`
+	rows, err := db.conn.Query(query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pages := []models.Page{}
+	for rows.Next() {
+		var p models.Page
+		if err := scanPage(rows, &p); err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, rows.Err()
+}
+
+// GetFavoritesCount 获取收藏总数
+func (db *SQLiteDB) GetFavoritesCount() (int, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM favorites").Scan(&count)
+	return count, err
+}
+
+// buildSQLiteFavoritesSearchWhere 构造收藏搜索的 WHERE 子句。
+// 与 buildSQLiteSearchWhere 保持一致的 LIKE 语义：FTS5 默认 tokenizer 不做中文
+// 分词，且不索引 url 列，用它会导致收藏搜索和全局搜索结果不一致。
+func buildSQLiteFavoritesSearchWhere(keyword string) (string, []interface{}) {
+	where := ` WHERE (` +
+		`LOWER(COALESCE(p.url, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
+		`LOWER(COALESCE(p.title, '')) LIKE LOWER(?) ESCAPE '\' OR ` +
+		`LOWER(COALESCE(p.body_text, '')) LIKE LOWER(?) ESCAPE '\'` +
+		`)`
+	pattern := "%" + escapeLikePattern(keyword) + "%"
+	return where, []interface{}{pattern, pattern, pattern}
+}
+
+// SearchFavorites 在收藏中搜索
+func (db *SQLiteDB) SearchFavorites(keyword string, limit, offset int) ([]models.Page, error) {
+	if strings.TrimSpace(keyword) == "" {
+		return []models.Page{}, nil
+	}
+
+	where, args := buildSQLiteFavoritesSearchWhere(keyword)
+	query := `SELECT ` + pageSelectColumns + `
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id` + where + `
+		ORDER BY f.created_at DESC, p.id DESC
+		LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pages := []models.Page{}
+	for rows.Next() {
+		var p models.Page
+		if err := scanPage(rows, &p); err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, rows.Err()
+}
+
+// GetSearchFavoritesCount 获取收藏搜索结果总数
+func (db *SQLiteDB) GetSearchFavoritesCount(keyword string) (int, error) {
+	if strings.TrimSpace(keyword) == "" {
+		return 0, nil
+	}
+
+	where, args := buildSQLiteFavoritesSearchWhere(keyword)
+	query := `SELECT COUNT(*)
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id` + where
+
+	var count int
+	err := db.conn.QueryRow(query, args...).Scan(&count)
+	return count, err
+}
+

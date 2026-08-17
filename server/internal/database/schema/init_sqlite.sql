@@ -96,3 +96,11 @@ CREATE TABLE IF NOT EXISTS page_share_resources (
 );
 
 CREATE INDEX IF NOT EXISTS idx_page_share_resources_resource ON page_share_resources(resource_id);
+
+CREATE TABLE IF NOT EXISTS favorites (
+    page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (page_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_favorites_created_at ON favorites(created_at DESC);

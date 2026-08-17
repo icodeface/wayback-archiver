@@ -88,6 +88,9 @@ func (db *PostgresDB) ensurePostgresMigrations() error {
 		if err := db.ensurePageShareTables(); err != nil {
 			return fmt.Errorf("failed to ensure page share tables: %w", err)
 		}
+		if err := db.ensureFavoritesTable(); err != nil {
+			return fmt.Errorf("failed to ensure favorites table: %w", err)
+		}
 		searchTextTrigramReady, err := db.ensureSearchIndexes()
 		if err != nil {
 			return fmt.Errorf("failed to ensure search indexes: %w", err)
@@ -414,6 +417,20 @@ CREATE TABLE IF NOT EXISTS page_share_resources (
 		return err
 	}
 	if err := db.ensureOptionalIndex("idx_page_share_resources_resource", `CREATE INDEX idx_page_share_resources_resource ON page_share_resources(resource_id)`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (db *PostgresDB) ensureFavoritesTable() error {
+	if _, err := db.conn.Exec(`
+CREATE TABLE IF NOT EXISTS favorites (
+    page_id BIGINT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (page_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorites_created_at ON favorites(created_at DESC);
+`); err != nil {
 		return err
 	}
 	return nil
@@ -1372,4 +1389,140 @@ func (db *PostgresDB) HasActiveShareForHTMLPath(htmlPath string) (bool, error) {
 		time.Now().UTC(),
 	).Scan(&count)
 	return count > 0, err
+}
+
+// AddFavorite 添加收藏
+func (db *PostgresDB) AddFavorite(pageID int64) error {
+	_, err := db.conn.Exec("INSERT INTO favorites (page_id) VALUES ($1) ON CONFLICT (page_id) DO NOTHING", pageID)
+	return err
+}
+
+// RemoveFavorite 取消收藏
+func (db *PostgresDB) RemoveFavorite(pageID int64) error {
+	_, err := db.conn.Exec("DELETE FROM favorites WHERE page_id = $1", pageID)
+	return err
+}
+
+// IsFavorite 检查是否已收藏
+func (db *PostgresDB) IsFavorite(pageID int64) (bool, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM favorites WHERE page_id = $1", pageID).Scan(&count)
+	return count > 0, err
+}
+
+// IsFavoriteBatch 批量检查收藏状态
+func (db *PostgresDB) IsFavoriteBatch(pageIDs []int64) (map[int64]bool, error) {
+	result := make(map[int64]bool)
+	if len(pageIDs) == 0 {
+		return result, nil
+	}
+
+	// 构建 ANY 查询
+	for _, id := range pageIDs {
+		result[id] = false // 初始化为 false
+	}
+
+	rows, err := db.conn.Query("SELECT page_id FROM favorites WHERE page_id = ANY($1)", pq.Array(pageIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var pageID int64
+		if err := rows.Scan(&pageID); err != nil {
+			return nil, err
+		}
+		result[pageID] = true
+	}
+
+	return result, rows.Err()
+}
+
+// ListFavorites 列出收藏的页面
+func (db *PostgresDB) ListFavorites(limit, offset int) ([]models.Page, error) {
+	query := `
+		SELECT ` + pageSelectColumns + `
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id
+		ORDER BY f.created_at DESC, p.id DESC
+		LIMIT $1 OFFSET $2
+	`
+	rows, err := db.conn.Query(query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pages := []models.Page{}
+	for rows.Next() {
+		var p models.Page
+		if err := scanPage(rows, &p); err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, rows.Err()
+}
+
+// GetFavoritesCount 获取收藏总数
+func (db *PostgresDB) GetFavoritesCount() (int, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM favorites").Scan(&count)
+	return count, err
+}
+
+// postgresFavoritesSearchWhere 构造收藏搜索的 WHERE 子句。
+// 与 buildSearchWhere 一致：转义 LIKE 通配符并声明 ESCAPE，避免用户输入的
+// % / _ 被当作通配符，同时复用可命中 trigram 索引的搜索表达式。
+func postgresFavoritesSearchWhere(keyword string) (string, []interface{}) {
+	where := " WHERE " + postgresSearchTextExpression + " ILIKE $1 ESCAPE '\\'"
+	return where, []interface{}{"%" + escapeLikePattern(keyword) + "%"}
+}
+
+// SearchFavorites 在收藏中搜索
+func (db *PostgresDB) SearchFavorites(keyword string, limit, offset int) ([]models.Page, error) {
+	if strings.TrimSpace(keyword) == "" {
+		return []models.Page{}, nil
+	}
+
+	where, args := postgresFavoritesSearchWhere(keyword)
+	query := `SELECT ` + pageSelectColumns + `
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id` + where + `
+		ORDER BY f.created_at DESC, p.id DESC
+		LIMIT $2 OFFSET $3`
+	args = append(args, limit, offset)
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pages := []models.Page{}
+	for rows.Next() {
+		var p models.Page
+		if err := scanPage(rows, &p); err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, rows.Err()
+}
+
+// GetSearchFavoritesCount 获取收藏搜索结果总数
+func (db *PostgresDB) GetSearchFavoritesCount(keyword string) (int, error) {
+	if strings.TrimSpace(keyword) == "" {
+		return 0, nil
+	}
+
+	where, args := postgresFavoritesSearchWhere(keyword)
+	query := `SELECT COUNT(*)
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id` + where
+
+	var count int
+	err := db.conn.QueryRow(query, args...).Scan(&count)
+	return count, err
 }
