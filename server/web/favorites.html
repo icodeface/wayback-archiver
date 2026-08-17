@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>收藏夹 // WAYBACK ARCHIVER</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --color-bg: #000000;
+            --color-surface: #0a0a0a;
+            --color-border: #1a1a1a;
+            --color-text-primary: #e0e0e0;
+            --color-text-secondary: #808080;
+            --color-text-dim: #404040;
+            --color-accent: #00ff88;
+            --color-accent-dim: #00cc6a;
+            --color-cyan: #00d9ff;
+            --color-warning: #ff4444;
+            --font-mono: 'JetBrains Mono', monospace;
+            --font-sans: 'Inter', sans-serif;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100vh); }
+        }
+
+        body {
+            font-family: var(--font-mono);
+            background: var(--color-bg);
+            color: var(--color-text-primary);
+            line-height: 1.5;
+            min-height: 100vh;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image:
+                linear-gradient(90deg, transparent 0%, rgba(0, 255, 136, 0.02) 50%, transparent 100%),
+                repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 255, 136, 0.03) 2px, rgba(0, 255, 136, 0.03) 4px);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--color-accent), transparent);
+            animation: scanline 8s linear infinite;
+            pointer-events: none;
+            z-index: 1;
+            opacity: 0.3;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            position: relative;
+            z-index: 2;
+        }
+
+        header {
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--color-border);
+            position: relative;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
+
+        header::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 120px;
+            height: 1px;
+            background: var(--color-accent);
+        }
+
+        .title-group {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 8px;
+        }
+
+        h1 {
+            font-size: clamp(1.5rem, 4vw, 2.5rem);
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            color: var(--color-accent);
+            text-transform: uppercase;
+            line-height: 1;
+        }
+
+        .subtitle {
+            font-size: 0.875rem;
+            color: var(--color-text-dim);
+            letter-spacing: 0.1em;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+
+        .nav-link {
+            padding: 8px 16px;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-secondary);
+            text-decoration: none;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            border-color: var(--color-accent);
+            color: var(--color-accent);
+        }
+
+        .search-section {
+            margin-bottom: 32px;
+        }
+
+        .search-wrapper {
+            position: relative;
+            max-width: 100%;
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--color-text-dim);
+            pointer-events: none;
+        }
+
+        #searchInput {
+            width: 100%;
+            padding: 16px 16px 16px 48px;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-primary);
+            font-family: var(--font-mono);
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        #searchInput:focus {
+            outline: none;
+            border-color: var(--color-accent);
+            box-shadow: 0 0 0 1px var(--color-accent);
+        }
+
+        #searchInput::placeholder {
+            color: var(--color-text-dim);
+        }
+
+        .page-list {
+            list-style: none;
+        }
+
+        .page-item {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            padding: 24px;
+            margin-bottom: 16px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .page-item:hover {
+            border-color: var(--color-accent);
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.1);
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+            gap: 16px;
+        }
+
+        .page-title-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .page-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--color-text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .page-id {
+            font-size: 0.75rem;
+            color: var(--color-text-dim);
+            font-weight: 400;
+            flex-shrink: 0;
+        }
+
+        .page-actions {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .timeline-btn, .delete-btn, .unfavorite-btn {
+            padding: 6px 12px;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-secondary);
+            font-size: 0.75rem;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .timeline-btn:hover {
+            border-color: var(--color-cyan);
+            color: var(--color-cyan);
+        }
+
+        .delete-btn:hover {
+            border-color: var(--color-warning);
+            color: var(--color-warning);
+        }
+
+        .unfavorite-btn:hover {
+            border-color: var(--color-accent);
+            color: var(--color-accent);
+        }
+
+        .page-url {
+            display: block;
+            color: var(--color-cyan);
+            text-decoration: none;
+            font-size: 0.875rem;
+            margin-bottom: 12px;
+            word-break: break-all;
+            transition: color 0.2s;
+        }
+
+        .page-url:hover {
+            color: var(--color-accent);
+        }
+
+        .page-meta {
+            display: flex;
+            gap: 16px;
+            font-size: 0.75rem;
+            color: var(--color-text-dim);
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--color-text-dim);
+            font-size: 1rem;
+        }
+
+        .empty-icon {
+            font-size: 3rem;
+            margin-bottom: 16px;
+            opacity: 0.3;
+        }
+
+        .pagination {
+            display: none;
+            justify-content: center;
+            align-items: center;
+            gap: 16px;
+            margin-top: 32px;
+        }
+
+        .pagination button {
+            padding: 8px 16px;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-secondary);
+            font-family: var(--font-mono);
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .pagination button:hover:not(:disabled) {
+            border-color: var(--color-accent);
+            color: var(--color-accent);
+        }
+
+        .pagination button:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .pagination span {
+            color: var(--color-text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--color-text-dim);
+        }
+
+        .search-snippet {
+            font-size: 0.875rem;
+            color: var(--color-text-secondary);
+            margin-bottom: 12px;
+            line-height: 1.6;
+        }
+
+        .highlight {
+            background: rgba(0, 255, 136, 0.2);
+            color: var(--color-accent);
+            padding: 2px 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <div class="title-group">
+                    <h1>收藏夹</h1>
+                </div>
+                <div class="subtitle">FAVORITE PAGES</div>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">返回首页</a>
+                <a href="/timeline" class="nav-link">时间线</a>
+                <a href="/logs" class="nav-link">日志</a>
+            </div>
+        </header>
+
+        <div class="search-section">
+            <div class="search-wrapper">
+                <span class="search-icon">⌕</span>
+                <input type="text" id="searchInput" placeholder="搜索收藏的页面...">
+            </div>
+        </div>
+
+        <ul id="pageList" class="page-list">
+            <li class="loading">Loading...</li>
+        </ul>
+
+        <div id="pagination" class="pagination">
+            <button id="prevBtn">← Previous</button>
+            <span id="pageInfo"></span>
+            <button id="nextBtn">Next →</button>
+        </div>
+    </div>
+
+    <script>
+        const ITEMS_PER_PAGE = 20;
+        let currentPage = 1;
+        let totalPages = 0;
+        let searchTimer;
+        let currentRequestSeq = 0;
+        let activeController = null;
+
+        function startArchiveRequest() {
+            if (activeController) {
+                activeController.abort();
+            }
+            const seq = ++currentRequestSeq;
+            const controller = new AbortController();
+            activeController = controller;
+            return { seq, controller };
+        }
+
+        function finishArchiveRequest(seq, controller) {
+            if (activeController === controller) {
+                activeController = null;
+            }
+        }
+
+        function isCurrentRequest(seq) {
+            return seq === currentRequestSeq;
+        }
+
+        function isAbortError(error) {
+            return error.name === 'AbortError';
+        }
+
+        function invalidateActiveRequest() {
+            currentRequestSeq++;
+            if (activeController) {
+                activeController.abort();
+                activeController = null;
+            }
+        }
+
+        async function loadFavorites(page = 1) {
+            const request = startArchiveRequest();
+            currentPage = page;
+
+            try {
+                const offset = (page - 1) * ITEMS_PER_PAGE;
+                const response = await fetch(`/api/favorites?limit=${ITEMS_PER_PAGE}&offset=${offset}`, {
+                    signal: request.controller.signal
+                });
+
+                if (!isCurrentRequest(request.seq)) {
+                    return;
+                }
+
+                const data = await response.json();
+                const pages = data.pages || [];
+                const total = data.total || 0;
+
+                totalPages = Math.ceil(total / ITEMS_PER_PAGE);
+                renderPages(pages);
+                updatePagination();
+            } catch (error) {
+                if (!isAbortError(error) && isCurrentRequest(request.seq)) {
+                    console.error('Load error:', error);
+                    document.getElementById('pageList').innerHTML =
+                        '<li class="empty"><div class="empty-icon">✗</div>加载失败</li>';
+                }
+            } finally {
+                finishArchiveRequest(request.seq, request.controller);
+            }
+        }
+
+        async function searchFavorites(keyword, page = 1) {
+            const request = startArchiveRequest();
+            currentPage = page;
+
+            try {
+                const offset = (page - 1) * ITEMS_PER_PAGE;
+                const response = await fetch(
+                    `/api/favorites/search?q=${encodeURIComponent(keyword)}&limit=${ITEMS_PER_PAGE}&offset=${offset}`,
+                    { signal: request.controller.signal }
+                );
+
+                if (!isCurrentRequest(request.seq)) {
+                    return;
+                }
+
+                const data = await response.json();
+                const pages = data.pages || [];
+                const total = data.total || 0;
+
+                totalPages = Math.ceil(total / ITEMS_PER_PAGE);
+                renderPages(pages);
+                updatePagination();
+            } catch (error) {
+                if (!isAbortError(error) && isCurrentRequest(request.seq)) {
+                    console.error('Search error:', error);
+                    document.getElementById('pageList').innerHTML =
+                        '<li class="empty"><div class="empty-icon">✗</div>搜索失败</li>';
+                }
+            } finally {
+                finishArchiveRequest(request.seq, request.controller);
+            }
+        }
+
+        function updatePagination() {
+            const pagination = document.getElementById('pagination');
+            const prevBtn = document.getElementById('prevBtn');
+            const nextBtn = document.getElementById('nextBtn');
+            const pageInfo = document.getElementById('pageInfo');
+
+            if (totalPages > 1) {
+                pagination.style.display = 'flex';
+                prevBtn.disabled = currentPage <= 1;
+                nextBtn.disabled = currentPage >= totalPages;
+                pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+            } else {
+                pagination.style.display = 'none';
+            }
+        }
+
+        function getCurrentKeyword() {
+            return document.getElementById('searchInput').value.trim();
+        }
+
+        function loadCurrentMode(page = currentPage) {
+            const keyword = getCurrentKeyword();
+            if (keyword) {
+                searchFavorites(keyword, page);
+            } else {
+                loadFavorites(page);
+            }
+        }
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function renderPages(pages) {
+            const pageList = document.getElementById('pageList');
+
+            if (pages.length === 0) {
+                pageList.innerHTML = '<li class="empty"><div class="empty-icon">[ ]</div>暂无收藏</li>';
+                return;
+            }
+
+            pageList.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+
+            pages.forEach(page => {
+                const firstVisited = formatDate(page.first_visited);
+                const lastVisited = formatDate(page.last_visited);
+                const isMultipleVisits = page.first_visited !== page.last_visited;
+
+                const item = document.createElement('li');
+                item.className = 'page-item';
+
+                const header = document.createElement('div');
+                header.className = 'page-header';
+
+                const titleGroup = document.createElement('div');
+                titleGroup.className = 'page-title-group';
+
+                const title = document.createElement('h2');
+                title.className = 'page-title';
+                title.textContent = page.title || 'Untitled';
+
+                const pageId = document.createElement('span');
+                pageId.className = 'page-id';
+                pageId.textContent = `#${page.id}`;
+
+                const actions = document.createElement('div');
+                actions.className = 'page-actions';
+
+                const timelineBtn = document.createElement('button');
+                timelineBtn.className = 'timeline-btn';
+                timelineBtn.textContent = 'Timeline';
+                timelineBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    window.open(`/timeline?url=${encodeURIComponent(page.url)}`, '_blank');
+                });
+
+                const unfavoriteBtn = document.createElement('button');
+                unfavoriteBtn.className = 'unfavorite-btn';
+                unfavoriteBtn.textContent = '取消收藏';
+                unfavoriteBtn.addEventListener('click', (e) => removeFavorite(e, page.id));
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.textContent = 'Delete';
+                deleteBtn.addEventListener('click', (e) => deletePage(e, page.id));
+
+                const urlLink = document.createElement('a');
+                urlLink.className = 'page-url';
+                urlLink.href = page.url;
+                urlLink.textContent = page.url;
+                urlLink.target = '_blank';
+                urlLink.rel = 'noopener noreferrer';
+                urlLink.addEventListener('click', (e) => e.stopPropagation());
+
+                const meta = document.createElement('div');
+                meta.className = 'page-meta';
+
+                const visitMeta = document.createElement('div');
+                visitMeta.className = 'meta-item';
+                visitMeta.innerHTML = `<span>⏱</span><span>${firstVisited}</span>`;
+                meta.appendChild(visitMeta);
+
+                if (isMultipleVisits) {
+                    const lastMeta = document.createElement('div');
+                    lastMeta.className = 'meta-item';
+                    lastMeta.innerHTML = `<span>↻</span><span>${lastVisited}</span>`;
+                    meta.appendChild(lastMeta);
+                }
+
+                titleGroup.appendChild(title);
+                titleGroup.appendChild(pageId);
+
+                actions.appendChild(timelineBtn);
+                actions.appendChild(unfavoriteBtn);
+                actions.appendChild(deleteBtn);
+
+                header.appendChild(titleGroup);
+                header.appendChild(actions);
+
+                item.appendChild(header);
+                item.appendChild(urlLink);
+                item.appendChild(meta);
+
+                item.addEventListener('click', (e) => {
+                    window.open(`/view/${page.id}`, '_blank');
+                });
+
+                fragment.appendChild(item);
+            });
+
+            pageList.appendChild(fragment);
+        }
+
+        async function removeFavorite(event, pageId) {
+            event.stopPropagation();
+
+            try {
+                const response = await fetch(`/api/favorites/${pageId}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    loadCurrentMode(currentPage);
+                } else {
+                    const error = await response.json();
+                    alert('取消收藏失败: ' + (error.error || '未知错误'));
+                }
+            } catch (error) {
+                alert('取消收藏失败: ' + error.message);
+            }
+        }
+
+        async function deletePage(event, pageId) {
+            event.stopPropagation();
+
+            if (!confirm('确定要删除这个页面记录吗？此操作无法撤销。')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/pages/${pageId}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    loadCurrentMode(currentPage);
+                } else {
+                    const error = await response.json();
+                    alert('删除失败: ' + (error.error || '未知错误'));
+                }
+            } catch (error) {
+                alert('删除失败: ' + error.message);
+            }
+        }
+
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            const keyword = e.target.value.trim();
+            clearTimeout(searchTimer);
+            invalidateActiveRequest();
+
+            if (!keyword) {
+                loadFavorites(1);
+                return;
+            }
+
+            searchTimer = setTimeout(() => {
+                searchFavorites(keyword, 1);
+            }, 300);
+        });
+
+        document.getElementById('prevBtn').addEventListener('click', () => {
+            if (currentPage > 1) {
+                loadCurrentMode(currentPage - 1);
+            }
+        });
+
+        document.getElementById('nextBtn').addEventListener('click', () => {
+            if (currentPage < totalPages) {
+                loadCurrentMode(currentPage + 1);
+            }
+        });
+
+        loadFavorites(1);
+    </script>
+</body>
+</html>

@@ -399,6 +399,28 @@
             background: rgba(255, 68, 68, 0.1);
         }
 
+        .favorite-btn {
+            background: transparent;
+            border: 1px solid var(--color-border);
+            color: var(--color-text-dim);
+            padding: 4px 12px;
+            font-size: 0.875rem;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .favorite-btn:hover {
+            border-color: var(--color-accent);
+            color: var(--color-accent);
+        }
+
+        .favorite-btn.favorited {
+            color: var(--color-accent);
+            border-color: var(--color-accent);
+        }
+
         .page-id {
             font-size: 0.75rem;
             color: var(--color-text-dim);
@@ -565,6 +587,7 @@
             </div>
             <div style="display:flex;gap:16px;align-items:center">
                 <a id="versionLink" href="https://github.com/icodeface/wayback-archiver" target="_blank" style="color:var(--color-text-dim);text-decoration:none;font-size:0.75rem;transition:color 0.2s;white-space:nowrap" onmouseover="this.style.color='var(--color-accent)'" onmouseout="this.style.color='var(--color-text-dim)'">v...</a>
+                <a href="/favorites" style="color:var(--color-text-dim);text-decoration:none;font-size:0.75rem;transition:color 0.2s;white-space:nowrap" onmouseover="this.style.color='var(--color-text-secondary)'" onmouseout="this.style.color='var(--color-text-dim)'">FAVORITES</a>
                 <a href="/logs" style="color:var(--color-text-dim);text-decoration:none;font-size:0.75rem;transition:color 0.2s;white-space:nowrap" onmouseover="this.style.color='var(--color-text-secondary)'" onmouseout="this.style.color='var(--color-text-dim)'">LOGS</a>
             </div>
         </header>
@@ -906,6 +929,14 @@
                 timelineBtn.textContent = 'Timeline';
                 timelineBtn.addEventListener('click', (event) => openTimeline(event, page.url));
 
+                const favoriteBtn = document.createElement('button');
+                favoriteBtn.className = 'favorite-btn';
+                favoriteBtn.type = 'button';
+                favoriteBtn.setAttribute('data-page-id', String(page.id));
+                favoriteBtn.textContent = '★';
+                favoriteBtn.addEventListener('click', (event) => toggleFavorite(event, page.id, favoriteBtn));
+                checkFavoriteStatus(page.id, favoriteBtn);
+
                 const deleteBtn = document.createElement('button');
                 deleteBtn.className = 'delete-btn';
                 deleteBtn.type = 'button';
@@ -926,6 +957,7 @@
                 titleGroup.appendChild(pageId);
 
                 actions.appendChild(timelineBtn);
+                actions.appendChild(favoriteBtn);
                 actions.appendChild(deleteBtn);
 
                 header.appendChild(titleGroup);
@@ -942,7 +974,7 @@
                 item.appendChild(meta);
 
                 item.addEventListener('click', (e) => {
-                    if (e.target.closest('.page-url') || e.target.closest('.delete-btn') || e.target.closest('.timeline-btn')) {
+                    if (e.target.closest('.page-url') || e.target.closest('.delete-btn') || e.target.closest('.timeline-btn') || e.target.closest('.favorite-btn')) {
                         return;
                     }
                     window.open(`/view/${page.id}`, '_blank');
@@ -980,6 +1012,51 @@
                 }
             } catch (error) {
                 alert('删除失败: ' + error.message);
+            }
+        }
+
+        async function checkFavoriteStatus(pageId, btn) {
+            try {
+                const response = await fetch(`/api/favorites/${pageId}/status`);
+                if (response.ok) {
+                    const data = await response.json();
+                    updateFavoriteButton(btn, data.is_favorite);
+                }
+            } catch (error) {
+                console.error('Failed to check favorite status:', error);
+            }
+        }
+
+        function updateFavoriteButton(btn, isFavorite) {
+            if (isFavorite) {
+                btn.classList.add('favorited');
+                btn.style.color = 'var(--color-accent)';
+            } else {
+                btn.classList.remove('favorited');
+                btn.style.color = '';
+            }
+        }
+
+        async function toggleFavorite(event, pageId, btn) {
+            event.stopPropagation();
+
+            const isFavorited = btn.classList.contains('favorited');
+            const method = isFavorited ? 'DELETE' : 'POST';
+            const action = isFavorited ? '取消收藏' : '添加收藏';
+
+            try {
+                const response = await fetch(`/api/favorites/${pageId}`, {
+                    method: method
+                });
+
+                if (response.ok) {
+                    updateFavoriteButton(btn, !isFavorited);
+                } else {
+                    const error = await response.json();
+                    alert(`${action}失败: ` + (error.error || '未知错误'));
+                }
+            } catch (error) {
+                alert(`${action}失败: ` + error.message);
             }
         }
 

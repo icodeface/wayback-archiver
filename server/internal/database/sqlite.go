@@ -32,7 +32,8 @@ const (
 	sqliteMigrationVersionTimestampFixedWidth    = 4
 	sqliteMigrationVersionResourceQuarantine     = 5
 	sqliteMigrationVersionPageShares             = 6
-	sqliteMigrationVersionCurrent                = sqliteMigrationVersionPageShares
+	sqliteMigrationVersionFavorites              = 7
+	sqliteMigrationVersionCurrent                = sqliteMigrationVersionFavorites
 )
 
 func formatSQLiteTimestamp(t time.Time) string {
@@ -191,6 +192,17 @@ func (db *SQLiteDB) ensureMigrations() error {
 		}
 
 		if err := db.setSQLiteUserVersion(sqliteMigrationVersionPageShares); err != nil {
+			return err
+		}
+		version = sqliteMigrationVersionPageShares
+	}
+
+	if version < sqliteMigrationVersionFavorites {
+		if err := db.ensureFavoritesTable(); err != nil {
+			return err
+		}
+
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionFavorites); err != nil {
 			return err
 		}
 	}
@@ -422,6 +434,18 @@ CREATE TABLE IF NOT EXISTS page_share_resources (
     PRIMARY KEY (token_hash, resource_id)
 );
 CREATE INDEX IF NOT EXISTS idx_page_share_resources_resource ON page_share_resources(resource_id);
+`)
+	return err
+}
+
+func (db *SQLiteDB) ensureFavoritesTable() error {
+	_, err := db.conn.Exec(`
+CREATE TABLE IF NOT EXISTS favorites (
+    page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (page_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorites_created_at ON favorites(created_at DESC);
 `)
 	return err
 }
@@ -1302,3 +1326,96 @@ func (db *SQLiteDB) HasActiveShareForHTMLPath(htmlPath string) (bool, error) {
 	).Scan(&count)
 	return count > 0, err
 }
+
+// AddFavorite 添加收藏
+func (db *SQLiteDB) AddFavorite(pageID int64) error {
+	_, err := db.conn.Exec("INSERT OR IGNORE INTO favorites (page_id) VALUES (?)", pageID)
+	return err
+}
+
+// RemoveFavorite 取消收藏
+func (db *SQLiteDB) RemoveFavorite(pageID int64) error {
+	_, err := db.conn.Exec("DELETE FROM favorites WHERE page_id = ?", pageID)
+	return err
+}
+
+// IsFavorite 检查是否已收藏
+func (db *SQLiteDB) IsFavorite(pageID int64) (bool, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM favorites WHERE page_id = ?", pageID).Scan(&count)
+	return count > 0, err
+}
+
+// ListFavorites 列出收藏的页面
+func (db *SQLiteDB) ListFavorites(limit, offset int) ([]models.Page, error) {
+	query := `
+		SELECT ` + pageSelectColumns + `
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id
+		ORDER BY f.created_at DESC
+		LIMIT ? OFFSET ?
+	`
+	rows, err := db.conn.Query(query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pages []models.Page
+	for rows.Next() {
+		var p models.Page
+		if err := scanPage(rows, &p); err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, rows.Err()
+}
+
+// GetFavoritesCount 获取收藏总数
+func (db *SQLiteDB) GetFavoritesCount() (int, error) {
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM favorites").Scan(&count)
+	return count, err
+}
+
+// SearchFavorites 在收藏中搜索
+func (db *SQLiteDB) SearchFavorites(keyword string, limit, offset int) ([]models.Page, error) {
+	query := `
+		SELECT ` + pageSelectColumns + `
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id
+		WHERE p.id IN (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ?)
+		ORDER BY f.created_at DESC
+		LIMIT ? OFFSET ?
+	`
+	rows, err := db.conn.Query(query, keyword, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pages []models.Page
+	for rows.Next() {
+		var p models.Page
+		if err := scanPage(rows, &p); err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, rows.Err()
+}
+
+// GetSearchFavoritesCount 获取收藏搜索结果总数
+func (db *SQLiteDB) GetSearchFavoritesCount(keyword string) (int, error) {
+	var count int
+	query := `
+		SELECT COUNT(*)
+		FROM pages p
+		INNER JOIN favorites f ON p.id = f.page_id
+		WHERE p.id IN (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ?)
+	`
+	err := db.conn.QueryRow(query, keyword).Scan(&count)
+	return count, err
+}
+

@@ -63,4 +63,13 @@ type Database interface {
 	GetShareResourceByURLPath(tokenHash, urlPath string) (*models.Resource, error)
 	GetShareResourceByFilePath(tokenHash, filePath string) (*models.Resource, error)
 	HasActiveShareForHTMLPath(htmlPath string) (bool, error)
+
+	// 收藏操作
+	AddFavorite(pageID int64) error
+	RemoveFavorite(pageID int64) error
+	IsFavorite(pageID int64) (bool, error)
+	ListFavorites(limit, offset int) ([]models.Page, error)
+	GetFavoritesCount() (int, error)
+	SearchFavorites(keyword string, limit, offset int) ([]models.Page, error)
+	GetSearchFavoritesCount(keyword string) (int, error)
 }
