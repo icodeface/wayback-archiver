@@ -7,6 +7,6 @@
   },
   "dependencies": {
     "proxy-agent": "file:../../vendor/proxy-agent",
-    "puppeteer": "^22.0.0"
+    "puppeteer": "^25.4.0"
   }
 }
