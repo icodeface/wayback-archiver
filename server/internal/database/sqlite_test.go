@@ -29,7 +29,9 @@ func newSQLiteTestDB(t *testing.T) *SQLiteDB {
 	return sqliteDB
 }
 
-func TestSQLiteFTSUpdatePageBodyText(t *testing.T) {
+// TestSQLiteUpdatePageBodyText verifies that updating page body_text works correctly
+// and the updated content is searchable via LIKE queries
+func TestSQLiteUpdatePageBodyText(t *testing.T) {
 	db := newSQLiteTestDB(t)
 
 	now := time.Now().UTC()
