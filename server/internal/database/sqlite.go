@@ -33,7 +33,8 @@ const (
 	sqliteMigrationVersionResourceQuarantine     = 5
 	sqliteMigrationVersionPageShares             = 6
 	sqliteMigrationVersionFavorites              = 7
-	sqliteMigrationVersionCurrent                = sqliteMigrationVersionFavorites
+	sqliteMigrationVersionDropFTS                = 8
+	sqliteMigrationVersionCurrent                = sqliteMigrationVersionDropFTS
 )
 
 func formatSQLiteTimestamp(t time.Time) string {
@@ -152,10 +153,6 @@ func (db *SQLiteDB) ensureMigrations() error {
 			return err
 		}
 
-		if err := db.ensureFTSConsistency(); err != nil {
-			return err
-		}
-
 		// ensureNormalizedTimestamps 现在直接产出最终的固定宽度 UTC 文本，
 		// 可跳过 timestamp fixed-width 迁移，但仍要继续执行后续非时间戳迁移。
 		if err := db.setSQLiteUserVersion(sqliteMigrationVersionTimestampFixedWidth); err != nil {
@@ -203,6 +200,17 @@ func (db *SQLiteDB) ensureMigrations() error {
 		}
 
 		if err := db.setSQLiteUserVersion(sqliteMigrationVersionFavorites); err != nil {
+			return err
+		}
+		version = sqliteMigrationVersionFavorites
+	}
+
+	if version < sqliteMigrationVersionDropFTS {
+		if err := db.dropFTSTables(); err != nil {
+			return err
+		}
+
+		if err := db.setSQLiteUserVersion(sqliteMigrationVersionDropFTS); err != nil {
 			return err
 		}
 	}
@@ -315,32 +323,26 @@ func (db *SQLiteDB) ensureResourceQuarantineColumns() error {
 	return nil
 }
 
-func (db *SQLiteDB) ensureFTSConsistency() error {
-	const recreateFTSTriggers = `
+func (db *SQLiteDB) dropFTSTables() error {
+	// 删除 FTS5 触发器（不需要 fts5 模块）
+	const dropTriggers = `
 DROP TRIGGER IF EXISTS pages_fts_insert;
 DROP TRIGGER IF EXISTS pages_fts_update;
 DROP TRIGGER IF EXISTS pages_fts_delete;
-
-CREATE TRIGGER pages_fts_insert AFTER INSERT ON pages BEGIN
-	INSERT INTO pages_fts(rowid, body_text, title) VALUES (new.id, new.body_text, new.title);
-END;
-
-CREATE TRIGGER pages_fts_update AFTER UPDATE ON pages BEGIN
-	INSERT INTO pages_fts(pages_fts, rowid, body_text, title) VALUES ('delete', old.id, old.body_text, old.title);
-	INSERT INTO pages_fts(rowid, body_text, title) VALUES (new.id, new.body_text, new.title);
-END;
-
-CREATE TRIGGER pages_fts_delete AFTER DELETE ON pages BEGIN
-	INSERT INTO pages_fts(pages_fts, rowid, body_text, title) VALUES ('delete', old.id, old.body_text, old.title);
-END;
 `
-
-	if _, err := db.conn.Exec(recreateFTSTriggers); err != nil {
-		return fmt.Errorf("failed to recreate SQLite FTS triggers: %w", err)
+	if _, err := db.conn.Exec(dropTriggers); err != nil {
+		return fmt.Errorf("failed to drop FTS triggers: %w", err)
 	}
 
-	if _, err := db.conn.Exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild')"); err != nil {
-		return fmt.Errorf("failed to rebuild SQLite FTS index: %w", err)
+	// 尝试删除 FTS 虚拟表（需要 fts5 模块；如果失败则静默忽略）
+	// 新建的库本就没有此表，老库如果没 fts5 支持则表成为孤岛（触发器已删除，不再写入）
+	if _, err := db.conn.Exec("DROP TABLE IF EXISTS pages_fts"); err != nil {
+		// 忽略 "no such module: fts5" 错误，因为：
+		// 1. 新库：表本就不存在，DROP IF EXISTS 是空操作
+		// 2. 老库但无 fts5：触发器已删除，表成孤岛，不影响功能
+		if !strings.Contains(err.Error(), "no such module") {
+			return fmt.Errorf("failed to drop pages_fts: %w", err)
+		}
 	}
 
 	return nil
@@ -1422,8 +1424,7 @@ func (db *SQLiteDB) GetFavoritesCount() (int, error) {
 }
 
 // buildSQLiteFavoritesSearchWhere 构造收藏搜索的 WHERE 子句。
-// 与 buildSQLiteSearchWhere 保持一致的 LIKE 语义：FTS5 默认 tokenizer 不做中文
-// 分词，且不索引 url 列，用它会导致收藏搜索和全局搜索结果不一致。
+// 与 buildSQLiteSearchWhere 保持一致的 LIKE 语义。
 func buildSQLiteFavoritesSearchWhere(keyword string) (string, []interface{}) {
 	where := ` WHERE (` +
 		`LOWER(COALESCE(p.url, '')) LIKE LOWER(?) ESCAPE '\' OR ` +

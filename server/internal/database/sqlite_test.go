@@ -480,17 +480,23 @@ func TestSQLiteStartupHeavyMigrationRunsOnlyOnce(t *testing.T) {
 		assertSQLiteTimestampText(t, name, value)
 	}
 
-	if !sqliteTriggerExists(t, db, "pages_fts_update") {
-		t.Fatal("pages_fts_update trigger should exist after legacy migration")
+	// 第一次启动后，FTS 表和触发器应该被删除（dropFTSTables 迁移）
+	if sqliteTriggerExists(t, db, "pages_fts_update") {
+		t.Fatal("pages_fts_update trigger should be dropped after migration to version 8")
 	}
+	var ftsCount int
+	if err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pages_fts'").Scan(&ftsCount); err != nil {
+		t.Fatalf("check pages_fts existence failed: %v", err)
+	}
+	if ftsCount != 0 {
+		t.Fatal("pages_fts table should be dropped after migration to version 8")
+	}
+
 	if _, err := db.conn.Exec("CREATE TRIGGER pages_block_update BEFORE UPDATE ON pages BEGIN SELECT RAISE(ABORT, 'unexpected pages update'); END;"); err != nil {
 		t.Fatalf("create pages blocker trigger failed: %v", err)
 	}
 	if _, err := db.conn.Exec("CREATE TRIGGER resources_block_update BEFORE UPDATE ON resources BEGIN SELECT RAISE(ABORT, 'unexpected resources update'); END;"); err != nil {
 		t.Fatalf("create resources blocker trigger failed: %v", err)
-	}
-	if _, err := db.conn.Exec("DROP TRIGGER pages_fts_update"); err != nil {
-		t.Fatalf("drop pages_fts_update failed: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
@@ -503,7 +509,7 @@ func TestSQLiteStartupHeavyMigrationRunsOnlyOnce(t *testing.T) {
 		t.Fatalf("user_version after second startup = %d, want %d", got, sqliteMigrationVersionCurrent)
 	}
 	if sqliteTriggerExists(t, db, "pages_fts_update") {
-		t.Fatal("pages_fts_update was recreated on second startup")
+		t.Fatal("pages_fts_update should remain dropped on second startup")
 	}
 }
 

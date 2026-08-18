@@ -28,7 +28,7 @@ This compiles:
 - Go server binary with SQLite support → `bin/wayback-server`
 - Tampermonkey userscript → `bin/wayback-userscript.js`
 
-**Note**: The build automatically includes the `fts5` tag for SQLite full-text search support.
+**Note**: The build currently includes the `fts5` tag to support dropping FTS5 tables during database migration. This requirement will be removed in a future version after existing databases have been migrated.
 
 ### 3. Build Server Only
 
@@ -70,7 +70,7 @@ go build -tags fts5 -o ../bin/wayback-server \
   ./cmd/server
 ```
 
-**Important**: The `-tags fts5` flag is required for SQLite full-text search support.
+**Note**: The `-tags fts5` flag is currently required to support dropping FTS5 tables during database migration. This requirement will be removed in a future version.
 
 ### Userscript
 
