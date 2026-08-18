@@ -420,7 +420,7 @@ func TestFavoritesSearchEscapesLikeWildcards(t *testing.T) {
 	}
 }
 
-// 中文关键字必须能搜到（FTS5 默认分词器做不到，因此使用 LIKE）
+// 中文关键字必须能搜到
 func TestFavoritesSearchChinese(t *testing.T) {
 	tmpDB := createTempDB(t)
 	defer os.Remove(tmpDB)
@@ -467,7 +467,7 @@ func TestFavoritesSearchChinese(t *testing.T) {
 	}
 }
 
-// 搜索必须按 URL 匹配（FTS5 不索引 url 列）
+// 搜索必须按 URL 匹配
 func TestFavoritesSearchByURL(t *testing.T) {
 	tmpDB := createTempDB(t)
 	defer os.Remove(tmpDB)

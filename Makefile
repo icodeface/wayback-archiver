@@ -1,7 +1,8 @@
 .PHONY: build all server script test test-go test-e2e clean docker-build docker-up docker-down docker-logs
 
 # Build tags:
-# - fts5: Enable SQLite FTS5 full-text search support (required for SQLite database)
+# - fts5: Required for dropping FTS5 tables during database migration (version 8)
+#         This tag will be removed in the next version after existing databases migrate.
 
 BINARY    := wayback-server
 SERVER_PKG := ./cmd/server
