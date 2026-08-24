@@ -43,7 +43,7 @@ func (h *Handler) ArchivePage(c *gin.Context) {
 	log.Printf("Received archive request: %s (frames: %d)", req.URL, len(req.Frames))
 
 	// 处理捕获
-	pageID, action, err := h.dedup.ProcessCaptureAsync(req)
+	pageID, action, err := h.archiver.ProcessAsync(req)
 	if err != nil {
 		log.Printf("Failed to process capture: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -73,7 +73,7 @@ func (h *Handler) UpdatePage(c *gin.Context) {
 
 	log.Printf("Received update request for page %d: %s", pageID, req.URL)
 
-	action, err := h.dedup.UpdateCaptureAsync(pageID, req)
+	action, err := h.archiver.UpdateAsync(pageID, req)
 	if err != nil {
 		log.Printf("Failed to update capture: %v", err)
 		if errors.Is(err, storage.ErrCaptureURLMismatch) {

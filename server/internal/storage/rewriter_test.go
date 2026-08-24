@@ -455,4 +455,3 @@ func TestRewriteHTML_SubdirRelativePath(t *testing.T) {
 		t.Errorf("../other/file.png should be resolved to absolute URL, got: %s", html2)
 	}
 }
-
