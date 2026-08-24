@@ -89,9 +89,15 @@ type Deduplicator struct {
 	globalSem     chan struct{} // 全局并发下载信号量，跨所有页面共享
 	pageCreateMu  *keyedMutex
 	resourceMu    *keyedMutex
-	pageTaskMu    sync.Mutex
-	pageTaskSeq   map[int64]uint64
-	bgTasks       sync.WaitGroup
+
+	// 拆分后的职责组件。旧字段和方法保留作为兼容 façade，逐步迁移调用方。
+	concurrencyManager   *ConcurrencyManager
+	resourceCache        *ResourceCache
+	resourceCacheOnce    sync.Once
+	resourceDownloader   *ResourceDownloader
+	resourceDeduplicator *ResourceDeduplicator
+	htmlRewriter         *HTMLRewriter
+	pageArchiver         *PageArchiver
 
 	// 测试钩子：用于稳定复现页面已创建/新 HTML 已写入后的失败路径。
 	testBeforeCreateFinalize func(pageID int64, htmlPath string, resourceIDs []int64) error
@@ -101,25 +107,75 @@ type Deduplicator struct {
 }
 
 func NewDeduplicator(db database.Database, storage *FileStorage, cfg config.ResourceConfig) *Deduplicator {
+	concurrency := NewConcurrencyManager(cfg.Workers)
 	d := &Deduplicator{
-		db:            db,
-		storage:       storage,
-		cssParser:     NewCSSParser(),
-		htmlExtractor: NewHTMLResourceExtractor(),
-		deletionQueue: NewDeletionQueue(storage.baseDir),
-		config:        cfg,
-		globalSem:     make(chan struct{}, cfg.Workers),
-		pageCreateMu:  newKeyedMutex(),
-		resourceMu:    newKeyedMutex(),
-		pageTaskSeq:   make(map[int64]uint64),
+		db:                 db,
+		storage:            storage,
+		cssParser:          NewCSSParser(),
+		htmlExtractor:      NewHTMLResourceExtractor(),
+		deletionQueue:      NewDeletionQueue(storage.baseDir),
+		config:             cfg,
+		globalSem:          concurrency.downloadSem,
+		pageCreateMu:       concurrency.pageMu,
+		resourceMu:         concurrency.resourceMu,
+		concurrencyManager: concurrency,
 	}
+	d.resourceCache = newResourceCacheWithBacking(cfg.MetadataCacheMB, &d.cache, &d.cacheMu, &d.cacheBytes)
+	d.resourceDownloader = NewResourceDownloader(storage, concurrency)
+	d.resourceDeduplicator = NewResourceDeduplicator(db, storage, d.resourceCache, d.resourceDownloader, concurrency)
+	d.resourceDeduplicator.streamThresholdKB = cfg.StreamThresholdKB
+	d.resourceDeduplicator.beforeCreate = func(url string) {
+		if d.testBeforeResourceCreate != nil {
+			d.testBeforeResourceCreate(url)
+		}
+	}
+	d.htmlRewriter = NewHTMLRewriter(func(req HTMLRewriteRequest) (HTMLRewriteResult, error) {
+		frameMap := buildFrameCaptureMap(req.Frames)
+		resourceIDs := make([]int64, 0)
+		seen := make(map[int64]struct{})
+		html, err := d.rewriteCapturedHTML(req.HTML, req.BaseURL, req.Headers, req.Cookies, req.PageID, req.Timestamp, frameMap, &resourceIDs, seen, make(map[string]bool), make(map[string]processedInlineHTML))
+		return HTMLRewriteResult{HTML: html, ResourceIDs: resourceIDs}, err
+	})
+	d.pageArchiver = NewPageArchiver(d)
 	d.startCacheCleanupLoop()
 	return d
 }
 
+// PageArchiver 返回页面归档 orchestrator。返回同一个实例，便于服务层复用。
+func (d *Deduplicator) PageArchiver() *PageArchiver {
+	if d.pageArchiver == nil {
+		d.pageArchiver = NewPageArchiver(d)
+	}
+	return d.pageArchiver
+}
+
+func (d *Deduplicator) ResourceDownloader() *ResourceDownloader     { return d.resourceDownloader }
+func (d *Deduplicator) ResourceDeduplicator() *ResourceDeduplicator { return d.resourceDeduplicator }
+func (d *Deduplicator) ResourceCache() *ResourceCache               { return d.ensureResourceCache() }
+func (d *Deduplicator) HTMLRewriter() *HTMLRewriter                 { return d.htmlRewriter }
+func (d *Deduplicator) ConcurrencyManager() *ConcurrencyManager     { return d.concurrencyManager }
+
 var errStalePageTask = errors.New("stale page task")
 
 var ErrCaptureURLMismatch = errors.New("capture request URL does not match page URL")
+
+// Public compatibility façade. New code should prefer PageArchiver,
+// ResourceDeduplicator and the other focused components.
+func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string, error) {
+	return d.processCapture(req)
+}
+func (d *Deduplicator) ProcessCaptureAsync(req *models.CaptureRequest) (int64, string, error) {
+	return d.processCaptureAsync(req)
+}
+func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (string, error) {
+	return d.updateCaptureSync(pageID, req)
+}
+func (d *Deduplicator) UpdateCaptureAsync(pageID int64, req *models.CaptureRequest) (string, error) {
+	return d.updateCaptureAsync(pageID, req)
+}
+func (d *Deduplicator) ProcessResource(url, resourceType, pageURL string, headers map[string]string, cookies []models.CaptureCookie) (int64, string, []byte, error) {
+	return d.processResource(url, resourceType, pageURL, headers, cookies)
+}
 
 func (d *Deduplicator) getPageForUpdate(pageID int64, reqURL string) (*models.Page, error) {
 	page, err := d.db.GetPageByID(fmt.Sprintf("%d", pageID))
@@ -158,46 +214,19 @@ func cloneCaptureRequest(req *models.CaptureRequest) *models.CaptureRequest {
 }
 
 func (d *Deduplicator) nextPageTaskSeq(pageID int64) uint64 {
-	d.pageTaskMu.Lock()
-	defer d.pageTaskMu.Unlock()
-	d.pageTaskSeq[pageID] += 1
-	return d.pageTaskSeq[pageID]
+	return d.concurrencyManager.NextPageTask(pageID)
 }
 
 func (d *Deduplicator) isLatestPageTask(pageID int64, seq uint64) bool {
-	d.pageTaskMu.Lock()
-	defer d.pageTaskMu.Unlock()
-	return d.pageTaskSeq[pageID] == seq
-}
-
-func (d *Deduplicator) finishPageTask(pageID int64, seq uint64) {
-	d.pageTaskMu.Lock()
-	defer d.pageTaskMu.Unlock()
-	if d.pageTaskSeq[pageID] == seq {
-		delete(d.pageTaskSeq, pageID)
-	}
+	return d.concurrencyManager.IsLatestPageTask(pageID, seq)
 }
 
 func (d *Deduplicator) runPageTask(pageID int64, seq uint64, label string, fn func() error, onError func(error)) {
-	d.bgTasks.Add(1)
-	go func() {
-		defer d.bgTasks.Done()
-		defer d.finishPageTask(pageID, seq)
-		if err := fn(); err != nil {
-			if errors.Is(err, errStalePageTask) {
-				log.Printf("[%s] Skipped stale background task for page %d", label, pageID)
-				return
-			}
-			if onError != nil {
-				onError(err)
-			}
-			log.Printf("[%s] Background task failed for page %d: %v", label, pageID, err)
-		}
-	}()
+	d.concurrencyManager.RunPageTask(pageID, seq, label, fn, onError)
 }
 
 func (d *Deduplicator) WaitForBackgroundTasks() {
-	d.bgTasks.Wait()
+	d.concurrencyManager.WaitForBackgroundTasks()
 }
 
 func pageCreateKey(url, contentHash string) string {
@@ -213,7 +242,7 @@ type pageCreatePreparation struct {
 }
 
 func (d *Deduplicator) preparePageCreate(req *models.CaptureRequest, capturedAt time.Time, contentHash string) (*pageCreatePreparation, error) {
-	unlock := d.pageCreateMu.lock(pageCreateKey(req.URL, contentHash))
+	unlock := d.concurrencyManager.LockPage(pageCreateKey(req.URL, contentHash))
 	defer unlock()
 
 	existingPage, err := d.db.GetPageByURLAndHash(req.URL, contentHash)
@@ -286,7 +315,7 @@ func (d *Deduplicator) preparePageCreate(req *models.CaptureRequest, capturedAt 
 	return &pageCreatePreparation{pageID: pageID, action: models.ArchiveActionCreated, tempHTMLPath: tempHTMLPath, enqueueFinalize: true, rollbackOnFailure: true}, nil
 }
 
-func (d *Deduplicator) ProcessCaptureAsync(req *models.CaptureRequest) (int64, string, error) {
+func (d *Deduplicator) processCaptureAsync(req *models.CaptureRequest) (int64, string, error) {
 	capturedAt := time.Now()
 	contentHash := hashCaptureContent(req.HTML, req.Frames)
 
@@ -325,7 +354,7 @@ func (d *Deduplicator) ProcessCaptureAsync(req *models.CaptureRequest) (int64, s
 	return prep.pageID, models.ArchiveActionCreated, nil
 }
 
-func (d *Deduplicator) UpdateCaptureAsync(pageID int64, req *models.CaptureRequest) (string, error) {
+func (d *Deduplicator) updateCaptureAsync(pageID int64, req *models.CaptureRequest) (string, error) {
 	page, err := d.getPageForUpdate(pageID, req.URL)
 	if err != nil {
 		return "", err
@@ -351,31 +380,11 @@ func (d *Deduplicator) UpdateCaptureAsync(pageID int64, req *models.CaptureReque
 }
 
 func (d *Deduplicator) startCacheCleanupLoop() {
-	ticker := time.NewTicker(resourceCacheCleanupInterval)
-	go func() {
-		for range ticker.C {
-			d.cleanupExpiredCache()
-		}
-	}()
+	d.ensureResourceCache().StartCleanup()
 }
 
 func (d *Deduplicator) cleanupExpiredCache() int {
-	d.cacheMu.Lock()
-	defer d.cacheMu.Unlock()
-
-	removed := 0
-	d.cache.Range(func(k, v any) bool {
-		entry := v.(*resourceCacheEntry)
-		if time.Since(entry.cachedAt) < resourceCacheTTL {
-			return true
-		}
-
-		if old, loaded := d.cache.LoadAndDelete(k); loaded {
-			d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
-			removed++
-		}
-		return true
-	})
+	removed := d.ensureResourceCache().CleanupExpired()
 
 	if removed > 0 {
 		log.Printf("[cache] evicted %d expired resource entries", removed)
@@ -385,24 +394,20 @@ func (d *Deduplicator) cleanupExpiredCache() int {
 }
 
 func (d *Deduplicator) cacheDelete(key string) {
-	if old, loaded := d.cache.LoadAndDelete(key); loaded {
-		d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
-	}
+	d.ensureResourceCache().Delete(key)
 }
 
 func (d *Deduplicator) loadCachedResource(url string) *resourceCacheEntry {
-	entry, ok := d.cache.Load(url)
-	if !ok {
-		return nil
-	}
+	return d.ensureResourceCache().Load(url)
+}
 
-	cached := entry.(*resourceCacheEntry)
-	if time.Since(cached.cachedAt) >= resourceCacheTTL {
-		d.cacheDelete(url)
-		return nil
-	}
-
-	return cached
+func (d *Deduplicator) ensureResourceCache() *ResourceCache {
+	d.resourceCacheOnce.Do(func() {
+		if d.resourceCache == nil {
+			d.resourceCache = newResourceCacheWithBacking(d.config.MetadataCacheMB, &d.cache, &d.cacheMu, &d.cacheBytes)
+		}
+	})
+	return d.resourceCache
 }
 
 func shortHashForLog(hash string) string {
@@ -437,49 +442,6 @@ func (d *Deduplicator) quarantineResourceFile(filePath, reason string) error {
 	}
 	log.Printf("[resource] quarantined corrupted file=%s moved_to=%s affected=%d reason=%s", filePath, quarantinePath, affected, reason)
 	return nil
-}
-
-func (d *Deduplicator) ensureReusableResource(resource *models.Resource, reuseURL string) bool {
-	if resource == nil {
-		return false
-	}
-	if resource.IsQuarantined {
-		log.Printf("[resource] skip quarantined reuse id=%d url=%s reason=%s", resource.ID, shortURLForLog(reuseURL), resource.QuarantineReason)
-		return false
-	}
-	if resource.FilePath == "" {
-		log.Printf("[resource] skip reuse for empty file path id=%d url=%s", resource.ID, shortURLForLog(reuseURL))
-		return false
-	}
-	return true
-}
-
-func (d *Deduplicator) tryReuseFreshCache(url string, cached *resourceCacheEntry) (int64, string, bool) {
-	if cached == nil || cached.freshUntil.IsZero() || !time.Now().Before(cached.freshUntil) {
-		return 0, "", false
-	}
-	if cached.filePath == "" {
-		d.cacheDelete(url)
-		return 0, "", false
-	}
-	resource, err := d.db.GetResourceByID(cached.resourceID)
-	if err != nil {
-		log.Printf("[cache] failed to load cached resource %d for %s: %v", cached.resourceID, shortURLForLog(url), err)
-		d.cacheDelete(url)
-		return 0, "", false
-	}
-	if !d.ensureReusableResource(resource, url) {
-		d.cacheDelete(url)
-		return 0, "", false
-	}
-
-	d.cacheStoreWithMetadata(url, resource.ID, resource.FilePath, downloadMetadata{
-		etag:       cached.etag,
-		lastMod:    cached.lastMod,
-		freshUntil: cached.freshUntil,
-	}, nil)
-	log.Printf("[cache] fresh reuse: %s", shortURLForLog(url))
-	return resource.ID, resource.FilePath, true
 }
 
 func shortURLForLog(raw string) string {
@@ -520,7 +482,7 @@ func logSlowResource(url, resourceType string, fileSize int64, trace downloadTra
 
 // cacheMaxBytes 返回缓存大小上限（字节）
 func (d *Deduplicator) cacheMaxBytes() int64 {
-	return int64(d.config.MetadataCacheMB) * 1024 * 1024
+	return d.ensureResourceCache().MaxBytes()
 }
 
 func cacheEntrySize(key, filePath string) int64 {
@@ -534,260 +496,15 @@ func (d *Deduplicator) cacheStore(key string, resourceID int64, filePath string,
 
 func (d *Deduplicator) cacheStoreWithMetadata(key string, resourceID int64, filePath string, metadata downloadMetadata, data []byte) {
 	_ = data // 资源内容不再缓存，只保留元数据
-	if key == "" || filePath == "" {
-		return
-	}
-
-	entrySize := cacheEntrySize(key, filePath)
-
-	// 如果单个条目就超过缓存上限，不缓存
-	if entrySize > d.cacheMaxBytes() {
-		return
-	}
-
-	// 加锁保护淘汰逻辑，防止并发 cacheStore 导致缓存大小超限
-	d.cacheMu.Lock()
-	defer d.cacheMu.Unlock()
-
-	// 如果 key 已存在，先减去旧条目大小
-	if old, loaded := d.cache.Load(key); loaded {
-		d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
-	}
-
-	// 淘汰过期和超量条目
-	for d.cacheBytes.Load()+entrySize > d.cacheMaxBytes() {
-		evicted := false
-		var oldestKey any
-		var oldestTime time.Time
-
-		d.cache.Range(func(k, v any) bool {
-			entry := v.(*resourceCacheEntry)
-			// 优先淘汰过期的
-			if time.Since(entry.cachedAt) >= resourceCacheTTL {
-				if old, loaded := d.cache.LoadAndDelete(k); loaded {
-					d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
-					evicted = true
-					return false // 淘汰一个后重新检查
-				}
-			}
-			// 记录最旧的
-			if oldestKey == nil || entry.cachedAt.Before(oldestTime) {
-				oldestKey = k
-				oldestTime = entry.cachedAt
-			}
-			return true
-		})
-
-		if !evicted {
-			// 没有过期的可淘汰，淘汰最旧的
-			if oldestKey != nil {
-				if old, loaded := d.cache.LoadAndDelete(oldestKey); loaded {
-					d.cacheBytes.Add(-old.(*resourceCacheEntry).size)
-				}
-			} else {
-				break // 缓存为空但仍然超限，不应该发生
-			}
-		}
-	}
-
-	entry := &resourceCacheEntry{
-		resourceID: resourceID,
-		filePath:   filePath,
-		etag:       metadata.etag,
-		lastMod:    metadata.lastMod,
-		freshUntil: metadata.freshUntil,
-		size:       entrySize,
-		cachedAt:   time.Now(),
-	}
-	d.cache.Store(key, entry)
-	d.cacheBytes.Add(entrySize)
+	d.ensureResourceCache().Store(key, resourceID, filePath, metadata)
 }
 
 // ProcessResource 处理单个资源：下载、去重、存储
 // 返回 (resourceID, filePath, data, error)
 // 小文件（≤ streamThreshold）保留在内存供当前调用链使用；缓存只保留元数据
-func (d *Deduplicator) ProcessResource(url, resourceType string, pageURL string, headers map[string]string, cookies []models.CaptureCookie) (int64, string, []byte, error) {
-	unlock := d.resourceMu.lock(url)
-	defer unlock()
-	if d.testBeforeResourceCreate != nil {
-		d.testBeforeResourceCreate(url)
-	}
-
-	startTime := time.Now()
-	cached := d.loadCachedResource(url)
-	if resourceID, filePath, reused := d.tryReuseFreshCache(url, cached); reused {
-		return resourceID, filePath, nil, nil
-	}
-
-	var data []byte    // 小文件有值，大文件 nil
-	var tmpPath string // 大文件临时文件路径，小文件空
-	var hash string
-	var fileSize int64
-	var metadata downloadMetadata
-	var trace downloadTrace
-	var dbDuration time.Duration
-	var saveDuration time.Duration
-
-	streamThreshold := int64(d.config.StreamThresholdKB) * 1024
-	var err error
-	data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(
-		url,
-		pageURL,
-		headers,
-		cookies,
-		streamThreshold,
-		cachedETag(cached),
-		cachedLastModified(cached),
-	)
-	if err != nil {
-		log.Printf("Download failed for %s: %v", url, err)
-		return d.processResourceFallback(url, err)
-	}
-	if metadata.notModified {
-		if cached == nil {
-			return 0, "", nil, fmt.Errorf("received 304 without cache entry for %s", url)
-		}
-		if cached.filePath == "" {
-			d.cacheDelete(url)
-			data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(url, pageURL, headers, cookies, streamThreshold, "", "")
-			if err != nil {
-				log.Printf("Download failed for %s after cache revalidation miss: %v", url, err)
-				return d.processResourceFallback(url, err)
-			}
-		} else {
-			cachedResource, err := d.db.GetResourceByID(cached.resourceID)
-			if err != nil {
-				return 0, "", nil, fmt.Errorf("db query cached resource failed: %w", err)
-			}
-			if !d.ensureReusableResource(cachedResource, url) {
-				d.cacheDelete(url)
-				data, hash, tmpPath, metadata, trace, err = d.storage.DownloadResourceWithMetadata(url, pageURL, headers, cookies, streamThreshold, "", "")
-				if err != nil {
-					log.Printf("Download failed for %s after corrupted cache revalidation miss: %v", url, err)
-					return d.processResourceFallback(url, err)
-				}
-			} else {
-				if !metadata.hasFreshness {
-					metadata.freshUntil = cached.freshUntil
-				}
-				if metadata.etag == "" {
-					metadata.etag = cached.etag
-				}
-				if metadata.lastMod == "" {
-					metadata.lastMod = cached.lastMod
-				}
-				d.cacheStoreWithMetadata(url, cachedResource.ID, cachedResource.FilePath, metadata, nil)
-				log.Printf("[cache] revalidated 304: %s (%v)", shortURLForLog(url), time.Since(startTime))
-				return cachedResource.ID, cachedResource.FilePath, nil, nil
-			}
-		}
-	}
-	if data != nil {
-		fileSize = int64(len(data))
-	} else if tmpPath != "" {
-		if info, statErr := os.Stat(tmpPath); statErr == nil {
-			fileSize = info.Size()
-		}
-	}
-
-	// 确保大文件临时文件最终被清理（SaveResourceFromFile 成功后会置空 tmpPath）
-	if tmpPath != "" {
-		defer func() {
-			if tmpPath != "" {
-				os.Remove(tmpPath)
-			}
-		}()
-	}
-
-	if cached != nil {
-		dbStart := time.Now()
-		cachedResource, err := d.db.GetResourceByID(cached.resourceID)
-		dbDuration += time.Since(dbStart)
-		if err != nil {
-			return 0, "", nil, fmt.Errorf("db query cached resource failed: %w", err)
-		}
-		if cachedResource != nil && cachedResource.ContentHash == hash && d.ensureReusableResource(cachedResource, url) {
-			dbStart = time.Now()
-			if err := d.db.UpdateResourceLastSeen(cachedResource.ID); err != nil {
-				dbDuration += time.Since(dbStart)
-				return 0, "", nil, err
-			}
-			dbDuration += time.Since(dbStart)
-			d.cacheStoreWithMetadata(url, cachedResource.ID, cachedResource.FilePath, metadata, data)
-			logSlowResource(url, resourceType, fileSize, trace, dbDuration, saveDuration, time.Since(startTime))
-			return cachedResource.ID, cachedResource.FilePath, data, nil
-		}
-	}
-
-	// 检查是否已有相同 URL 的资源记录
-	dbStart := time.Now()
-	existingByURL, err := d.db.GetResourceByURL(url)
-	dbDuration += time.Since(dbStart)
-	if err != nil {
-		return 0, "", nil, fmt.Errorf("db query by url failed: %w", err)
-	}
-	if existingByURL != nil && !d.ensureReusableResource(existingByURL, url) {
-		existingByURL = nil
-	}
-	if existingByURL != nil {
-		if existingByURL.ContentHash == hash {
-			dbStart = time.Now()
-			if err := d.db.UpdateResourceLastSeen(existingByURL.ID); err != nil {
-				dbDuration += time.Since(dbStart)
-				return 0, "", nil, err
-			}
-			dbDuration += time.Since(dbStart)
-			d.cacheStoreWithMetadata(url, existingByURL.ID, existingByURL.FilePath, metadata, data)
-			logSlowResource(url, resourceType, fileSize, trace, dbDuration, saveDuration, time.Since(startTime))
-			return existingByURL.ID, existingByURL.FilePath, data, nil
-		}
-
-		log.Printf("Resource content changed for URL %s: old_hash=%s new_hash=%s", url, existingByURL.ContentHash[:16], hash[:16])
-	}
-
-	// 检查是否有相同哈希的资源
-	dbStart = time.Now()
-	existingByHash, err := d.db.GetResourceByHash(hash)
-	dbDuration += time.Since(dbStart)
-	if err != nil {
-		return 0, "", nil, fmt.Errorf("db query by hash failed: %w", err)
-	}
-	if existingByHash != nil && !d.ensureReusableResource(existingByHash, url) {
-		existingByHash = nil
-	}
-
-	var filePath string
-	if existingByHash != nil {
-		filePath = existingByHash.FilePath
-	} else if tmpPath != "" {
-		// 大文件：从临时文件移动到资源目录（零拷贝）
-		saveStart := time.Now()
-		filePath, err = d.storage.SaveResourceFromFile(tmpPath, hash, resourceType)
-		saveDuration += time.Since(saveStart)
-		if err != nil {
-			return 0, "", nil, fmt.Errorf("save from file failed: %w", err)
-		}
-		tmpPath = "" // 已被移走，阻止 defer 删除
-	} else {
-		// 小文件：从内存写入
-		saveStart := time.Now()
-		filePath, err = d.storage.SaveResource(data, hash, resourceType)
-		saveDuration += time.Since(saveStart)
-		if err != nil {
-			return 0, "", nil, fmt.Errorf("save failed: %w", err)
-		}
-	}
-
-	dbStart = time.Now()
-	resourceID, err := d.db.CreateResource(url, hash, resourceType, filePath, fileSize)
-	dbDuration += time.Since(dbStart)
-	if err != nil {
-		return 0, "", nil, fmt.Errorf("db insert failed: %w", err)
-	}
-
-	d.cacheStoreWithMetadata(url, resourceID, filePath, metadata, data)
-	logSlowResource(url, resourceType, fileSize, trace, dbDuration, saveDuration, time.Since(startTime))
-	return resourceID, filePath, data, nil
+func (d *Deduplicator) processResource(url, resourceType string, pageURL string, headers map[string]string, cookies []models.CaptureCookie) (int64, string, []byte, error) {
+	result, err := d.resourceDeduplicator.Process(ResourceProcessRequest{URL: url, Type: resourceType, PageURL: pageURL, Headers: headers, Cookies: cookies})
+	return result.ResourceID, result.FilePath, result.Data, err
 }
 
 func cachedETag(cached *resourceCacheEntry) string {
@@ -806,35 +523,6 @@ func cachedLastModified(cached *resourceCacheEntry) string {
 
 // processResourceFallback 下载失败时的兜底逻辑。
 // 仅允许复用同一 URL 的历史资源，并要求本地文件仍然存在，避免跨 URL 误复用。
-func (d *Deduplicator) processResourceFallback(url string, downloadErr error) (int64, string, []byte, error) {
-	resource, err := d.db.GetResourceByURL(url)
-	if err != nil {
-		return 0, "", nil, fmt.Errorf("download failed: %w (fallback lookup failed: %v)", downloadErr, err)
-	}
-	if resource == nil || resource.FilePath == "" {
-		return 0, "", nil, fmt.Errorf("download failed: %w", downloadErr)
-	}
-	if !d.ensureReusableResource(resource, url) {
-		return 0, "", nil, fmt.Errorf("download failed: %w", downloadErr)
-	}
-
-	filePath := filepath.Join(d.storage.baseDir, resource.FilePath)
-	if _, err := os.Stat(filePath); err != nil {
-		if os.IsNotExist(err) {
-			return 0, "", nil, fmt.Errorf("download failed: %w", downloadErr)
-		}
-		return 0, "", nil, fmt.Errorf("download failed: %w (fallback stat failed: %v)", downloadErr, err)
-	}
-
-	if err := d.db.UpdateResourceLastSeen(resource.ID); err != nil {
-		return 0, "", nil, fmt.Errorf("download failed: %w (fallback last_seen update failed: %v)", downloadErr, err)
-	}
-
-	d.cacheStore(url, resource.ID, resource.FilePath, nil)
-	log.Printf("Fallback: reusing previous resource (ID: %d) for: %s", resource.ID, shortURLForLog(url))
-	return resource.ID, resource.FilePath, nil, nil
-}
-
 type cssWorkItem struct {
 	cssContent string
 	cssURL     string
@@ -951,7 +639,7 @@ func appendUniqueResourceID(resourceIDs *[]int64, seen map[int64]struct{}, resou
 }
 
 func (d *Deduplicator) processInlineResource(url, resourceType string, data []byte) (int64, string, []byte, error) {
-	unlock := d.resourceMu.lock(url)
+	unlock := d.concurrencyManager.LockResource(url)
 	defer unlock()
 	if d.testBeforeResourceCreate != nil {
 		d.testBeforeResourceCreate(url)
@@ -968,7 +656,7 @@ func (d *Deduplicator) processInlineResource(url, resourceType string, data []by
 
 	var filePath string
 	if existingByHash != nil {
-		if d.ensureReusableResource(existingByHash, url) {
+		if d.resourceDeduplicator.ensureReusableResource(existingByHash, url) {
 			filePath = existingByHash.FilePath
 		} else {
 			existingByHash = nil
@@ -1021,11 +709,8 @@ func (d *Deduplicator) processCSSWorkItems(cssWorkItems []cssWorkItem, pageURL s
 		wg.Add(1)
 		go func(sub cssSubResource) {
 			defer wg.Done()
-			d.globalSem <- struct{}{}
-			defer func() { <-d.globalSem }()
-
-			resID, filePath, _, err := d.ProcessResource(sub.absoluteURL, d.guessResourceType(sub.absoluteURL), pageURL, headers, cookies)
-			resultsCh <- cssSubResult{sub: sub, resID: resID, filePath: filePath, err: err}
+			processed, err := d.resourceDeduplicator.Process(ResourceProcessRequest{URL: sub.absoluteURL, Type: d.guessResourceType(sub.absoluteURL), PageURL: pageURL, Headers: headers, Cookies: cookies})
+			resultsCh <- cssSubResult{sub: sub, resID: processed.ResourceID, filePath: processed.FilePath, err: err}
 		}(sub)
 	}
 
@@ -1088,11 +773,12 @@ func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers 
 			}
 		}
 
-		resourceID, filePath, data, err := d.ProcessResource(res.URL, res.Type, baseURL, headers, cookies)
+		processed, err := d.resourceDeduplicator.Process(ResourceProcessRequest{URL: res.URL, Type: res.Type, PageURL: baseURL, Headers: headers, Cookies: cookies})
 		if err != nil {
 			log.Printf("Failed to process resource %s: %v", res.URL, err)
 			continue
 		}
+		resourceID, filePath, data := processed.ResourceID, processed.FilePath, processed.Data
 
 		appendUniqueResourceID(resourceIDs, seen, resourceID)
 		rewriter.AddMapping(res.URL, filePath)
@@ -1120,7 +806,7 @@ func (d *Deduplicator) rewriteCapturedHTML(htmlContent, baseURL string, headers 
 }
 
 // ProcessCapture 处理完整的页面捕获，返回 (pageID, action, error)
-func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string, error) {
+func (d *Deduplicator) processCapture(req *models.CaptureRequest) (int64, string, error) {
 	capturedAt := time.Now()
 	contentHash := hashCaptureContent(req.HTML, req.Frames)
 
@@ -1171,7 +857,7 @@ func (d *Deduplicator) ProcessCapture(req *models.CaptureRequest) (int64, string
 
 // UpdateCapture 更新已存在页面的捕获内容
 // 策略：更新 page 记录的 html_path 和 content_hash，旧 HTML 文件加入删除队列（7 天后自动删除）
-func (d *Deduplicator) UpdateCapture(pageID int64, req *models.CaptureRequest) (string, error) {
+func (d *Deduplicator) updateCaptureSync(pageID int64, req *models.CaptureRequest) (string, error) {
 	return d.updateCapture(pageID, req, nil)
 }
 
@@ -1202,8 +888,7 @@ func (d *Deduplicator) updateCapture(pageID int64, req *models.CaptureRequest, s
 	capturedAt := time.Now()
 	oldHTMLPath := page.HTMLPath // 保存旧路径用于日志记录
 
-	frameMap := buildFrameCaptureMap(req.Frames)
-	log.Printf("[Update] Processing capture with %d top-level resources and %d frames", len(d.htmlExtractor.ExtractResources(req.HTML, req.URL)), len(frameMap))
+	log.Printf("[Update] Processing capture with %d top-level resources and %d frames", len(d.htmlExtractor.ExtractResources(req.HTML, req.URL)), len(req.Frames))
 
 	// 保存新 HTML
 	tempHTMLPath, err := d.storage.SaveHTML(req.URL, req.HTML, capturedAt)
@@ -1225,13 +910,13 @@ func (d *Deduplicator) updateCapture(pageID int64, req *models.CaptureRequest, s
 	// 生成时间戳用于资源路径
 	timestamp := capturedAt.Format("20060102150405")
 
-	var resourceIDs []int64
 	processStart := time.Now()
-	resourceIDSet := make(map[int64]struct{})
-	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, req.Cookies, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
+	rewriteResult, err := d.htmlRewriter.Rewrite(HTMLRewriteRequest{HTML: req.HTML, BaseURL: req.URL, Headers: req.Headers, Cookies: req.Cookies, Frames: req.Frames, PageID: pageID, Timestamp: timestamp})
 	if err != nil {
 		return "", fmt.Errorf("rewrite html failed: %w", err)
 	}
+	resourceIDs := rewriteResult.ResourceIDs
+	rewrittenHTML := rewriteResult.HTML
 	log.Printf("[Update] Processed %d linked resources in %v", len(resourceIDs), time.Since(processStart))
 	if staleCheck != nil && staleCheck() {
 		return "", errStalePageTask
@@ -1273,17 +958,16 @@ func (d *Deduplicator) finalizeCreateCapture(pageID int64, tempHTMLPath string, 
 		return errStalePageTask
 	}
 
-	frameMap := buildFrameCaptureMap(req.Frames)
-	log.Printf("Total resources to process: %d (frames: %d)", len(d.htmlExtractor.ExtractResources(req.HTML, req.URL)), len(frameMap))
+	log.Printf("Total resources to process: %d (frames: %d)", len(d.htmlExtractor.ExtractResources(req.HTML, req.URL)), len(req.Frames))
 
 	timestamp := capturedAt.Format("20060102150405")
-	var resourceIDs []int64
 	startTime := time.Now()
-	resourceIDSet := make(map[int64]struct{})
-	rewrittenHTML, err := d.rewriteCapturedHTML(req.HTML, req.URL, req.Headers, req.Cookies, pageID, timestamp, frameMap, &resourceIDs, resourceIDSet, make(map[string]bool), make(map[string]processedInlineHTML))
+	rewriteResult, err := d.htmlRewriter.Rewrite(HTMLRewriteRequest{HTML: req.HTML, BaseURL: req.URL, Headers: req.Headers, Cookies: req.Cookies, Frames: req.Frames, PageID: pageID, Timestamp: timestamp})
 	if err != nil {
 		return fmt.Errorf("rewrite html failed: %w", err)
 	}
+	resourceIDs := rewriteResult.ResourceIDs
+	rewrittenHTML := rewriteResult.HTML
 	log.Printf("Resource processing completed: %d linked resources, took %v", len(resourceIDs), time.Since(startTime))
 
 	if staleCheck != nil && staleCheck() {

@@ -155,14 +155,28 @@ SPA 导航时，框架会拆除旧页面 DOM 并渲染新页面。如果立即�
 
 ### 初次归档（POST /api/archive）
 
-`Deduplicator.ProcessCapture()` / `Deduplicator.ProcessCaptureAsync()`:
+组件边界和 request/result 契约见 [deduplicator-components.md](deduplicator-components.md)。
+
+服务端资源归档已拆分为六个职责组件，`Deduplicator` 仅保留兼容 façade：
+
+- `PageArchiver`：同步/异步创建与更新的流程编排
+- `HTMLRewriter`：提取 HTML/CSS 资源并返回重写后的 HTML 与资源 ID
+- `ResourceDeduplicator`：按 URL、内容哈希和版本进行资源去重
+- `ResourceDownloader`：下载、条件请求、有限重试和流式结果输出
+- `ResourceCache`：URL freshness/validator 元数据缓存及 TTL/容量淘汰
+- `ConcurrencyManager`：全局下载信号量和按页面/资源键串行锁
+
+HTTP API 通过 `PageArchiver.ProcessAsync()` / `PageArchiver.UpdateAsync()` 进入归档流程；
+旧的 `Deduplicator.ProcessCapture*()` / `UpdateCapture*()` 仍可供现有调用方兼容使用。
+
+`PageArchiver.Process()` / `PageArchiver.ProcessAsync()`:
 
 1. 计算 HTML 的 SHA256 哈希
 2. 查询数据库：只有 `snapshot_state=ready` 的相同 URL + 相同哈希，才只更新 `last_visited` 并返回 `unchanged`
 3. 若命中 `pending` / `failed` 的相同 URL + 相同哈希，复用原 `pageID`，重置为 `pending` 并重新排队执行 finalize
 4. 否则先保存临时 HTML，并创建 `pages` 记录（初始 `snapshot_state=pending`）以获取 `pageID`
 5. 从 HTML 中提取资源 URL（img/link/script 等）
-6. 8 个 worker 并发下载/处理资源
+6. `ConcurrencyManager` 按 `RESOURCE_WORKERS` 限制所有页面共享的下载并发；`ResourceDownloader` 对网络错误和 429/5xx 做有限重试
 7. 每个资源按哈希去重；即使 URL 相同，只要哈希变化也会创建新版本记录
 8. 对 CSS：提取并下载其子资源，但不原地改写共享 CSS 文件
 9. 用 `URLRewriter` 将 HTML 中的外部 URL 替换为本地路径
@@ -196,7 +210,7 @@ CSS 文件按内容哈希去重后，会被多个页面共享复用。
 
 ### 更新归档（PUT /api/archive/:id）
 
-`Deduplicator.UpdateCapture()`:
+`PageArchiver.Update()` / `PageArchiver.UpdateAsync()`:
 
 1. 保留现有页面记录和旧的 `page_resources` 关联不动
 2. 重新执行资源处理流程（提取 → 下载 → 去重 → 重写），并写入新的临时 HTML 文件

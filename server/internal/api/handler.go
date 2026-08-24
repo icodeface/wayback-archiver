@@ -7,20 +7,26 @@ import (
 )
 
 type Handler struct {
-	dedup   *storage.Deduplicator
-	db      database.Database
-	css     *storage.CSSParser
-	dataDir string
-	logger  *logging.Logger
+	dedup    *storage.Deduplicator
+	archiver *storage.PageArchiver
+	db       database.Database
+	css      *storage.CSSParser
+	dataDir  string
+	logger   *logging.Logger
 }
 
 func NewHandler(dedup *storage.Deduplicator, db database.Database, dataDir string, logger *logging.Logger) *Handler {
+	var archiver *storage.PageArchiver
+	if dedup != nil {
+		archiver = dedup.PageArchiver()
+	}
 	return &Handler{
-		dedup:   dedup,
-		db:      db,
-		css:     storage.NewCSSParser(),
-		dataDir: dataDir,
-		logger:  logger,
+		dedup:    dedup,
+		archiver: archiver,
+		db:       db,
+		css:      storage.NewCSSParser(),
+		dataDir:  dataDir,
+		logger:   logger,
 	}
 }
 
