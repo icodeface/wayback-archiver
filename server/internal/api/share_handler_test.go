@@ -35,7 +35,7 @@ func setupSQLiteShareTestHandler(t *testing.T) (*Handler, func()) {
 		MetadataCacheMB: 16,
 		DownloadTimeout: 30,
 	})
-	handler := NewHandler(dedup, db, dataDir, nil)
+	handler := NewHandler(dedup, db, dataDir, nil, &config.AuthConfig{})
 	cleanup := func() {
 		dedup.WaitForBackgroundTasks()
 		_ = db.Close()

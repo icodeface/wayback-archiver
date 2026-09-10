@@ -202,7 +202,7 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 		}
 
 		// 流式响应，避免将整个文件加载到内存
-		serveFileStreaming(c, safePath)
+		h.serveFileStreaming(c, safePath)
 		return
 	}
 
@@ -241,7 +241,7 @@ func (h *Handler) ProxyResource(c *gin.Context) {
 	// 设置Content-Type（需要在 serveFileStreaming 之前，因为 ServeContent 会用文件扩展名推断）
 	contentType := detectContentType(resource)
 	c.Header("Content-Type", contentType)
-	c.Header("Cache-Control", "public, max-age=31536000")
+	c.Header("Cache-Control", h.resourceCacheControl())
 
 	// 流式响应，避免将整个文件加载到内存
 	f, err := os.Open(filePath)
@@ -270,7 +270,7 @@ func (h *Handler) serveRewrittenCSS(c *gin.Context, pageID int64, resource *mode
 }
 
 func (h *Handler) serveRewrittenCSSWithResolver(c *gin.Context, resource *models.Resource, urlPrefix string, resolveFilePath func(string) (string, bool)) {
-	h.serveRewrittenCSSWithResolverAndCache(c, resource, urlPrefix, "public, max-age=31536000", resolveFilePath)
+	h.serveRewrittenCSSWithResolverAndCache(c, resource, urlPrefix, h.resourceCacheControl(), resolveFilePath)
 }
 
 func (h *Handler) serveRewrittenCSSWithResolverAndCache(c *gin.Context, resource *models.Resource, urlPrefix, cacheControl string, resolveFilePath func(string) (string, bool)) {
@@ -300,8 +300,8 @@ func (h *Handler) serveArchivedHTMLResource(c *gin.Context, resource *models.Res
 
 	sanitized := sanitizeArchivedHTML(string(htmlContent))
 	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.Header("Cache-Control", "public, max-age=31536000")
-	c.Header("Content-Security-Policy", "default-src 'self'; script-src 'none'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-src 'none'; frame-src 'self'; object-src 'none';")
+	c.Header("Cache-Control", h.resourceCacheControl())
+	c.Header("Content-Security-Policy", "default-src 'self'; script-src 'none'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; font-src * data:; connect-self'; frame-src 'self'; object-src 'none';")
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(sanitized))
 }
 
@@ -703,12 +703,12 @@ func (h *Handler) ServeLocalResource(c *gin.Context) {
 		return
 	}
 
-	serveFileStreaming(c, safePath)
+	h.serveFileStreaming(c, safePath)
 }
 
 // serveFileStreaming 流式提供文件，避免将整个文件加载到内存
-func serveFileStreaming(c *gin.Context, filePath string) {
-	serveFileStreamingWithCacheControl(c, filePath, "public, max-age=31536000")
+func (h *Handler) serveFileStreaming(c *gin.Context, filePath string) {
+	serveFileStreamingWithCacheControl(c, filePath, h.resourceCacheControl())
 }
 
 func serveFileStreamingWithCacheControl(c *gin.Context, filePath, cacheControl string) {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"wayback/internal/config"
 )
 
 func TestServeFileStreaming_SmallFile(t *testing.T) {
@@ -26,7 +27,8 @@ func TestServeFileStreaming_SmallFile(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/test.css", nil)
 
-	serveFileStreaming(c, filePath)
+	handler := &Handler{authCfg: &config.AuthConfig{}}
+	handler.serveFileStreaming(c, filePath)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", w.Code)
@@ -60,7 +62,8 @@ func TestServeFileStreaming_LargeFile(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/large.img", nil)
 
-	serveFileStreaming(c, filePath)
+	handler := &Handler{authCfg: &config.AuthConfig{}}
+	handler.serveFileStreaming(c, filePath)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", w.Code)
@@ -77,7 +80,8 @@ func TestServeFileStreaming_NotFound(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/missing.css", nil)
 
-	serveFileStreaming(c, "/nonexistent/path/file.css")
+	handler := &Handler{authCfg: &config.AuthConfig{}}
+	handler.serveFileStreaming(c, "/nonexistent/path/file.css")
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
@@ -110,7 +114,8 @@ func TestServeFileStreaming_ContentTypes(t *testing.T) {
 			c, _ := gin.CreateTestContext(w)
 			c.Request = httptest.NewRequest("GET", "/"+tt.filename, nil)
 
-			serveFileStreaming(c, filePath)
+			handler := &Handler{authCfg: &config.AuthConfig{}}
+			handler.serveFileStreaming(c, filePath)
 
 			ct := w.Header().Get("Content-Type")
 			if !strings.Contains(ct, tt.wantType) {
@@ -132,7 +137,8 @@ func TestServeFileStreaming_HeadRequest(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("HEAD", "/test.css", nil)
 
-	serveFileStreaming(c, filePath)
+	handler := &Handler{authCfg: &config.AuthConfig{}}
+	handler.serveFileStreaming(c, filePath)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", w.Code)

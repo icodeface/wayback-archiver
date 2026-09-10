@@ -97,15 +97,20 @@ func requestIsHTTPS(r *http.Request) bool {
 // shouldIssueCookie 判断是否应该在当前请求上下发会话 Cookie。
 //
 // 只在 HTML 页面和 API 端点上下发，静态资源请求不下发，理由：
-//   1. 静态资源设了 public 长缓存，下发 Set-Cookie 会污染共享缓存
+//   1. 静态资源设了长缓存，下发 Set-Cookie 会污染共享缓存
 //   2. 浏览器访问页面时已建立会话，子资源请求自动带 Cookie，无需重复下发
 //   3. 油猴脚本用 Basic Auth 直接上传，不依赖 Cookie
+//
+// 注意：这是性能优化，不是安全边界。真正的安全保护在 issueSessionCookie()
+// 内部设置 Cache-Control: no-store，以及 Handler.resourceCacheControl() 根据
+// 认证状态返回 private/public。
 func shouldIssueCookie(path string) bool {
-	// /archive/resources/* 和 /archive/:page_id/:timestamp/* 是归档资源
-	// /share/:token/archive/:timestamp/* 是分享资源（虽然已在认证前，但保持一致）
-	return !strings.HasPrefix(path, "/archive/resources/") &&
-		!strings.HasPrefix(path, "/archive/") &&
-		!strings.Contains(path, "/archive/")
+	// 任何包含 /archive/ 的路径都是归档资源或其子资源
+	// 这个判断比精确匹配宽泛，但足够覆盖所有资源路径：
+	//   /archive/resources/ab/cd/file.css
+	//   /archive/123/1234567890/image.jpg
+	// 副作用：PUT /api/archive/:id 也不下发 Cookie，但无影响（油猴用 Basic Auth）
+	return !strings.Contains(path, "/archive/")
 }
 
 // issueSessionCookie 在 Basic Auth 校验通过后下发长效会话 Cookie。

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"wayback/internal/config"
 	"wayback/internal/database"
 )
 
@@ -242,7 +243,7 @@ func TestProxyResource_SamePageVersionedQueryResourcesDoNotCrossRewrite(t *testi
 	}
 	defer db.Close()
 
-	handler := NewHandler(nil, db, dataDir, nil)
+	handler := NewHandler(nil, db, dataDir, nil, &config.AuthConfig{})
 
 	router := gin.New()
 	router.GET("/archive/:page_id/:timestamp/*resource_path", handler.ProxyResource)
