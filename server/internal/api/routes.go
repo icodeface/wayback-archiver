@@ -114,12 +114,9 @@ func SetupRoutes(r *gin.Engine, handler *Handler, authCfg *config.AuthConfig, se
 	registerGETAndHEAD(r, "/share/:token/archive/:timestamp/*resource_path", handler.ProxySharedResource)
 	registerGETAndHEAD(r, "/share/:token/resources/*filepath", handler.ServeSharedLocalResource)
 
-	// Basic Auth 中间件（如果启用）
+	// 认证中间件（如果启用）：接受会话 Cookie 或 Basic Auth 头
 	if authCfg.Enabled() {
-		accounts := gin.Accounts{
-			config.AuthUsername: authCfg.Password,
-		}
-		r.Use(gin.BasicAuth(accounts))
+		r.Use(AuthMiddleware(authCfg.Password))
 	}
 
 	// Web UI (embedded)
