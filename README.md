@@ -164,7 +164,7 @@ The server automatically loads `.env` from the working directory if it exists. Y
 | `ALLOWED_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | CORS allowed origins (comma-separated). For remote deployment, add your domain: `https://your-domain.com` |
 | `DATA_DIR` | `./data` | Storage directory for HTML and resources |
 | `LOG_DIR` | `./data/logs` | Log file directory |
-| `AUTH_PASSWORD` | *(empty)* | HTTP Basic Auth password (disabled when empty, username: `wayback`). **REQUIRED for remote deployment** |
+| `AUTH_PASSWORD` | *(empty)* | Authentication password (disabled when empty, username: `wayback`). Server accepts both session cookies and Basic Auth headers. **REQUIRED for remote deployment** |
 | `RESOURCE_WORKERS` | CPU cores × 4 (min 2) | Global concurrent resource download workers across all pages |
 | `RESOURCE_METADATA_CACHE_MB` | 10% of system memory | Metadata cache budget for resource URL lookups plus HTTP freshness/validator reuse and revalidation. `RESOURCE_CACHE_MB` is still accepted as a legacy alias. |
 | `RESOURCE_DOWNLOAD_TIMEOUT` | `30` | Per-resource download timeout in seconds |
@@ -208,9 +208,11 @@ ENABLE_COMPRESSION: true  # Enable upload compression for remote deployment
 **Security Notes:**
 - Always use HTTPS for remote deployment
 - Set a strong `AUTH_PASSWORD`
+- Web UI: Browser's native login prompt appears once; credentials persist as HttpOnly cookies across browser restarts (1 year)
+- Userscript/API: Continues using Basic Auth headers (no changes needed)
 - Limit `ALLOWED_ORIGINS` to trusted domains only
 - `Origin: null` is intentionally rejected because it also covers sandboxed iframes and data/file-backed opaque origins
-- Both CORS and Basic Auth are required for security (defense in depth)
+- Both CORS and authentication are required for security (defense in depth)
 
 **Performance Notes:**
 - Enable `ENABLE_COMPRESSION` in browser config for remote deployment

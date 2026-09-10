@@ -156,9 +156,15 @@ Test server:
 # Should return 401 (auth required)
 curl http://your-server-ip:8080/api/pages
 
-# Should return 200
+# Should return 200 with API using Basic Auth
 curl -u wayback:your_auth_password http://your-server-ip:8080/api/pages
 ```
+
+Test Web UI:
+1. Visit `http://your-server-ip:8080/` in browser
+2. Browser shows native login prompt (appears once)
+3. Enter username: `wayback`, password: `your_auth_password`
+4. Credentials persist as HttpOnly cookies (1 year)—no re-authentication needed after browser restart
 
 Test browser extension:
 1. Visit any webpage
@@ -167,6 +173,9 @@ Test browser extension:
 ## Security Notes
 
 - **Always set `AUTH_PASSWORD`** for remote deployment
+- **Web UI authentication**: Session cookies (HttpOnly, SameSite=Lax, 1 year TTL) issued after successful Basic Auth
+- **API/userscript authentication**: Continues using Basic Auth headers (no changes needed)
+- Changing `AUTH_PASSWORD` immediately invalidates all existing sessions
 - Keep `ENABLE_DEBUG_API=false` unless you are actively debugging the server
 - **Restrict `ALLOWED_ORIGINS`** to trusted domains only
 - Configure firewall:

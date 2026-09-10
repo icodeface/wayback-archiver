@@ -96,9 +96,13 @@ Base URL: `http://localhost:8080`
 
 ### Authentication (Optional)
 
-When `AUTH_PASSWORD` is set, use HTTP Basic Auth:
-- **Username**: `wayback`
-- **Password**: `$AUTH_PASSWORD`
+When `AUTH_PASSWORD` is set:
+- **Web UI**: Browser's native login prompt appears once (username: `wayback`, password: `$AUTH_PASSWORD`). Credentials persist as HttpOnly cookies across browser restarts (1 year TTL).
+- **API/curl**: Use HTTP Basic Auth headers as before:
+  ```bash
+  curl -u wayback:$AUTH_PASSWORD "http://localhost:8080/api/pages"
+  ```
+- **Userscript**: No changes needed—continues using Basic Auth headers from `config.ts`
 
 ### Endpoints
 

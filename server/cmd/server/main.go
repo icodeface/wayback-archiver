@@ -224,7 +224,7 @@ func main() {
 	}()
 
 	// 初始化 API 处理器
-	handler := api.NewHandler(dedup, db, cfg.Storage.DataDir, logger)
+	handler := api.NewHandler(dedup, db, cfg.Storage.DataDir, logger, &cfg.Auth)
 
 	// 设置 Gin
 	gin.SetMode(gin.ReleaseMode)
